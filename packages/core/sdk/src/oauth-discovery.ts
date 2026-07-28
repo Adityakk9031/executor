@@ -162,32 +162,12 @@ const validateEndpointUrl = (
       }),
   });
 
-/** RFC 8414 issuer identity: scheme, host, port, and path after URL
- *  normalization; a trailing slash alone does not create a different issuer.
- *  Deliberately NOT `canonicalResourceUrl`: an issuer never carries a query,
- *  and its trailing slash is insignificant (RFC 8414 §2), whereas a resource
- *  identifier's query and trailing slash are part of the identity (RFC 8707). */
-const canonicalIssuer = (value: string): string => {
-  const url = new URL(value);
-  const path = url.pathname.replace(/\/+$/, "");
-  return `${url.protocol.toLowerCase()}//${url.host.toLowerCase()}${path}`;
-};
-
 const validateAuthorizationServerMetadata = (
   metadata: OAuthAuthorizationServerMetadata,
-  expectedIssuer: string,
   policy: OAuthEndpointUrlPolicy = {},
 ): Effect.Effect<void, OAuthDiscoveryError> =>
   Effect.gen(function* () {
     yield* validateEndpointUrl(metadata.issuer, "issuer", policy);
-    if (canonicalIssuer(metadata.issuer) !== canonicalIssuer(expectedIssuer)) {
-      return yield* new OAuthDiscoveryError({
-        message:
-          `Authorization server metadata issuer ${metadata.issuer} does not match the requested ` +
-          `issuer ${expectedIssuer}. Correct the server's issuer metadata or use the matching ` +
-          `authorization server URL.`,
-      });
-    }
     yield* validateEndpointUrl(metadata.authorization_endpoint, "authorization_endpoint", policy);
     yield* validateEndpointUrl(metadata.token_endpoint, "token_endpoint", policy);
     if (metadata.registration_endpoint) {
@@ -321,9 +301,6 @@ export const discoverProtectedResourceMetadata = (
             }),
         ),
       );
-      if (metadata.resource) {
-        yield* validateResourceIndicator(metadata.resource, canonicalResourceUrl(resourceUrl));
-      }
       return { metadataUrl: url, metadata };
     }
     return null;
@@ -417,7 +394,7 @@ export const discoverAuthorizationServerMetadata = (
             }),
         ),
       );
-      yield* validateAuthorizationServerMetadata(metadata, issuer, options.endpointUrlPolicy);
+      yield* validateAuthorizationServerMetadata(metadata, options.endpointUrlPolicy);
       return { metadataUrl, metadata };
     }
     return null;
@@ -606,15 +583,16 @@ export const registerDynamicClient = (
 //
 // MCP Authorization 2025-06-18 requires `resource` on /authorize and /token
 // requests. RFC 8707 §2 says the value is "an absolute URI" identifying the
-// protected resource. Query components and path trailing slashes are part of
-// the identifier; fragments are not sent, and scheme/host compare lowercase.
+// protected resource — same scheme + host + (optional) path, no fragment,
+// no query, lowercased scheme/host.
 // ---------------------------------------------------------------------------
 
 export const canonicalResourceUrl = (value: string): string => {
   const url = new URL(value);
   const scheme = url.protocol.toLowerCase();
   const host = url.host.toLowerCase();
-  return `${scheme}//${host}${url.pathname}${url.search}`;
+  const path = url.pathname.replace(/\/+$/, "");
+  return `${scheme}//${host}${path}`;
 };
 
 const validateResourceIndicator = (
@@ -630,14 +608,11 @@ const validateResourceIndicator = (
       }),
   }).pipe(
     Effect.flatMap((actual) =>
-      actual === expected
+      actual === expected || expected.startsWith(`${actual}/`)
         ? Effect.succeed(actual)
         : Effect.fail(
             new OAuthDiscoveryError({
-              message:
-                `Protected resource metadata resource does not match requested endpoint: ` +
-                `advertised ${actual}; requested ${expected}. Correct the server's resource ` +
-                `metadata or use the matching resource URL.`,
+              message: "Protected resource metadata resource does not match requested endpoint",
               cause: { expected, actual },
             }),
           ),

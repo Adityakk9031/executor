@@ -79,14 +79,14 @@ const withOAuthFixture = <A, E>(
   );
 
 describe("canonicalResourceUrl", () => {
-  it("lowercases scheme + host, keeps query + trailing slash, and drops fragment", () => {
+  it("lowercases scheme + host, drops trailing slash, fragment, and query", () => {
     expect(canonicalResourceUrl("https://API.Example.com/v1/mcp/")).toBe(
-      "https://api.example.com/v1/mcp/",
+      "https://api.example.com/v1/mcp",
     );
     expect(canonicalResourceUrl("HTTPS://api.example.com/v1/mcp?x=1#frag")).toBe(
-      "https://api.example.com/v1/mcp?x=1",
+      "https://api.example.com/v1/mcp",
     );
-    expect(canonicalResourceUrl("https://api.example.com/")).toBe("https://api.example.com/");
+    expect(canonicalResourceUrl("https://api.example.com/")).toBe("https://api.example.com");
   });
 });
 
@@ -99,7 +99,7 @@ describe("discoverProtectedResourceMetadata", () => {
         }
         if (request.url === "/.well-known/oauth-protected-resource") {
           return sendJson({
-            resource: `${baseUrl}/graphql`,
+            resource: baseUrl,
             authorization_servers: [baseUrl],
             scopes_supported: ["read"],
           });
@@ -170,22 +170,6 @@ describe("discoverAuthorizationServerMetadata", () => {
     ),
   );
 
-  it.effect("treats a trailing slash as the same authorization-server issuer", () =>
-    withOAuthFixture(
-      (_request, baseUrl) =>
-        sendJson({
-          issuer: `${baseUrl}/`,
-          authorization_endpoint: `${baseUrl}/authorize`,
-          token_endpoint: `${baseUrl}/token`,
-        }),
-      ({ baseUrl }) =>
-        Effect.gen(function* () {
-          const result = yield* discoverAuthorizationServerMetadata(baseUrl);
-          expect(result?.metadata.issuer).toBe(`${baseUrl}/`);
-        }),
-    ),
-  );
-
   it.effect("requires issuer + authorize + token endpoints", () =>
     withOAuthFixture(
       () => sendJson({ issuer: "http://127.0.0.1" }),
@@ -199,9 +183,9 @@ describe("discoverAuthorizationServerMetadata", () => {
 
   it.effect("rejects unsupported authorization server endpoint URLs", () =>
     withOAuthFixture(
-      (_request, baseUrl) =>
+      () =>
         sendJson({
-          issuer: baseUrl,
+          issuer: "http://example.com",
           authorization_endpoint: "javascript:alert(1)",
           token_endpoint: "http://example.com/token",
           response_types_supported: ["code"],
@@ -224,9 +208,9 @@ describe("discoverAuthorizationServerMetadata", () => {
 
   it.effect("allows HTTP authorization server endpoints when the caller opts into local HTTP", () =>
     withOAuthFixture(
-      (_request, baseUrl) =>
+      () =>
         sendJson({
-          issuer: baseUrl,
+          issuer: "http://example.com",
           authorization_endpoint: "http://example.com/authorize",
           token_endpoint: "http://example.com/token",
           response_types_supported: ["code"],
@@ -345,7 +329,7 @@ describe("beginDynamicAuthorization", () => {
         }
         if (request.url === "/.well-known/oauth-protected-resource") {
           return sendJson({
-            resource: `${baseUrl}/graphql/v2`,
+            resource: baseUrl,
             authorization_servers: [baseUrl],
             scopes_supported: ["openid", "profile", "email", "offline_access", "workspace:member"],
           });
@@ -388,11 +372,11 @@ describe("beginDynamicAuthorization", () => {
           expect(url.searchParams.get("response_type")).toBe("code");
           expect(url.searchParams.get("state")).toBe("state-xyz");
           expect(url.searchParams.get("code_challenge_method")).toBe("S256");
-          expect(url.searchParams.get("resource")).toBe(`${baseUrl}/graphql/v2`);
+          expect(url.searchParams.get("resource")).toBe(baseUrl);
           expect(result.state.authorizationServerMetadata.token_endpoint).toBe(
             `${baseUrl}/oauth/token`,
           );
-          expect(result.state.resourceMetadata?.resource).toBe(`${baseUrl}/graphql/v2`);
+          expect(result.state.resourceMetadata?.resource).toBe(baseUrl);
         }),
     ),
   );
@@ -637,7 +621,7 @@ describe("beginDynamicAuthorization", () => {
             });
 
             const authUrl = new URL(result.authorizationUrl);
-            expect(authUrl.searchParams.get("resource")).toBe(`${baseUrl}/v1/mcp/`);
+            expect(authUrl.searchParams.get("resource")).toBe(`${baseUrl}/v1/mcp`);
           }),
       ),
   );
@@ -912,47 +896,6 @@ describe("beginDynamicAuthorization", () => {
           expect(new URL(result.authorizationUrl).searchParams.get("client_id")).toBe(
             "cached-client",
           );
-        }),
-    ),
-  );
-
-  it.effect("rejects an ancestor resource indicator from previous discovery state", () =>
-    withOAuthFixture(
-      () => notFound(),
-      ({ baseUrl, requests }) =>
-        Effect.gen(function* () {
-          const exit = yield* Effect.exit(
-            beginDynamicAuthorization({
-              endpoint: `${baseUrl}/mcp`,
-              redirectUrl: "https://app/cb",
-              state: "s",
-              previousState: {
-                authorizationServerUrl: baseUrl,
-                authorizationServerMetadataUrl: `${baseUrl}/.well-known/oauth-authorization-server`,
-                authorizationServerMetadata: {
-                  issuer: baseUrl,
-                  authorization_endpoint: `${baseUrl}/authorize`,
-                  token_endpoint: `${baseUrl}/token`,
-                },
-                resourceMetadata: null,
-                clientInformation: {
-                  client_id: "cached-client",
-                },
-                resource: baseUrl,
-              },
-            }),
-          );
-
-          expect(Exit.isFailure(exit)).toBe(true);
-          if (!Exit.isFailure(exit)) return;
-          const reason = exit.cause.reasons.find(Cause.isFailReason);
-          expect(reason?.error).toEqual(
-            expect.objectContaining({
-              _tag: "OAuthDiscoveryError",
-              message: expect.stringMatching(/resource does not match requested endpoint/),
-            }),
-          );
-          expect((yield* requests).length).toBe(0);
         }),
     ),
   );
