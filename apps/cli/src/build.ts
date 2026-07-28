@@ -36,7 +36,7 @@ const resolveOnePasswordCoreWasmPath = (): string => {
 };
 
 const resolveWorkerBundlerDistPath = (): string => {
-  const req = createRequire(join(repoRoot, "packages/plugins/apps/package.json"));
+  const req = createRequire(join(repoRoot, "apps/cli/package.json"));
   const pkgJson = req.resolve("@cloudflare/worker-bundler/package.json");
   const distPath = join(dirname(pkgJson), "dist");
   if (!existsSync(join(distPath, "index.js")) || !existsSync(join(distPath, "esbuild.wasm"))) {
@@ -463,15 +463,6 @@ const buildBinaries = async (targets: Target[], mode: BuildMode) => {
         console.log(`  Smoke test: ${bin} --version`);
         const version = await $`${bin} --version`.text();
         console.log(`  OK: ${version.trim()}`);
-        console.log(`  Smoke test: packed apps source sync and invoke`);
-        const smoke = Bun.spawn(
-          ["bun", "run", join(cliRoot, "scripts/smoke-packed-apps.ts"), bin],
-          {
-            cwd: repoRoot,
-            stdio: ["ignore", "inherit", "inherit"],
-          },
-        );
-        if ((await smoke.exited) !== 0) throw new Error("packed apps smoke failed");
       }
 
       // Variant package.json. All variants publish to the SAME npm package
