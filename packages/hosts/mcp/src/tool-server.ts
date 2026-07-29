@@ -647,6 +647,43 @@ const extractInventory = (description: string): string => {
   return index === -1 ? "" : description.slice(index).trimEnd();
 };
 
+// ---------------------------------------------------------------------------
+// Hang-visibility join keys
+// ---------------------------------------------------------------------------
+// A killed execution exports nothing: OTEL only ships a span when it ends, and
+// a Cloudflare deploy/eviction cancels the request without an error, so a hung
+// `execute` is invisible in the trace store. Two mitigations live here:
+//   1. Every execution-path span carries the JSON-RPC id + transport session id
+//      (`mcp.rpc.id`, `mcp.request.session_id`), so a client's
+//      `notifications/cancelled` — which names the cancelled request id — can
+//      be joined to the exact call it gave up on.
+//   2. A zero-duration start marker span (`<completion span name>.start`, a
+//      1:1 pairing so "started without finishing" is a single unambiguous
+//      query) is emitted the moment execution begins. It ends immediately, so
+//      it becomes exportable while the execution is still running; whether it
+//      actually ships before a kill depends on the host's span processor
+//      draining first (cloud batches on a 1s timer, so markers for executions
+//      that survive >1s export, sub-second kills can still lose theirs). A
+//      start marker without a matching completion span is a true positive for
+//      an execution that died mid-flight.
+
+type McpRequestJoinKeys = {
+  readonly requestId: string | number;
+  readonly sessionId?: string | undefined;
+};
+
+// `mcp.request.session_id` is emitted unconditionally (empty string when the
+// transport carries none) to match the worker-side `annotateMcpRequest`
+// producer: JSON-RPC ids are small per-session integers, so a row without the
+// session key would make `mcp.rpc.id` globally ambiguous.
+const joinKeyAttributes = (joinKeys: McpRequestJoinKeys): Record<string, unknown> => ({
+  "mcp.rpc.id": String(joinKeys.requestId),
+  "mcp.request.session_id": joinKeys.sessionId ?? "",
+});
+
+const startMarker = (name: string, attributes: Record<string, unknown>): Effect.Effect<void> =>
+  Effect.void.pipe(Effect.withSpan(name, { attributes }));
+
 const JsonObjectFromString = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
 const decodeJsonObjectString = Schema.decodeUnknownOption(JsonObjectFromString);
 
@@ -764,8 +801,15 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
         ),
     ).pipe(Effect.withSpan("mcp.host.create_server"));
 
-    const executeCode = (code: string): Effect.Effect<McpToolResult, E> =>
+    const executeCode = (
+      code: string,
+      extra: McpRequestJoinKeys,
+    ): Effect.Effect<McpToolResult, E> =>
       Effect.gen(function* () {
+        yield* startMarker("mcp.host.tool.execute.start", {
+          "mcp.tool.name": "execute",
+          "mcp.execute.code_length": code.length,
+        });
         debugLog("execute.call", {
           elicitationMode: elicitationMode.mode,
           elicitationSupport: getElicitationSupport(server),
@@ -807,14 +851,20 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
             "mcp.execute.code_length": code.length,
           },
         }),
+        Effect.annotateSpans(joinKeyAttributes(extra)),
       );
 
     const resumeExecution = (
       executionId: string,
       action: "accept" | "decline" | "cancel",
       content: Record<string, unknown> | undefined,
+      extra: McpRequestJoinKeys,
     ): Effect.Effect<McpToolResult, E> =>
       Effect.gen(function* () {
+        yield* startMarker("mcp.host.tool.resume.start", {
+          "mcp.tool.name": "resume",
+          "mcp.execute.execution_id": executionId,
+        });
         debugLog("resume.call", {
           executionId,
           action,
@@ -855,6 +905,7 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
             "mcp.execute.execution_id": executionId,
           },
         }),
+        Effect.annotateSpans(joinKeyAttributes(extra)),
       );
 
     const requireUserResumeApproval = (executionId: string): Effect.Effect<McpToolResult> =>
@@ -898,8 +949,15 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
       );
     };
 
-    const resumeAfterBrowserApproval = (executionId: string): Effect.Effect<McpToolResult, E> =>
+    const resumeAfterBrowserApproval = (
+      executionId: string,
+      extra: McpRequestJoinKeys,
+    ): Effect.Effect<McpToolResult, E> =>
       Effect.gen(function* () {
+        yield* startMarker("mcp.host.tool.resume.browser_approval.start", {
+          "mcp.tool.name": "resume",
+          "mcp.execute.execution_id": executionId,
+        });
         const response = yield* waitForBrowserApprovalResponse(executionId);
         if (!response) return yield* requireUserResumeApproval(executionId);
 
@@ -926,6 +984,7 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
             "mcp.execute.execution_id": executionId,
           },
         }),
+        Effect.annotateSpans(joinKeyAttributes(extra)),
       );
 
     // --- tools ---
@@ -937,7 +996,7 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
           description,
           inputSchema: { code: z.string().trim().min(1) },
         },
-        ({ code }) => runToolEffect(executeCode(code)),
+        ({ code }, extra) => runToolEffect(executeCode(code, extra)),
       ),
     ).pipe(
       Effect.withSpan("mcp.host.register_tool", {
@@ -993,8 +1052,10 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
                 .default("{}"),
             },
           },
-          ({ executionId, action, content: rawContent }) =>
-            runToolEffect(resumeExecution(executionId, action, parseJsonContent(rawContent))),
+          ({ executionId, action, content: rawContent }, extra) =>
+            runToolEffect(
+              resumeExecution(executionId, action, parseJsonContent(rawContent), extra),
+            ),
         );
       }
 
@@ -1010,7 +1071,7 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
             executionId: z.string().describe("The execution ID from the paused result"),
           },
         },
-        ({ executionId }) => runToolEffect(resumeAfterBrowserApproval(executionId)),
+        ({ executionId }, extra) => runToolEffect(resumeAfterBrowserApproval(executionId, extra)),
       );
     }).pipe(
       Effect.withSpan("mcp.host.register_tool", {
