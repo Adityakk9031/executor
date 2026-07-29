@@ -107,6 +107,7 @@ import {
   type UpdateToolPolicyInput,
 } from "./policies";
 import type { CredentialProvider, ProviderEntry } from "./provider";
+import { touchSubject } from "./subject-registry";
 import type {
   AnyPlugin,
   Elicit,
@@ -368,6 +369,15 @@ export type Executor<TPlugins extends readonly AnyPlugin[] = readonly []> = {
     readonly resolve: (address: ToolAddress) => Effect.Effect<EffectivePolicy, StorageFailure>;
   };
 
+  /**
+   * The PLATFORM VIEW: read-only, tenant-wide reads across every subject.
+   * Present only when the executor was built with `platformView: true`
+   * (default off) — every other surface on this executor stays bound to the
+   * single `{ tenant, subject }` product view and is unaffected by this one.
+   * Internal admin surface; the public HTTP shape is a separate concern.
+   */
+  readonly admin?: ExecutorAdmin;
+
   readonly execute: (
     address: ToolAddress,
     args: unknown,
@@ -376,6 +386,148 @@ export type Executor<TPlugins extends readonly AnyPlugin[] = readonly []> = {
 
   readonly close: () => Effect.Effect<void, StorageFailure>;
 } & PluginExtensions<TPlugins>;
+
+// ---------------------------------------------------------------------------
+// The platform view — internal admin reads.
+//
+// Everything else on the executor is the PRODUCT view: bound to one
+// { tenant, subject }. This is the read-only escape hatch beside it, reading
+// the same store through a `reach: "tenant"` context so it can answer
+// "who exists under this tenant, and what have they connected".
+//
+// Vocabulary note: internal code says subject/tenant/reach. Anything
+// public-facing says users/owners — the translation happens at the HTTP edge,
+// not here.
+//
+// FIELD DISCIPLINE: these shapes are a hand-picked allowlist, not a projection
+// of the row. Nothing secret-bearing may appear — no `item_ids`, no
+// `refresh_item_id`, no oauth client secrets, no credential material of any
+// kind. Adding a field here is a deliberate act.
+// ---------------------------------------------------------------------------
+
+/** One principal seen under the tenant (a row of the `subject` table). */
+export interface AdminSubject {
+  /** The host-auth principal id. Opaque — it also carries host sentinels
+   *  like "local", so nothing may parse it. */
+  readonly externalId: string;
+  readonly createdAt: Date;
+  /** Epoch ms of the last sighting on the request path; null when never seen
+   *  (a subject can be created at connection-create before any sighting). */
+  readonly lastSeenAt: number | null;
+  readonly status: string | null;
+}
+
+/** A connection as the platform view sees it: enough to answer "what has this
+ *  user connected and is it healthy", and nothing that could resolve a
+ *  credential. */
+export interface AdminConnection {
+  readonly owner: Owner;
+  /** The owning principal — `null` for org-owned connections, which belong to
+   *  the tenant rather than to any one user. */
+  readonly subject: string | null;
+  readonly integration: IntegrationSlug;
+  readonly name: ConnectionName;
+  /** The scope set the provider actually granted, space-delimited as recorded
+   *  at connect/refresh. Null for static credentials. A summary of ACCESS —
+   *  never a token. */
+  readonly oauthScope: string | null;
+  readonly lastHealth: HealthCheckResult | null;
+}
+
+/** A subject together with every connection it owns in the tenant. */
+export interface AdminSubjectWithConnections extends AdminSubject {
+  readonly connections: readonly AdminConnection[];
+}
+
+export interface AdminListSubjectsOptions {
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+/**
+ * Page size applied when a caller names none. Every admin list is BOUNDED:
+ * `listSubjects()` with no arguments is the obvious call, and unbounded it
+ * returns every subject in the tenant — which `listSubjectsWithConnections`
+ * then turns into one sequential connection query PER SUBJECT, inside a single
+ * request, over a per-request socket on cloud. A default is what keeps the
+ * no-args call honest; a caller who wants more asks for more, up to
+ * {@link ADMIN_MAX_PAGE_SIZE}.
+ *
+ * 100 rather than the maximum: large enough that no realistic operator UI pages
+ * twice for a first screen, small enough that the joined read's fan-out stays a
+ * bounded cost even at its worst.
+ */
+export const ADMIN_DEFAULT_PAGE_SIZE = 100;
+
+/** Hard ceiling on an admin page, matching the HTTP contract's `limit` maximum.
+ *  A larger `limit` is clamped rather than honored. */
+export const ADMIN_MAX_PAGE_SIZE = 500;
+
+/**
+ * Normalize paging for every admin list.
+ *
+ * THREE things happen here, each fixing a real failure:
+ *   - a `limit` is ALWAYS produced. Drizzle's SQLite dialect emits OFFSET only
+ *     alongside LIMIT, and SQLite rejects a bare OFFSET, so `{ offset: 25 }`
+ *     was a syntax error on every SQLite host (local, self-host, D1).
+ *   - the limit is clamped to `[1, ADMIN_MAX_PAGE_SIZE]`, so no caller can ask
+ *     for an unbounded scan.
+ *   - both values are floored to integers. The HTTP contract rejects a
+ *     fractional `?limit=` outright (a 400, not a coerced value); this is the
+ *     SDK-level backstop so no driver ever receives a fraction and answers with
+ *     `datatype mismatch`.
+ */
+const normalizeAdminPaging = (
+  options: AdminListSubjectsOptions | undefined,
+): { readonly limit: number; readonly offset: number } => {
+  const requested = options?.limit ?? ADMIN_DEFAULT_PAGE_SIZE;
+  const limit = Math.min(Math.max(Math.floor(requested), 1), ADMIN_MAX_PAGE_SIZE);
+  const offset = Math.max(Math.floor(options?.offset ?? 0), 0);
+  return { limit, offset };
+};
+
+export interface ExecutorAdmin {
+  /** One page of subjects under the tenant, oldest first (stable: ties break on
+   *  `external_id`). ALWAYS bounded: no arguments means
+   *  {@link ADMIN_DEFAULT_PAGE_SIZE} rows from offset 0, and `limit` is clamped
+   *  to {@link ADMIN_MAX_PAGE_SIZE}. There is no way to ask for every subject
+   *  in one call. */
+  readonly listSubjects: (
+    options?: AdminListSubjectsOptions,
+  ) => Effect.Effect<readonly AdminSubject[], StorageFailure>;
+  /**
+   * One subject by its `external_id`, or `null` when the tenant has no such
+   * row. A keyed read on the `(tenant, external_id)` unique index rather than
+   * a filtered `listSubjects`, because the caller asking for ONE principal
+   * must not pay for a tenant-wide scan — this is the read behind a per-user
+   * check that runs far more often than the bulk list.
+   *
+   * `null` is a normal answer, not a failure: it means "this tenant has never
+   * recorded that principal". Distinguishing that from a storage fault is the
+   * whole point of the nullable return.
+   */
+  readonly getSubject: (externalId: string) => Effect.Effect<AdminSubject | null, StorageFailure>;
+  /** Every connection in the tenant owned by `externalId`. Org-owned
+   *  connections are NOT attributed to a user and are excluded. */
+  readonly listSubjectConnections: (
+    externalId: string,
+  ) => Effect.Effect<readonly AdminConnection[], StorageFailure>;
+  /** `listSubjects` joined with each subject's connections — one connection
+   *  query per subject IN THE PAGE, sequentially. The paging bound is what
+   *  makes that fan-out affordable: it is capped at
+   *  {@link ADMIN_DEFAULT_PAGE_SIZE} round trips by default and
+   *  {@link ADMIN_MAX_PAGE_SIZE} at worst, never "every subject in the
+   *  tenant". */
+  readonly listSubjectsWithConnections: (
+    options?: AdminListSubjectsOptions,
+  ) => Effect.Effect<readonly AdminSubjectWithConnections[], StorageFailure>;
+  /** `getSubject` joined with that subject's connections, in ONE call — the
+   *  shape a per-user check needs. `null` on the same terms as `getSubject`,
+   *  and no connection read is issued when the subject row is absent. */
+  readonly getSubjectWithConnections: (
+    externalId: string,
+  ) => Effect.Effect<AdminSubjectWithConnections | null, StorageFailure>;
+}
 
 export interface ExecutorDb {
   readonly db: FumaDb<any>;
@@ -447,6 +599,25 @@ export interface ExecutorConfig<TPlugins extends readonly AnyPlugin[] = readonly
    * config-revision re-sync still apply).
    */
   readonly toolsSyncTtlMs?: number | null;
+  /**
+   * Opt into the PLATFORM VIEW: a read-only, tenant-wide `executor.admin`
+   * surface that reads across every subject in the tenant (see
+   * {@link ExecutorAdmin}). Default OFF — `admin` is simply absent, so the
+   * escape hatch has to be asked for by a host that has authorized an
+   * org-level caller.
+   *
+   * Enabling it makes the WHOLE executor read-only, not just `admin`: the base
+   * owner context carries `writes: "denied"`, so `connections`, `policies`,
+   * `integrations` and `oauth` refuse every create/update/delete at the storage
+   * boundary. An executor built for an org-level caller is an observer, and
+   * `admin` being its only tenant-wide surface is not the same as it being its
+   * only guarded one.
+   *
+   * READS still differ by surface: only `admin` is tenant-wide. Every other
+   * surface stays bound to `{ tenant, subject }` — widening them would expose
+   * every subject's connection rows, credential item ids included.
+   */
+  readonly platformView?: boolean;
 }
 
 /** Default freshness window for remote-catalog connections (see
@@ -1369,7 +1540,22 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       catch: (cause) => storageFailureFromUnknown("Failed to validate executor tables", cause),
     });
 
-    const ownerContext: ExecutorOwnerPolicyContext = { tenant, subject };
+    // The platform view is read-only ACROSS THE WHOLE EXECUTOR, not just on the
+    // `admin` handle: `writes: "denied"` rides on the base context, so
+    // `connections`, `policies`, `integrations` and `oauth` are guarded by the
+    // owner policy too. Without it a platform executor is subject-less but
+    // still bound to the tenant's ORG partition, and could create/update/delete
+    // every `owner: "org"` row through those ordinary surfaces.
+    //
+    // Deliberately NOT `reach: "tenant"` here — that would widen this context's
+    // reads to every subject's `connection` rows, credential item ids included.
+    // Reach stays "bound"; only the write axis changes. See
+    // `ExecutorOwnerPolicyContext.writes`.
+    const ownerContext: ExecutorOwnerPolicyContext = {
+      tenant,
+      subject,
+      ...(config.platformView === true ? { writes: "denied" as const } : {}),
+    };
     const rootDb = withQueryContext(rootDbUntyped, ownerContext);
     const fuma = makeFumaClient(rootDb);
     const core = makeCoreDb(fuma);
@@ -2502,6 +2688,16 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             }
           }),
         );
+
+        // Record the sighting. The request seam (`makeScopedExecutor`) already
+        // does this for every hosted call, so this is the belt for direct
+        // SDK/CLI callers that never pass through it — a connecting principal
+        // must always have a subject row. Outside
+        // the transaction above: bookkeeping must not roll back the
+        // connection, and `touchSubject` cannot fail. No-ops on a pure-org
+        // executor (no principal to record), including for `owner: "org"`
+        // connections created by a bound member.
+        yield* touchSubject(rootDbUntyped, { tenant, externalId: subject });
 
         const ref: ConnectionRef = {
           owner: input.owner,
@@ -4161,6 +4357,136 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
     }
 
     // ------------------------------------------------------------------
+    // Platform view — read-only, tenant-wide admin reads (opt-in).
+    //
+    // A SECOND handle over the same root db, bound to the same tenant but at
+    // `reach: "tenant"`. Deriving it here rather than re-scoping `rootDb`
+    // keeps the product view untouched: the bound handle above never learns
+    // about reach, so it cannot drift into the platform view. Writes through
+    // this handle are rejected by the owner policy, so "read-only" is enforced
+    // at the storage boundary, not by this module's discipline.
+    //
+    // The base context is ALREADY `writes: "denied"` whenever the platform view
+    // is on (see `ownerContext`); this handle adds tenant reach on top. The two
+    // axes are separate on purpose — this is the only surface that gets the
+    // widened reads, while read-only covers all of them.
+    // ------------------------------------------------------------------
+
+    const makeAdmin = (): ExecutorAdmin => {
+      const platformCore = makeCoreDb(
+        makeFumaClient(
+          withQueryContext(rootDbUntyped, {
+            ...ownerContext,
+            reach: "tenant",
+          } satisfies ExecutorOwnerPolicyContext),
+        ),
+      );
+
+      const rowToAdminSubject = (row: CoreRow<"subject">): AdminSubject => ({
+        externalId: row.external_id,
+        createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
+        // bigint on drivers that return one, and a blob on SQLite — hence the
+        // ORM read rather than raw SQL (see `subject-registry.ts`).
+        lastSeenAt: row.last_seen_at == null ? null : Number(row.last_seen_at),
+        status: row.status ?? null,
+      });
+
+      const rowToAdminConnection = (row: ConnectionRow): AdminConnection => {
+        const owner = row.owner as Owner;
+        return {
+          owner,
+          // Org rows carry the empty-string sentinel, not a principal.
+          subject: owner === "org" ? null : row.subject,
+          integration: IntegrationSlug.make(row.integration),
+          name: ConnectionName.make(row.name),
+          oauthScope: row.oauth_scope == null ? null : String(row.oauth_scope),
+          lastHealth: Option.getOrNull(decodeLastHealth(row.last_health)),
+        };
+      };
+
+      const listSubjects = (
+        options?: AdminListSubjectsOptions,
+      ): Effect.Effect<readonly AdminSubject[], StorageFailure> => {
+        // Always both, always integers — see `normalizeAdminPaging`. Passing
+        // them through independently produced a bare OFFSET, which SQLite
+        // rejects outright.
+        const { limit, offset } = normalizeAdminPaging(options);
+        return platformCore
+          .findMany("subject", {
+            // Oldest first, ties broken on the unique key so the order is
+            // total and paging can't repeat or skip a row.
+            orderBy: [
+              ["created_at", "asc"],
+              ["external_id", "asc"],
+            ],
+            limit,
+            offset,
+          })
+          .pipe(Effect.map((rows) => rows.map(rowToAdminSubject)));
+      };
+
+      // Keyed on `(tenant, external_id)` — the table's unique index. No
+      // `tenant` clause here: the tenant policy adds it to every read, the
+      // same way `touchSubject` relies on it.
+      const getSubject = (externalId: string): Effect.Effect<AdminSubject | null, StorageFailure> =>
+        platformCore
+          .findFirst("subject", { where: (b: AnyCb) => b("external_id", "=", externalId) })
+          .pipe(Effect.map((row) => (row === null ? null : rowToAdminSubject(row))));
+
+      const listSubjectConnections = (
+        externalId: string,
+      ): Effect.Effect<readonly AdminConnection[], StorageFailure> =>
+        platformCore
+          .findMany("connection", {
+            // `owner: "user"` explicitly: an org connection's `subject` is the
+            // empty-string sentinel, and attributing those to a user would be
+            // a lie in every host that has one.
+            where: (b: AnyCb) => b.and(b("owner", "=", "user"), b("subject", "=", externalId)),
+            orderBy: [
+              ["integration", "asc"],
+              ["name", "asc"],
+            ],
+          })
+          .pipe(Effect.map((rows) => rows.map(rowToAdminConnection)));
+
+      const listSubjectsWithConnections = (
+        options?: AdminListSubjectsOptions,
+      ): Effect.Effect<readonly AdminSubjectWithConnections[], StorageFailure> =>
+        Effect.gen(function* () {
+          const subjects = yield* listSubjects(options);
+          return yield* Effect.forEach(subjects, (entry) =>
+            listSubjectConnections(entry.externalId).pipe(
+              Effect.map((connections) => ({ ...entry, connections })),
+            ),
+          );
+        });
+
+      // Absent subject short-circuits: no connection query is issued for a
+      // principal the tenant never recorded.
+      const getSubjectWithConnections = (
+        externalId: string,
+      ): Effect.Effect<AdminSubjectWithConnections | null, StorageFailure> =>
+        Effect.gen(function* () {
+          const subject = yield* getSubject(externalId);
+          if (subject === null) return null;
+          const connections = yield* listSubjectConnections(externalId);
+          return { ...subject, connections };
+        });
+
+      return {
+        listSubjects,
+        getSubject,
+        listSubjectConnections,
+        listSubjectsWithConnections,
+        getSubjectWithConnections,
+      };
+    };
+
+    // Default OFF: without the opt-in there is no `admin` key at all, so the
+    // tenant-wide handle is never even constructed.
+    const admin = config.platformView === true ? makeAdmin() : undefined;
+
+    // ------------------------------------------------------------------
     // close
     // ------------------------------------------------------------------
 
@@ -4231,6 +4557,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         remove: policiesRemove,
         resolve: policiesResolve,
       },
+      ...(admin ? { admin } : {}),
       execute,
       close,
     };

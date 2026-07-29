@@ -246,6 +246,52 @@ export const workosAccountProvider: Layer.Layer<
           return { success: true };
         }),
 
+      // Org keys read every user in the tenant through the `/admin/*` plane, so
+      // both paths are admin-gated — unlike personal keys, which any member may
+      // mint for themselves.
+      listOrgApiKeys: (headers) =>
+        Effect.gen(function* () {
+          const { session, org } = yield* requireOrganization(headers);
+          yield* requireAdmin(session.accountId, org.id);
+          const keys = yield* apiKeys
+            .listOrgKeys({ organizationId: org.id })
+            .pipe(Effect.catchTag("ApiKeyManagementError", toAccountError));
+          return { apiKeys: keys };
+        }),
+
+      createOrgApiKey: (headers, name) =>
+        Effect.gen(function* () {
+          const { session, org } = yield* requireOrganization(headers);
+          yield* requireAdmin(session.accountId, org.id);
+          const trimmed = name.trim().slice(0, MAX_API_KEY_NAME_LENGTH);
+          if (!trimmed) {
+            return yield* new AccountError({ message: "API key name is required" });
+          }
+          return yield* apiKeys
+            .createOrgKey({ organizationId: org.id, name: trimmed })
+            .pipe(Effect.catchTag("ApiKeyManagementError", toAccountError));
+        }),
+
+      // Same admin gate as the mint. Note this deliberately does NOT reuse
+      // `revokeApiKey`: that path resolves ownership against the caller's
+      // personal keys, so an org key id is never in its owned set. Ownership
+      // here is resolved against the ORG's keys inside `revokeOrgKey`, which is
+      // what keeps a user-scoped (or foreign-org) key id from being destroyed
+      // through the org route — it surfaces as a 404-shaped AccountError, not a
+      // silent success and not a 500.
+      revokeOrgApiKey: (headers, apiKeyId) =>
+        Effect.gen(function* () {
+          const { session, org } = yield* requireOrganization(headers);
+          yield* requireAdmin(session.accountId, org.id);
+          yield* apiKeys.revokeOrgKey({ organizationId: org.id, keyId: apiKeyId }).pipe(
+            Effect.catchTag("ApiKeyManagementError", toAccountError),
+            Effect.catchTag("OrgApiKeyNotFound", () =>
+              Effect.fail(new AccountError({ message: "Organization API key not found" })),
+            ),
+          );
+          return { success: true };
+        }),
+
       listMembers: (headers) =>
         Effect.gen(function* () {
           const { session, org } = yield* requireOrganization(headers);

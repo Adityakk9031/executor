@@ -142,6 +142,7 @@ export {
   TOOL_POLICY_ACTIONS,
   type CoreSchema,
   type IntegrationRow,
+  type SubjectRow,
   type ConnectionRow,
   type OAuthClientRow,
   type OAuthSessionRow,
@@ -160,6 +161,8 @@ export {
   executorOwnerPolicyName,
   executorUnscopedPolicyName,
   type ExecutorOwnerPolicyContext,
+  type ExecutorReach,
+  type ExecutorWrites,
 } from "./owner-policy";
 
 // Provider item-id owner grammar — the partition credential providers file
@@ -342,7 +345,14 @@ export {
 // local/cloud DB bring-up). Its definition stays here because `createExecutor`
 // uses it; the host surface (`@executor-js/api/server`) re-exports it.
 export {
+  ADMIN_DEFAULT_PAGE_SIZE,
+  ADMIN_MAX_PAGE_SIZE,
+  type AdminConnection,
+  type AdminListSubjectsOptions,
+  type AdminSubject,
+  type AdminSubjectWithConnections,
   type Executor,
+  type ExecutorAdmin,
   type ExecutorConfig,
   type ExecutorDb,
   type ExecutorDbFactory,

@@ -5,6 +5,7 @@ import { StorageError, type FumaRow } from "./fuma-runtime";
 import {
   assertOwnerPatch,
   assertOwnerWritable,
+  assertReachReadOnly,
   executorOwnerPolicyName,
   executorTenantPolicyName,
   executorUnscopedPolicyName,
@@ -67,6 +68,10 @@ const tenantExecutorTable = <const TColumns extends UserColumns>(
     name: executorTenantPolicyName,
     onRead: ({ builder, context }) => builder("tenant", "=", context.tenant),
     onCreate: ({ values, context }) => {
+      // Tenant-scoped reads are already tenant-wide, so reach doesn't widen
+      // them — but the platform view must stay read-only on EVERY table it can
+      // reach, and `subject` is one of these.
+      assertReachReadOnly(name, "write", context);
       if (values.tenant !== context.tenant) {
         // oxlint-disable-next-line executor/no-try-catch-or-throw -- boundary: FumaDB table policy callbacks are promise callbacks, not Effect effects
         throw new StorageError({
@@ -75,8 +80,14 @@ const tenantExecutorTable = <const TColumns extends UserColumns>(
         });
       }
     },
-    onUpdate: ({ builder, context }) => builder("tenant", "=", context.tenant),
-    onDelete: ({ builder, context }) => builder("tenant", "=", context.tenant),
+    onUpdate: ({ builder, context }) => {
+      assertReachReadOnly(name, "write", context);
+      return builder("tenant", "=", context.tenant);
+    },
+    onDelete: ({ builder, context }) => {
+      assertReachReadOnly(name, "delete", context);
+      return builder("tenant", "=", context.tenant);
+    },
   });
 };
 
@@ -104,7 +115,13 @@ const ownedExecutorTable = <const TColumns extends UserColumns>(
       assertOwnerPatch(name, create, context);
       return ownerVisibility(builder, context);
     },
-    onDelete: ({ builder, context }) => ownerVisibility(builder, context),
+    // A delete carries no values to assert against, so the reach guard is the
+    // ONLY thing standing between a widened (platform-view) context and a
+    // tenant-wide delete — `ownerVisibility` would happily match every row.
+    onDelete: ({ builder, context }) => {
+      assertReachReadOnly(name, "delete", context);
+      return ownerVisibility(builder, context);
+    },
   });
 };
 
@@ -149,6 +166,35 @@ export const coreTables = defineTables({
       updated_at: dateColumn("updated_at"),
     },
     ["tenant", "slug"],
+  ),
+
+  // The join between a host's identity system (WorkOS accounts, Better Auth
+  // members, the local single-user sentinel) and the `subject` partition key
+  // smeared across the owned tables. NOT an identity system of its own: the
+  // hosts stay authoritative for names, emails, and membership. This table
+  // only records that a principal has been seen under this tenant, so a user
+  // who has no connection row is still answerable.
+  //
+  // Tenant-scoped, not owner-scoped, on purpose: any executor bound to the
+  // tenant may read it, which is what an operator-level (cross-subject) view
+  // needs, and it costs zero policy changes.
+  subject: tenantExecutorTable(
+    "subject",
+    {
+      // The host-auth principal id (cloud: the WorkOS accountId). Opaque here
+      // — it also carries host sentinels like "local", so nothing may parse it.
+      external_id: keyColumn("external_id"),
+      created_at: dateColumn("created_at"),
+      // Epoch ms of the last sighting on the request path. Nullable so a row
+      // can be created (e.g. at connection-create) before any sighting is
+      // recorded; bigint rather than a timestamp to match the other
+      // "last X happened at" columns here (`tools_synced_at`, `expires_at`).
+      last_seen_at: nullableBigintColumn("last_seen_at"),
+      // Subject lifecycle. Left as an unconstrained nullable string until the
+      // lifecycle values are actually defined; null means "no state recorded".
+      status: nullableTextColumn("status"),
+    },
+    ["tenant", "external_id"],
   ),
 
   // THE saved credential, one per (owner, integration, name). Resolves each named
@@ -338,6 +384,7 @@ export const coreSchema = coreTables;
 export type CoreSchema = typeof coreTables;
 
 export type IntegrationRow = FumaRow<CoreSchema["integration"]>;
+export type SubjectRow = FumaRow<CoreSchema["subject"]>;
 export type ConnectionRow = FumaRow<CoreSchema["connection"]>;
 export type OAuthClientRow = FumaRow<CoreSchema["oauth_client"]>;
 export type OAuthSessionRow = FumaRow<CoreSchema["oauth_session"]>;
