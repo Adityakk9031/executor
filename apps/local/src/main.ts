@@ -1,6 +1,9 @@
 import { Context, Data, Effect, Layer, ManagedRuntime } from "effect";
 
 import { createExecutionEngine } from "@executor-js/execution";
+import { artifactUrlFor } from "@executor-js/host-mcp/create-artifact";
+import { loadMcpAppsShellHtml } from "@executor-js/mcp-apps-shell";
+import { smokeRenderArtifact } from "@executor-js/mcp-apps-shell/smoke-render";
 import { makeQuickJsExecutor } from "@executor-js/runtime-quickjs";
 import { makeLocalApiHandler } from "./app";
 import { createExecutorHandle, disposeExecutor, getExecutorBundle } from "./executor";
@@ -81,15 +84,46 @@ export const createServerHandlers = async (token: string): Promise<ServerHandler
     // engine instance (the browser-approval + stdio surface is local-only and not
     // part of the shared API). Reuse the shared boot bundle so the MCP executor is
     // byte-identical to the one the API serves.
-    const { executor } = await getExecutorBundle();
+    const { executor, webBaseUrl } = await getExecutorBundle();
     const engine = createExecutionEngine({
       executor,
       codeExecutor: makeQuickJsExecutor(),
     });
+    // The generative-UI surface, shared by every resource this daemon serves.
+    // Each toolkit gets its own executor, so `artifacts` is bound per resource
+    // below rather than hoisted with the rest.
+    //
+    // Including the create-time smoke render, on the same terms as every other
+    // host. This daemon is a dependency of `apps/cli`, whose build does not
+    // configure `jsx`, and the renderer used to be unusable here for that
+    // reason — TypeScript resolved its dynamic `import()` of the `.tsx`
+    // component barrel eagerly and dragged the whole React graph (plus a
+    // duplicate `@types/react`) into the CLI and desktop trees. It renders
+    // inside a QuickJS sandbox now, so there is no `.tsx` in its graph and no
+    // React in this process; the cost is one lazily-loaded string constant.
+    const appsConfig = {
+      loadAppShellHtml: loadMcpAppsShellHtml,
+      smokeRenderArtifact,
+      artifactUrl: artifactUrlFor(webBaseUrl),
+    };
     mcp = createMcpRequestHandler({
-      defaultConfig: { engine },
+      defaultConfig: {
+        engine,
+        artifacts: executor.artifacts,
+        connections: executor.connections,
+        ...appsConfig,
+      },
       createConfigForResource: async (resource) => {
-        if (resource.kind === "default") return { config: { engine } };
+        if (resource.kind === "default") {
+          return {
+            config: {
+              engine,
+              artifacts: executor.artifacts,
+              connections: executor.connections,
+              ...appsConfig,
+            },
+          };
+        }
         const handle = await createExecutorHandle({
           activeToolkitSlug: resource.slug,
         });
@@ -98,7 +132,12 @@ export const createServerHandlers = async (token: string): Promise<ServerHandler
           codeExecutor: makeQuickJsExecutor(),
         });
         return {
-          config: { engine: toolkitEngine },
+          config: {
+            engine: toolkitEngine,
+            artifacts: handle.executor.artifacts,
+            connections: handle.executor.connections,
+            ...appsConfig,
+          },
           close: handle.dispose,
         };
       },

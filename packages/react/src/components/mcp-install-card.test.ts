@@ -74,6 +74,53 @@ describe("MCP install command rendering", () => {
     );
   });
 
+  // Artifacts are off by default, so only the opt-in is ever spelled out: a
+  // card left alone must still produce the bare endpoint every doc and test
+  // asserts.
+  it("emits the artifacts opt-in only when artifacts are enabled", () => {
+    expect(
+      buildMcpHttpEndpoint({
+        origin: "https://executor.example",
+        desktop: null,
+        artifacts: false,
+      }),
+    ).toBe("https://executor.example/mcp");
+
+    expect(
+      buildMcpHttpEndpoint({
+        origin: "https://executor.example",
+        desktop: null,
+        artifacts: true,
+      }),
+    ).toBe("https://executor.example/mcp?artifacts=true");
+
+    // Both non-defaults together, in the order the card renders them.
+    expect(
+      buildMcpHttpEndpoint({
+        origin: "https://executor.example",
+        desktop: null,
+        elicitationMode: "browser",
+        artifacts: true,
+      }),
+    ).toBe("https://executor.example/mcp?elicitation_mode=browser&artifacts=true");
+
+    // The unknown-origin placeholder is not a parsable URL, so it is
+    // concatenated rather than round-tripped through `URL`.
+    expect(buildMcpHttpEndpoint({ origin: null, desktop: null, artifacts: true })).toBe(
+      "<this-server>/mcp?artifacts=true",
+    );
+  });
+
+  it("passes the artifacts opt-in to the stdio CLI as a flag", () => {
+    expect(
+      buildMcpInstallCommand({ mode: "stdio", isDev: false, origin: null, artifacts: false }),
+    ).toBe("npx add-mcp 'executor mcp' --name executor");
+
+    expect(
+      buildMcpInstallCommand({ mode: "stdio", isDev: false, origin: null, artifacts: true }),
+    ).toBe("npx add-mcp 'executor mcp --artifacts' --name executor");
+  });
+
   it("passes model-managed resume through stdio install commands", () => {
     expect(
       buildMcpInstallCommand({

@@ -15,6 +15,7 @@ import {
   type StorageFailure,
 } from "./fuma-runtime";
 import { makeFumaBlobStore, pluginBlobStore, type BlobStore, type OwnerPartitions } from "./blob";
+import { makePendingApprovalStore, type PendingApprovalStore } from "./pending-approval";
 import { coreToolsPlugin } from "./core-tools";
 import type {
   Connection,
@@ -28,6 +29,7 @@ import type {
 import { HealthCheckResult, HealthCheckSpec } from "./health-check";
 import type { HealthCheckCandidate } from "./health-check";
 import {
+  ARTIFACT_SUMMARY_COLUMNS,
   coreSchema,
   isToolPolicyAction,
   TOOL_INVOCATION_COLUMNS,
@@ -51,6 +53,17 @@ import {
 
 export type { OnElicitation, InvokeOptions } from "./elicitation";
 import {
+  rowToArtifact,
+  rowToArtifactSummary,
+  type Artifact,
+  type ArtifactSummary,
+  type RemoveArtifactInput,
+  type RenameArtifactInput,
+  type SaveArtifactInput,
+  type SetArtifactPreviewInput,
+} from "./artifact";
+import {
+  ArtifactNotFoundError,
   ConnectionNotFoundError,
   CredentialProviderNotRegisteredError,
   CredentialResolutionError,
@@ -65,6 +78,7 @@ import {
   type ExecuteError,
 } from "./errors";
 import {
+  ArtifactId,
   AuthTemplateSlug,
   ConnectionAddress,
   ConnectionName,
@@ -377,6 +391,35 @@ export type Executor<TPlugins extends readonly AnyPlugin[] = readonly []> = {
    * Internal admin surface; the public HTTP shape is a separate concern.
    */
   readonly admin?: ExecutorAdmin;
+  /** Saved generative-UI artifacts, visible to the bound owner scope. */
+  readonly artifacts: {
+    /** Newest first, without the JSX source — lists stay light. */
+    readonly list: () => Effect.Effect<readonly ArtifactSummary[], StorageFailure>;
+    readonly get: (id: string) => Effect.Effect<Artifact, ArtifactNotFoundError | StorageFailure>;
+    /** Create, or overwrite an existing artifact in place when `id` is given. */
+    readonly save: (
+      input: SaveArtifactInput,
+    ) => Effect.Effect<Artifact, ArtifactNotFoundError | StorageFailure>;
+    readonly rename: (
+      input: RenameArtifactInput,
+    ) => Effect.Effect<Artifact, ArtifactNotFoundError | StorageFailure>;
+    readonly remove: (input: RemoveArtifactInput) => Effect.Effect<void, StorageFailure>;
+    /** Upgrade the stored preview to a snapshot of a settled render. Touches
+     *  only `preview`, and never `updated_at`. */
+    readonly setPreview: (
+      input: SetArtifactPreviewInput,
+    ) => Effect.Effect<void, ArtifactNotFoundError | StorageFailure>;
+  };
+
+  /**
+   * Approvals recorded for artifact-originated calls that paused on a human.
+   *
+   * Scoped to this executor's owner, so a record is only readable by the caller
+   * who created it — the ownership check on resume is the same read that fetches
+   * it. See `pending-approval.ts` for why an artifact pause is reconstructible
+   * when a general codemode pause is not.
+   */
+  readonly pendingApprovals: PendingApprovalStore;
 
   readonly execute: (
     address: ToolAddress,
@@ -3855,6 +3898,135 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       });
 
     // ------------------------------------------------------------------
+    // Artifacts — saved generative-UI components, owner-scoped.
+    // ------------------------------------------------------------------
+
+    // Reads take no explicit owner: the owner policy already narrows to the
+    // rows this binding may see (org rows plus this subject's own), which is
+    // exactly "visible to the bound owner scope" and stays correct unchanged
+    // when org-tier sharing lands. Writes are always `user` tier in v1.
+    const artifactById =
+      (id: string): CoreWhere =>
+      (b: AnyCb) =>
+        b("id", "=", id);
+
+    const artifactsList = (): Effect.Effect<readonly ArtifactSummary[], StorageFailure> =>
+      core
+        .findMany("artifact", {
+          // Newest first. `id` breaks ties so two artifacts sharing an
+          // `updated_at` millisecond list in a repeatable order rather than
+          // whatever the storage engine happens to return; which of the two
+          // comes first is arbitrary, only its stability is guaranteed.
+          orderBy: [
+            ["updated_at", "desc"],
+            ["id", "desc"],
+          ],
+          select: ARTIFACT_SUMMARY_COLUMNS,
+        })
+        .pipe(Effect.map((rows) => rows.map(rowToArtifactSummary)));
+
+    const artifactsGet = (
+      id: string,
+    ): Effect.Effect<Artifact, ArtifactNotFoundError | StorageFailure> =>
+      Effect.gen(function* () {
+        const row = yield* core.findFirst("artifact", { where: artifactById(id) });
+        if (!row) return yield* new ArtifactNotFoundError({ id: ArtifactId.make(id) });
+        return rowToArtifact(row);
+      });
+
+    const artifactsSave = (
+      input: SaveArtifactInput,
+    ): Effect.Effect<Artifact, ArtifactNotFoundError | StorageFailure> =>
+      Effect.gen(function* () {
+        const now = new Date();
+        const description = input.description ?? null;
+        // An explicit id overwrites in place (v1 keeps no version history). It
+        // must already resolve to a visible row: minting a caller-chosen id
+        // would let a stale client resurrect a deleted artifact silently.
+        if (input.id !== undefined) {
+          const where = artifactById(input.id);
+          const existing = yield* core.findFirst("artifact", { where });
+          if (!existing) {
+            return yield* new ArtifactNotFoundError({ id: ArtifactId.make(input.id) });
+          }
+          // `bindings` is written on every overwrite, including back to null:
+          // it interprets `code`, so carrying the previous value forward under
+          // new source would bind roles the new code never declares. `preview`
+          // is written for exactly the same reason, and the case it prevents is
+          // visible: an image preview captured from the OLD render would
+          // otherwise keep advertising a version of the artifact that no longer
+          // exists.
+          const set = {
+            title: input.title,
+            description,
+            code: input.code,
+            bindings: input.bindings ?? null,
+            preview: input.preview ?? null,
+            updated_at: now,
+          };
+          yield* core.updateMany("artifact", { where, set });
+          return rowToArtifact({ ...existing, ...set });
+        }
+        yield* requireUserSubject("user");
+        const keys = yield* Effect.try({
+          try: () => ownedKeys("user"),
+          catch: (cause) => storageFailureFromUnknown("invalid owner", cause),
+        });
+        const created = yield* core.create("artifact", {
+          tenant: keys.tenant,
+          owner: keys.owner,
+          subject: keys.subject,
+          id: `art_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`,
+          title: input.title,
+          description,
+          code: input.code,
+          bindings: input.bindings ?? null,
+          preview: input.preview ?? null,
+          created_at: now,
+          updated_at: now,
+        });
+        return rowToArtifact(created);
+      });
+
+    /**
+     * Replace an artifact's preview with a snapshot of a settled render.
+     *
+     * Only `preview` moves. `updated_at` deliberately does not: the gallery
+     * sorts by it, and opening an artifact must not reorder the grid — being
+     * looked at is not an edit.
+     */
+    const artifactsSetPreview = (
+      input: SetArtifactPreviewInput,
+    ): Effect.Effect<void, ArtifactNotFoundError | StorageFailure> =>
+      Effect.gen(function* () {
+        const where = artifactById(input.id);
+        const existing = yield* core.findFirst("artifact", { where });
+        if (!existing) {
+          return yield* new ArtifactNotFoundError({ id: ArtifactId.make(input.id) });
+        }
+        yield* core.updateMany("artifact", { where, set: { preview: input.preview } });
+      });
+
+    const artifactsRename = (
+      input: RenameArtifactInput,
+    ): Effect.Effect<Artifact, ArtifactNotFoundError | StorageFailure> =>
+      Effect.gen(function* () {
+        const where = artifactById(input.id);
+        const existing = yield* core.findFirst("artifact", { where });
+        if (!existing) {
+          return yield* new ArtifactNotFoundError({ id: ArtifactId.make(input.id) });
+        }
+        const set = { title: input.title, updated_at: new Date() };
+        yield* core.updateMany("artifact", { where, set });
+        return rowToArtifact({ ...existing, ...set });
+      });
+
+    // Hard delete: an artifact is not a connection, so there is no disabled or
+    // archived state to fall back to.
+    const artifactsRemove = (input: RemoveArtifactInput): Effect.Effect<void, StorageFailure> =>
+      core.deleteMany("artifact", { where: artifactById(input.id) });
+
+    // ------------------------------------------------------------------
     // Elicitation
     // ------------------------------------------------------------------
 
@@ -4259,6 +4431,16 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       user: subject != null ? `u:${tenant}:${subject}` : null,
     };
 
+    // Pending approvals file under the narrowest partition this executor has:
+    // a subject-bound executor keeps them private to that member, and a pure-org
+    // executor (no subject) files them at the org. Either way the partition IS
+    // the ownership check — another caller's executor reads a different
+    // namespace and simply does not see the record.
+    const pendingApprovals = makePendingApprovalStore(
+      blobs,
+      blobPartitions.user ?? blobPartitions.org,
+    );
+
     for (const plugin of plugins) {
       if (runtimes.has(plugin.id)) {
         return yield* new StorageError({
@@ -4614,6 +4796,15 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         resolve: policiesResolve,
       },
       ...(admin ? { admin } : {}),
+      artifacts: {
+        list: artifactsList,
+        get: artifactsGet,
+        save: artifactsSave,
+        rename: artifactsRename,
+        remove: artifactsRemove,
+        setPreview: artifactsSetPreview,
+      },
+      pendingApprovals,
       execute,
       close,
     };

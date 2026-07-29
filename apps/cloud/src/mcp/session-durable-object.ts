@@ -25,6 +25,9 @@ import {
   createExecutorMcpServer,
 } from "@executor-js/host-mcp/tool-server";
 import { buildResumeApprovalUrl } from "@executor-js/host-mcp/browser-approval";
+import { artifactUrlFor } from "@executor-js/host-mcp/create-artifact";
+import { loadMcpAppsShellHtml } from "@executor-js/mcp-apps-shell";
+import { smokeRenderArtifact } from "@executor-js/mcp-apps-shell/smoke-render";
 import {
   McpAgentSessionDOBase,
   type BuiltMcpServer,
@@ -64,6 +67,7 @@ import {
   type DbServiceShape,
 } from "../db/db";
 import { makeExecutionStack } from "../engine/execution-stack";
+import { preloadQuickJs } from "../quickjs";
 import { CloudMeteredExecutionStackLayer } from "../engine/execution-stack-metered";
 import { AutumnService } from "../extensions/billing/service";
 import { DoTelemetryLive, flushTracerProvider } from "../observability/telemetry";
@@ -209,6 +213,7 @@ export class McpSessionDOSqlite extends McpAgentSessionDOBase<Env, CloudSessionD
         userId: token.userId,
         resource: token.resource,
         elicitationMode: token.elicitationMode,
+        artifactsEnabled: token.artifactsEnabled,
       } satisfies SessionMeta;
     }).pipe(
       Effect.withSpan("McpSessionDOSqlite.resolveSessionMeta"),
@@ -225,6 +230,13 @@ export class McpSessionDOSqlite extends McpAgentSessionDOBase<Env, CloudSessionD
   ): Effect.Effect<BuiltMcpServer> {
     const self = this;
     return Effect.gen(function* () {
+      // QuickJS-WASM must be loaded before anything asks for a sandbox: the
+      // default variant cannot fetch its own `.wasm` on Workers. Cloud runs
+      // user `execute` code on the dynamic-worker runtime, but the artifact
+      // smoke render is a QuickJS sandbox on every host — without this it fails
+      // open on each create and the check silently does nothing.
+      // Idempotent per isolate.
+      yield* Effect.promise(() => preloadQuickJs());
       const { executor, engine } = yield* makeExecutionStack(
         sessionMeta.userId,
         sessionMeta.organizationId,
@@ -250,6 +262,18 @@ export class McpSessionDOSqlite extends McpAgentSessionDOBase<Env, CloudSessionD
       const mcpServer = yield* createExecutorMcpServer({
         engine,
         description,
+        artifacts: executor.artifacts,
+        connections: executor.connections,
+        // Artifacts are opt-in per connection. Sessions persisted before the
+        // flag existed carry no value; absent now means off, same as a fresh
+        // connection that did not ask for `?artifacts=true`.
+        artifactsEnabled: sessionMeta.artifactsEnabled ?? false,
+        loadAppShellHtml: loadMcpAppsShellHtml,
+        smokeRenderArtifact,
+        artifactUrl: artifactUrlFor(
+          env.VITE_PUBLIC_SITE_URL ?? "https://executor.sh",
+          sessionMeta.organizationSlug,
+        ),
         parentSpan: () => self.currentParentSpan(),
         debug: env.EXECUTOR_MCP_DEBUG === "true",
         browserApprovalStore: self.browserApprovalStore,

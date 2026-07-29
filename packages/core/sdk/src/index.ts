@@ -52,6 +52,7 @@ export {
   ToolName,
   ElicitationId,
   PolicyId,
+  ArtifactId,
   Tenant,
   Subject,
   Owner,
@@ -71,6 +72,7 @@ export {
   ConnectionNotFoundError,
   CredentialProviderNotRegisteredError,
   CredentialResolutionError,
+  ArtifactNotFoundError,
   isUserActionableError,
   type ExecuteError,
   type ExecutorError,
@@ -150,6 +152,7 @@ export {
   type ToolInvocationRow,
   type DefinitionRow,
   type ToolPolicyRow,
+  type ArtifactRow,
   type PluginStorageRow,
   type BlobRow,
   type ToolPolicyAction,
@@ -188,6 +191,23 @@ export {
   type PolicySource,
 } from "./policies";
 
+// Artifacts — saved generative-UI components.
+export {
+  rowToArtifact,
+  rowToArtifactSummary,
+  previewFromColumn,
+  ArtifactBinding,
+  ArtifactBindings,
+  type Artifact,
+  type ArtifactPreview,
+  type ArtifactSummary,
+  type SaveArtifactInput,
+  type RenameArtifactInput,
+  type RemoveArtifactInput,
+  type SetArtifactPreviewInput,
+} from "./artifact";
+export { sanitizeArtifactPreviewMarkup, ARTIFACT_PREVIEW_MARKUP_LIMIT } from "./artifact-preview";
+
 // Elicitation.
 export {
   FormElicitation,
@@ -215,6 +235,15 @@ export {
   type PluginBlobStore,
   type OwnerPartitions,
 } from "./blob";
+
+// Durable pending approvals — how an artifact action that paused on a human
+// survives a host whose HTTP API builds a fresh engine per request.
+export {
+  makePendingApprovalStore,
+  PendingApproval,
+  PENDING_APPROVAL_TTL_MS,
+  type PendingApprovalStore,
+} from "./pending-approval";
 
 // Plugin storage.
 export {

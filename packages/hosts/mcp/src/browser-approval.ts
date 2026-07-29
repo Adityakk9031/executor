@@ -52,6 +52,20 @@ export const readElicitationMode = (request: Request): McpElicitationMode => {
 };
 
 /**
+ * Read the artifacts opt-in off an MCP request's `?artifacts=` query.
+ * Artifacts are OFF by default, so a clean endpoint URL serves no artifact
+ * surface; only an explicit true value (`?artifacts=true`, and the same truthy
+ * spellings the rest of the query vocabulary accepts) turns them on. A session
+ * without the opt-in gets no artifact tools, no `ui://` shell resource, and no
+ * artifact skills — as if the host had never been configured for them.
+ */
+export const readArtifactsEnabled = (request: Request): boolean => {
+  const value = new URL(request.url).searchParams.get("artifacts");
+  if (value === null) return false;
+  return TRUE_QUERY_VALUES.has(value.toLowerCase());
+};
+
+/**
  * Build the console approval URL for a paused execution:
  * `<origin>/<organizationSlug>/resume/<executionId>?mcp_session_id=<sessionId>`
  * when the host knows the org slug, otherwise
