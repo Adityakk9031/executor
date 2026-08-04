@@ -43,11 +43,7 @@ import {
   type ExecutorConfig,
   type StorageFailure,
 } from "@executor-js/sdk";
-import {
-  makeHostedFetch,
-  makeHostedHttpClientLayer,
-  touchSubject,
-} from "@executor-js/sdk/host-internal";
+import { makeHostedHttp, touchSubject } from "@executor-js/sdk/host-internal";
 
 import { DbProvider } from "./executor-fuma-db";
 
@@ -269,8 +265,10 @@ export const makeScopedExecutor = <
     const hostedHttpOptions = {
       allowLocalNetwork: config.allowLocalNetwork,
     };
-    const httpClientLayer = makeHostedHttpClientLayer(hostedHttpOptions);
-    const hostedFetch = makeHostedFetch(hostedHttpOptions);
+    // One resolution cache behind both adapters: the plugins take the raw
+    // fetch and the SDK takes the layer, so building them separately would
+    // resolve every hostname twice per session.
+    const { fetch: hostedFetch, httpClientLayer } = makeHostedHttp(hostedHttpOptions);
 
     // The org id is the tenant (catalog partition); the account id is the acting
     // subject (drives `owner: "user"` rows). `organizationName` is no longer part
@@ -363,14 +361,15 @@ export const makePlatformExecutor = (
       Effect.withSpan("executor.platform.plugins.init"),
     );
     const hostedHttpOptions = { allowLocalNetwork: config.allowLocalNetwork };
+    const platformHttp = makeHostedHttp(hostedHttpOptions);
 
     return yield* createExecutor({
       tenant: Tenant.make(organizationId),
       db,
       blobs,
       plugins,
-      httpClientLayer: makeHostedHttpClientLayer(hostedHttpOptions),
-      fetch: makeHostedFetch(hostedHttpOptions),
+      httpClientLayer: platformHttp.httpClientLayer,
+      fetch: platformHttp.fetch,
       onElicitation: "accept-all",
       platformView: true,
     }).pipe(Effect.withSpan("executor.platform.create_executor"));
