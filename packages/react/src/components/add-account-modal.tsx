@@ -936,7 +936,12 @@ interface AddAccountModalProps {
  *  which cancels a dangling server OAuth session. That is why abandoning an
  *  OAuth popup can't wedge a later open: the stuck flow died with its instance.
  *  The parent owns only open/route intent (deep links, the reconnect handoff). */
-export function AddAccountModal(props: AddAccountModalProps) {
+export const hasDcr = (method: AuthMethod | undefined | null): boolean => {
+  if (!method || method.kind !== "oauth") return false;
+  return method.oauth?.supportsDynamicRegistration === true || method.oauth?.discoveryUrl != null;
+};
+
+export const AddAccountModal = (props: AddAccountModalProps) => {
   return props.open ? <AddAccountModalView {...props} /> : null;
 }
 
@@ -1485,10 +1490,7 @@ function AddAccountModalView(props: AddAccountModalProps) {
   // DCR-capable: the integration advertises dynamic registration (MCP oauth2),
   // OR carries a discovery URL we can probe at connect time. When DCR-capable
   // and not yet fallen back, we skip the app picker entirely (Option A).
-  const isDcr =
-    !cimdActive &&
-    isOAuth &&
-    (method?.oauth?.supportsDynamicRegistration === true || method?.oauth?.discoveryUrl != null);
+  const isDcr = !cimdActive && hasDcr(method);
   const dcrActive = isDcr && !dcrFailed;
   const automaticOAuthActive = cimdActive || dcrActive;
 
@@ -1699,6 +1701,19 @@ function AddAccountModalView(props: AddAccountModalProps) {
 
     oauthReconnectOpenedKey.current = handoff.key;
     setMethodId(oauthMethod.id);
+
+    if (hasDcr(oauthMethod)) {
+      void executeDcrConnect({
+        method: oauthMethod,
+        connectionName: ConnectionName.make(connectionName),
+        identityLabel: handoff.identityLabel,
+        dcrOwner: connectionOwner,
+        isReconnect: true,
+        handoffKey: handoff.key,
+      });
+      return;
+    }
+
     void oauthPopup.start({
       payload: {
         client: OAuthClientSlug.make(client),
@@ -1728,6 +1743,7 @@ function AddAccountModalView(props: AddAccountModalProps) {
         close();
       },
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialState, allMethods, integration, oauthPopup, close]);
 
   const probeAndAutoNameOAuthConnection = async (
@@ -2128,19 +2144,19 @@ function AddAccountModalView(props: AddAccountModalProps) {
     }
   };
 
-  // Transparent DCR connect: probe → register → start, no app picker. On any
-  // failure (probe error, no registration endpoint, or registration failure) we
-  // flip `dcrFailed` so the bring-your-own-app picker renders as the recovery
-  // path with name/owner kept.
-  const handleDcrConnect = async () => {
-    const discoveryUrl = method?.oauth?.discoveryUrl ?? method?.oauth?.tokenUrl;
-    if (!method || !discoveryUrl) {
-      setDcrFailed(true);
+  const executeDcrConnect = async (args: {
+    readonly method: AuthMethod;
+    readonly connectionName: string;
+    readonly identityLabel: string | undefined;
+    readonly dcrOwner: Owner;
+    readonly isReconnect: boolean;
+    readonly handoffKey?: string;
+  }) => {
+    const discoveryUrl = args.method.oauth?.discoveryUrl ?? args.method.oauth?.tokenUrl;
+    if (!discoveryUrl) {
+      if (!args.isReconnect) setDcrFailed(true);
       return;
     }
-    const dcrOwner = owner;
-    const connectionName = previewConnectionName(label, dcrOwner);
-    const identityLabel = typedIdentityLabel(label);
     setDcrBusy(true);
     const outcome = await runDcrConnect(
       {
@@ -2150,22 +2166,22 @@ function AddAccountModalView(props: AddAccountModalProps) {
           return exit.value;
         },
         register: async (
-          args: DcrRegisterArgs,
+          rArgs: DcrRegisterArgs,
         ): Promise<OAuthClientSlug | { readonly error: string } | null> => {
           const exit = await doRegisterDynamic({
             payload: {
-              owner: args.owner,
-              slug: args.slug,
-              issuer: args.issuer ?? null,
-              registrationEndpoint: args.registrationEndpoint,
-              authorizationUrl: args.authorizationUrl,
-              tokenUrl: args.tokenUrl,
-              resource: args.resource ?? null,
-              scopes: args.scopes,
-              tokenEndpointAuthMethodsSupported: args.tokenEndpointAuthMethodsSupported,
-              clientName: args.clientName,
-              redirectUri: args.redirectUri,
-              originIntegration: args.originIntegration,
+              owner: rArgs.owner,
+              slug: rArgs.slug,
+              issuer: rArgs.issuer ?? null,
+              registrationEndpoint: rArgs.registrationEndpoint,
+              authorizationUrl: rArgs.authorizationUrl,
+              tokenUrl: rArgs.tokenUrl,
+              resource: rArgs.resource ?? null,
+              scopes: rArgs.scopes,
+              tokenEndpointAuthMethodsSupported: rArgs.tokenEndpointAuthMethodsSupported,
+              clientName: rArgs.clientName,
+              redirectUri: rArgs.redirectUri,
+              originIntegration: rArgs.originIntegration,
             },
             reactivityKeys: oauthClientWriteKeys,
           });
@@ -2176,58 +2192,115 @@ function AddAccountModalView(props: AddAccountModalProps) {
           }
           return exit.value.client;
         },
-        start: (args: DcrStartArgs): void => {
-          void oauthPopup.start({
-            payload: {
-              client: args.client,
-              // DCR registers the client under the connection owner, so the app
-              // and connection share one owner.
-              clientOwner: args.owner,
-              owner: args.owner,
-              name: connectionName,
-              integration,
-              template: method.template,
-              newConnection: true,
-              ...(identityLabel !== undefined ? { identityLabel } : {}),
-            },
-            onSuccess: async (connection: OAuthCompletionPayload) => {
-              await probeAndAutoNameOAuthConnection(connection, label);
-              toast.success("Connection added");
-              close();
-            },
-          });
+        start: (sArgs: DcrStartArgs): void => {
+          if (args.isReconnect) {
+            void oauthPopup.start({
+              payload: {
+                client: sArgs.client,
+                clientOwner: sArgs.owner,
+                owner: args.dcrOwner,
+                name: args.connectionName,
+                integration,
+                template: args.method.template,
+                ...(args.identityLabel !== undefined ? { identityLabel: args.identityLabel } : {}),
+              },
+              onAuthorizationStarted: () => {
+                trackEvent("connection_reconnected", {
+                  integration_slug: String(integration),
+                  owner: args.dcrOwner,
+                  success: true,
+                });
+              },
+              onError: () => {
+                trackEvent("connection_reconnected", {
+                  integration_slug: String(integration),
+                  owner: args.dcrOwner,
+                  success: false,
+                });
+              },
+              onSuccess: () => {
+                toast.success("Reconnected");
+                close();
+              },
+            });
+          } else {
+            void oauthPopup.start({
+              payload: {
+                client: sArgs.client,
+                clientOwner: sArgs.owner,
+                owner: args.dcrOwner,
+                name: args.connectionName,
+                integration,
+                template: args.method.template,
+                newConnection: true,
+                ...(args.identityLabel !== undefined ? { identityLabel: args.identityLabel } : {}),
+              },
+              onSuccess: async (connection: OAuthCompletionPayload) => {
+                await probeAndAutoNameOAuthConnection(connection, label);
+                toast.success("Connection added");
+                close();
+              },
+            });
+          }
         },
       },
       {
+        owner: args.dcrOwner,
+        integrationName,
+        authorizationUrl: args.method.oauth?.authorizationUrl,
+        tokenUrl: args.method.oauth?.tokenUrl,
         discoveryUrl,
-        // Only a genuine discovery URL (MCP) seeds the RFC 8707 resource
-        // indicator; the token-endpoint fallback baked into `discoveryUrl` must
-        // not, so pass the un-collapsed method value here.
-        resourceFallback: method.oauth?.discoveryUrl,
-        owner: dcrOwner,
-        // DCR slugs are server-keyed (Part A): the connect path no longer depends
-        // on the picker's app list, so it need not be threaded here.
-        declaredScopes: method.oauth?.scopes,
+        resourceFallback: args.method.oauth?.discoveryUrl,
+        declaredScopes: args.method.oauth?.scopes,
         redirectUri: oauthCallbackUrl(),
         integration,
       },
     );
     setDcrBusy(false);
-    trackEvent("connection_oauth_started", {
-      integration_slug: String(integration),
-      owner: dcrOwner,
-      flow: "dcr",
-      success: outcome.kind === "started",
-      ...(outcome.kind === "fallback" ? { dcr_fallback: true } : {}),
-    });
-    if (outcome.kind === "fallback") {
-      setOAuthFallbackProbe("probe" in outcome ? outcome.probe : null);
-      setDcrFailed(true);
-      // Surface the server's actionable rejection reason on the recovery view as
-      // an inline error card. Generic fallbacks (no message) fall through to the
-      // "register an app" empty state, which already guides the user.
-      setDcrFallbackMessage("message" in outcome ? (outcome.message ?? null) : null);
+
+    if (args.isReconnect) {
+      if (outcome.kind === "fallback" || outcome.kind === "failed") {
+        if (args.handoffKey) {
+          oauthReconnectOpenedKey.current = null;
+        }
+        toast.error(
+          outcome.kind === "fallback" && "message" in outcome && outcome.message
+            ? outcome.message
+            : "Reconnect failed: automatic setup unavailable",
+        );
+      }
+    } else {
+      trackEvent("connection_oauth_started", {
+        integration_slug: String(integration),
+        owner: args.dcrOwner,
+        flow: "dcr",
+        success: outcome.kind === "started",
+        ...(outcome.kind === "fallback" ? { dcr_fallback: true } : {}),
+      });
+      if (outcome.kind === "fallback") {
+        setOAuthFallbackProbe("probe" in outcome ? outcome.probe : null);
+        setDcrFailed(true);
+        setDcrFallbackMessage("message" in outcome ? (outcome.message ?? null) : null);
+      } else if (outcome.kind === "failed") {
+        setDcrFailed(true);
+        toast.error("Automatic setup failed");
+      }
     }
+  };
+
+  // Transparent DCR connect: probe → register → start, no app picker. On any
+  // failure (probe error, no registration endpoint, or registration failure) we
+  // flip `dcrFailed` so the bring-your-own-app picker renders as the recovery
+  // path with name/owner kept.
+  const handleDcrConnect = async () => {
+    if (!method) return;
+    await executeDcrConnect({
+      method,
+      connectionName: previewConnectionName(label, owner),
+      identityLabel: typedIdentityLabel(label),
+      dcrOwner: owner,
+      isReconnect: false,
+    });
   };
 
   return (
