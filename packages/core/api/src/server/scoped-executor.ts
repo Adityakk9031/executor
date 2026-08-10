@@ -97,6 +97,11 @@ export interface HostConfigShape {
    * Hosts that record product analytics supply it; omitted -> no observation.
    */
   readonly onIntegrationChange?: ExecutorConfig["onIntegrationChange"];
+  /**
+   * Freshness TTL (in ms) for remote tool catalogs before an explicit re-sync is
+   * attempted. Omit for default (15 mins), or set `null` to disable time-based re-sync.
+   */
+  readonly toolsSyncTtlMs?: number | null;
 }
 
 export class HostConfig extends Context.Service<HostConfig, HostConfigShape>()(
@@ -284,6 +289,7 @@ export const makeScopedExecutor = <
       httpClientLayer,
       fetch: hostedFetch,
       onIntegrationChange: config.onIntegrationChange,
+      ...(config.toolsSyncTtlMs !== undefined ? { toolsSyncTtlMs: config.toolsSyncTtlMs } : {}),
       onElicitation: "accept-all",
       redirectUri,
       oauthCallbackStateOrgSlug: orgSlug,

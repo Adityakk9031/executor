@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, expect, test } from "@effect/vitest";
 
+import { loadConfig } from "./config";
 import executorConfig from "../executor.config";
 
 const ENV_NAME = "EXECUTOR_ALLOW_STDIO_MCP";
 const SECRET_ENV_NAME = "EXECUTOR_SECRET_KEY";
+const TTL_ENV_NAME = "EXECUTOR_TOOLS_SYNC_TTL_MS";
 const originalValue = process.env[ENV_NAME];
 const originalSecret = process.env[SECRET_ENV_NAME];
+const originalTtl = process.env[TTL_ENV_NAME];
 
 beforeEach(() => {
   process.env[SECRET_ENV_NAME] = originalSecret ?? "executor-config-test-secret";
@@ -21,6 +24,11 @@ afterEach(() => {
     delete process.env[SECRET_ENV_NAME];
   } else {
     process.env[SECRET_ENV_NAME] = originalSecret;
+  }
+  if (originalTtl === undefined) {
+    delete process.env[TTL_ENV_NAME];
+  } else {
+    process.env[TTL_ENV_NAME] = originalTtl;
   }
 });
 
@@ -56,4 +64,21 @@ test("stdio MCP stays disabled unless the opt-in is exactly true", () => {
 test("stdio MCP is enabled when the opt-in is exactly true", () => {
   process.env[ENV_NAME] = "true";
   expect(allowStdio()).toBe(true);
+});
+
+test("toolsSyncTtlMs parses integer, null/false/0 disable values, and undefined fallback", () => {
+  delete process.env[TTL_ENV_NAME];
+  expect(loadConfig().toolsSyncTtlMs).toBeUndefined();
+
+  process.env[TTL_ENV_NAME] = "60000";
+  expect(loadConfig().toolsSyncTtlMs).toBe(60000);
+
+  process.env[TTL_ENV_NAME] = "null";
+  expect(loadConfig().toolsSyncTtlMs).toBeNull();
+
+  process.env[TTL_ENV_NAME] = "false";
+  expect(loadConfig().toolsSyncTtlMs).toBeNull();
+
+  process.env[TTL_ENV_NAME] = "0";
+  expect(loadConfig().toolsSyncTtlMs).toBeNull();
 });

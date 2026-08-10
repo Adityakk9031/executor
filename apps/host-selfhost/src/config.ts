@@ -43,6 +43,8 @@ export interface SelfHostConfig {
   readonly organizationName: string;
   /** URL slug for org-prefixed console paths (`/<slug>/policies`). */
   readonly orgSlug: string;
+  /** Freshness TTL (in ms) for remote tool catalogs, or `null` to disable. */
+  readonly toolsSyncTtlMs?: number | null;
 }
 
 export const resolveDataDir = (): string =>
@@ -148,6 +150,7 @@ export const loadConfig = (): SelfHostConfig => {
     bootstrapAdminName: process.env.EXECUTOR_BOOTSTRAP_ADMIN_NAME ?? "Admin",
     organizationName: process.env.EXECUTOR_ORG_NAME ?? "Default",
     orgSlug: resolveOrgSlug(),
+    toolsSyncTtlMs: resolveToolsSyncTtlMs(),
   };
 };
 
@@ -164,4 +167,12 @@ const resolveOrgSlug = (): string => {
     );
   }
   return slug;
+};
+
+const resolveToolsSyncTtlMs = (): number | null | undefined => {
+  const raw = process.env.EXECUTOR_TOOLS_SYNC_TTL_MS?.trim();
+  if (!raw) return undefined;
+  if (raw === "null" || raw === "false" || raw === "0") return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isNaN(parsed) ? undefined : parsed;
 };

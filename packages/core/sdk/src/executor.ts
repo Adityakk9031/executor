@@ -3631,6 +3631,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             ? b.isNull("tools_synced_at")
             : b.or(b.isNull("tools_synced_at"), b("tools_synced_at", "<", staleBefore)),
       });
+      const tasks = [];
       for (const connection of connections) {
         const integrationRow = integrationBySlug.get(connection.integration);
         if (!integrationRow) continue;
@@ -3657,23 +3658,28 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           syncedAt < cutoff;
         if (!staleMarked && !configRevised && !expired) continue;
 
-        yield* produceConnectionTools(
-          integrationRow,
-          {
-            owner: connection.owner as Owner,
-            integration: IntegrationSlug.make(connection.integration),
-            name: ConnectionName.make(connection.name),
-          },
-          "background",
-        ).pipe(
-          Effect.catch(() => Effect.succeed([] as readonly Tool[])),
-          Effect.withSpan("executor.tools.sync_stale", {
-            attributes: {
-              "executor.integration": connection.integration,
-              "executor.connection": connection.name,
+        tasks.push(
+          produceConnectionTools(
+            integrationRow,
+            {
+              owner: connection.owner as Owner,
+              integration: IntegrationSlug.make(connection.integration),
+              name: ConnectionName.make(connection.name),
             },
-          }),
+            "background",
+          ).pipe(
+            Effect.catch(() => Effect.succeed([] as readonly Tool[])),
+            Effect.withSpan("executor.tools.sync_stale", {
+              attributes: {
+                "executor.integration": connection.integration,
+                "executor.connection": connection.name,
+              },
+            }),
+          ),
         );
+      }
+      if (tasks.length > 0) {
+        yield* Effect.all(tasks, { concurrency: 10 });
       }
     });
 
