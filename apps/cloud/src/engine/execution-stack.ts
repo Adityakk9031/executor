@@ -42,8 +42,9 @@ import {
   PluginsProvider,
   collectTables,
 } from "@executor-js/api/server";
+import { googleCatalogOAuthScopesForPreset } from "@executor-js/plugin-openapi/providers/google";
 import { makeDynamicWorkerExecutor } from "@executor-js/runtime-dynamic-worker";
-import type { AnyPlugin } from "@executor-js/sdk";
+import type { AnyPlugin, FirstPartyOAuthClientConfig } from "@executor-js/sdk";
 
 import executorConfig from "../../executor.config";
 import { DbService } from "../db/db";
@@ -88,6 +89,54 @@ export const CloudPluginsProvider: Layer.Layer<PluginsProvider> = Layer.succeed(
  */
 export const CLOUD_MOUNT_PREFIX = "/api" as const;
 
+// Initial Google launch boundary. Calendar + Sheets are sensitive scopes but
+// not restricted Workspace scopes; Gmail and account-wide Drive remain absent
+// until their separate verification/security work is complete. The same scope
+// source builds the catalog auth templates, preventing config drift.
+const GOOGLE_FIRST_PARTY_ALLOWED_SCOPES: readonly string[] = [
+  ...new Set([
+    ...googleCatalogOAuthScopesForPreset("google-calendar"),
+    ...googleCatalogOAuthScopesForPreset("google-sheets"),
+  ]),
+];
+
+// Executor-owned provider apps, enabled per provider by setting BOTH env vars
+// (id + secret). Each provider-side registration must list
+// `${VITE_PUBLIC_SITE_URL}/api/oauth/callback` as its callback; the org slug
+// travels inside OAuth `state`, so the single static callback serves every org.
+//
+// The endpoint URLs default to the real provider; the `_AUTHORIZE_URL` /
+// `_TOKEN_URL` overrides exist so tests and dev instances can point the app at
+// an emulated provider (`@executor-js/emulate`) and run the complete flow.
+// Production leaves them unset.
+const cloudFirstPartyOAuthClients = (): readonly FirstPartyOAuthClientConfig[] => [
+  ...(env.FIRST_PARTY_GITHUB_CLIENT_ID && env.FIRST_PARTY_GITHUB_CLIENT_SECRET
+    ? [
+        {
+          name: "github",
+          authorizationUrl:
+            env.FIRST_PARTY_GITHUB_AUTHORIZE_URL ?? "https://github.com/login/oauth/authorize",
+          tokenUrl:
+            env.FIRST_PARTY_GITHUB_TOKEN_URL ?? "https://github.com/login/oauth/access_token",
+          clientId: env.FIRST_PARTY_GITHUB_CLIENT_ID,
+          clientSecret: env.FIRST_PARTY_GITHUB_CLIENT_SECRET,
+        },
+      ]
+    : []),
+  ...(env.FIRST_PARTY_GOOGLE_CLIENT_ID && env.FIRST_PARTY_GOOGLE_CLIENT_SECRET
+    ? [
+        {
+          name: "google",
+          authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+          tokenUrl: "https://oauth2.googleapis.com/token",
+          clientId: env.FIRST_PARTY_GOOGLE_CLIENT_ID,
+          clientSecret: env.FIRST_PARTY_GOOGLE_CLIENT_SECRET,
+          allowedScopes: GOOGLE_FIRST_PARTY_ALLOWED_SCOPES,
+        },
+      ]
+    : []),
+];
+
 export const CloudHostConfig: Layer.Layer<HostConfig> = Layer.sync(HostConfig, () => ({
   // SSRF / private-network egress guard. Config-driven, NOT a test flag:
   // production leaves `ALLOW_LOCAL_NETWORK` unset so the guard stays ON (`false`);
@@ -99,6 +148,7 @@ export const CloudHostConfig: Layer.Layer<HostConfig> = Layer.sync(HostConfig, (
   // WorkOS Vault is cloud's credential storage implementation detail, not a
   // user-selectable provider surface.
   exposeCredentialProviders: false,
+  firstPartyOAuthClients: cloudFirstPartyOAuthClients(),
 }));
 
 export const CloudCodeExecutorProvider: Layer.Layer<CodeExecutorProvider> = Layer.sync(
