@@ -1115,6 +1115,27 @@ export abstract class McpAgentSessionDOBase<
     return typeof streamId === "string" ? streamId : null;
   }
 
+  /**
+   * Whether the stream named by `lastEventId` still has a request awaiting
+   * its response. SAFETY: reads the transport's pinned
+   * `_requestToStreamMapping` for the same reason `requestStreamId` and
+   * `supersedeReplayStream` do — the SDK exposes no public pending-request
+   * probe.
+   */
+  private async lastEventIdStreamHasPendingRequest(
+    transport: WebStandardStreamableHTTPServerTransport,
+    lastEventId: string,
+  ): Promise<boolean> {
+    const streamId = await this.eventStore.getStreamIdForEventId(lastEventId);
+    if (!streamId) return false;
+    const mapping: unknown = Reflect.get(transport, "_requestToStreamMapping");
+    if (!(mapping instanceof Map)) return false;
+    for (const mappedStreamId of mapping.values()) {
+      if (mappedStreamId === streamId) return true;
+    }
+    return false;
+  }
+
   private async supersedeReplayStream(
     transport: WebStandardStreamableHTTPServerTransport,
     lastEventId: string,
@@ -1215,26 +1236,44 @@ export abstract class McpAgentSessionDOBase<
       }
       if (request.method === "GET") {
         const lastEventId = request.headers.get("last-event-id");
-        if (lastEventId) {
+        // A reconnect id is only "drained" when the stream has no stored
+        // events after it AND no request still in flight on it. An in-flight
+        // tool call has produced no events past the priming frame yet, but
+        // its POST stream must still be resumed so the eventual result lands
+        // on this connection (the severed-POST recovery contract).
+        const resumable =
+          lastEventId !== null &&
+          ((await this.eventStore.hasEventsAfter(lastEventId)) ||
+            (await this.lastEventIdStreamHasPendingRequest(transport, lastEventId)));
+        if (lastEventId && resumable) {
           await this.supersedeReplayStream(transport, lastEventId);
         } else {
+          // Standalone listener path — taken for a bare GET AND for a GET
+          // whose Last-Event-ID stream is fully drained. EventSource clients
+          // echo their last id on every reconnect, so a drained id must not
+          // enter the transport's resume (it closes a completed stream's
+          // resume immediately, turning the echo into a reconnect loop).
+          let serveRequest = request;
+          if (lastEventId) {
+            const headers = new Headers(request.headers);
+            headers.delete("last-event-id");
+            serveRequest = new Request(request, { headers });
+          }
           // Latest-listener-wins. Client cancellation is not reliably relayed
           // through every workerd/Vite streaming hop, so explicitly retire a
           // stale standalone mapping before opening its replacement.
           transport.closeStandaloneSSEStream();
           const replay = await this.collectUndeliveredReplay();
-          if (replay) {
-            // Prepend the replay onto the transport's own long-lived
-            // standalone stream — the stream MUST stay open afterwards (see
-            // collectUndeliveredReplay). Acknowledgement moves to stream end:
-            // "complete"/"rotate" imply the client stayed attached long
-            // enough to have drained the prepended frames.
-            const response = await transport.handleRequest(request);
-            return this.trackedLegacyResponse(response, {
-              initialFrame: replay.frame,
-              acknowledge: replay.streamIds,
-            });
-          }
+          // Replayed responses ride as the opening frames of the transport's
+          // own long-lived standalone stream — the stream MUST stay open
+          // afterwards (see collectUndeliveredReplay). Acknowledgement moves
+          // to stream end: "complete"/"rotate" imply the client stayed
+          // attached long enough to have drained the prepended frames.
+          const response = await transport.handleRequest(serveRequest);
+          return this.trackedLegacyResponse(
+            response,
+            replay ? { initialFrame: replay.frame, acknowledge: replay.streamIds } : {},
+          );
         }
       }
       const toolCallIds = legacyToolCallRequestIds(parsedBody);
