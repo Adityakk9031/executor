@@ -6,22 +6,22 @@ const googleServices = [
     index: "01",
     name: "Google Calendar",
     purpose:
-      "Executor can read your calendars and events, then create, update, or remove events when you ask an agent to manage your schedule.",
+      "Executor can read, create, update, or remove calendars and events, and manage calendar sharing rules, when you ask an agent to manage your schedule.",
     scope: "googleapis.com/auth/calendar",
   },
   {
     index: "02",
     name: "Gmail",
     purpose:
-      "Executor can read, search, compose, send, organize, trash, and permanently delete messages only when you explicitly instruct an agent to work with your email.",
-    scope: "mail.google.com",
+      "Executor can read, search, compose, send, organize, trash, and permanently delete messages, and manage filters and other basic Gmail settings, only when you explicitly instruct an agent to work with your email.",
+    scope: "mail.google.com · gmail.settings.basic",
   },
   {
     index: "03",
     name: "Google Sheets",
     purpose:
-      "Executor can read spreadsheet data and update cells, ranges, and worksheets when you ask an agent to work with a spreadsheet.",
-    scope: "googleapis.com/auth/spreadsheets",
+      "Executor can read spreadsheet data, update cells, ranges, and worksheets, and write Drive-file smart chips when you ask an agent to work with a spreadsheet.",
+    scope: "googleapis.com/auth/spreadsheets · drive.file",
   },
   {
     index: "04",
@@ -41,8 +41,8 @@ const googleServices = [
     index: "06",
     name: "Google Contacts and Tasks",
     purpose:
-      "Executor can read or update contacts and contact groups, read other contacts or an available Workspace directory, and manage task lists and tasks when you ask an agent to organize people or work.",
-    scope: "contacts · contacts.other.readonly · directory.readonly · tasks",
+      "Executor can read or update contacts and contact groups, read available profile fields, other contacts, or a Workspace directory, and manage task lists and tasks when you ask an agent to organize people or work.",
+    scope: "contacts · user profile fields · directory.readonly · tasks",
   },
   {
     index: "07",
