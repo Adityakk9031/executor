@@ -221,7 +221,9 @@ scenario(
       expect(google.origin.allowedScopes).toContain(
         "https://www.googleapis.com/auth/meetings.space.readonly",
       );
-      expect(google.origin.allowedScopes).toContain("https://www.googleapis.com/auth/gmail.modify");
+      expect(google.origin.allowedScopes).not.toContain(
+        "https://www.googleapis.com/auth/gmail.modify",
+      );
       expect(google.origin.allowedScopes).toContain("https://mail.google.com/");
       expect(google.origin.allowedScopes).toContain(
         "https://www.googleapis.com/auth/gmail.settings.basic",
@@ -230,6 +232,7 @@ scenario(
         "https://www.googleapis.com/auth/gmail.settings.sharing",
       );
       expect(google.origin.allowedScopes).toContain("https://www.googleapis.com/auth/spreadsheets");
+      expect(google.origin.allowedScopes).toContain("https://www.googleapis.com/auth/drive.file");
       expect(google.origin.allowedScopes).toContain("https://www.googleapis.com/auth/drive");
       expect(google.origin.allowedScopes).toContain("https://www.googleapis.com/auth/documents");
       expect(google.origin.allowedScopes).toContain(
@@ -247,6 +250,16 @@ scenario(
       expect(google.origin.allowedScopes).toContain(
         "https://www.googleapis.com/auth/directory.readonly",
       );
+      for (const scope of [
+        "user.addresses.read",
+        "user.birthday.read",
+        "user.emails.read",
+        "user.gender.read",
+        "user.organization.read",
+        "user.phonenumbers.read",
+      ]) {
+        expect(google.origin.allowedScopes).toContain(`https://www.googleapis.com/auth/${scope}`);
+      }
       expect(google.origin.allowedScopes).toContain(
         "https://www.googleapis.com/auth/photoslibrary.appendonly",
       );

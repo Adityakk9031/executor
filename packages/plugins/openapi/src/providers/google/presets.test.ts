@@ -3,7 +3,12 @@ import { Effect } from "effect";
 import { compileOpenApiSpec } from "@executor-js/plugin-openapi";
 
 import { convertGoogleDiscoveryBundleToOpenApi } from "./discovery";
-import { googleCatalog, googleOpenApiPresets, googleStandardUserOAuthPresets } from "./presets";
+import {
+  googleCatalog,
+  googleOAuthConsentScopes,
+  googleOpenApiPresets,
+  googleStandardUserOAuthPresets,
+} from "./presets";
 
 const googleHealthCheckDiscoveryFixtures = {
   "google-calendar": {
@@ -186,7 +191,6 @@ const FROZEN_GOOGLE_SLUGS = [
   "google_photos_library",
   "google_photos_picker",
   "google_chat",
-  "google_keep",
   "google_youtube_data",
   "google_search_console",
   "google_classroom",
@@ -261,8 +265,43 @@ it("requests every scope needed by Forms, People, and app-created Photos", () =>
       "https://www.googleapis.com/auth/contacts",
       "https://www.googleapis.com/auth/contacts.other.readonly",
       "https://www.googleapis.com/auth/directory.readonly",
+      "https://www.googleapis.com/auth/user.addresses.read",
+      "https://www.googleapis.com/auth/user.birthday.read",
+      "https://www.googleapis.com/auth/user.emails.read",
+      "https://www.googleapis.com/auth/user.gender.read",
+      "https://www.googleapis.com/auth/user.organization.read",
+      "https://www.googleapis.com/auth/user.phonenumbers.read",
     ]),
   );
+});
+
+it("uses the audited full-action scope unions for expanded Google services", () => {
+  expect(googleOAuthConsentScopes["google-chat"]).toHaveLength(9);
+  expect(googleOAuthConsentScopes["google-classroom"]).toHaveLength(11);
+  expect(googleOAuthConsentScopes["google-admin-directory"]).toHaveLength(12);
+  expect(googleOAuthConsentScopes["google-admin-reports"]).toEqual([
+    "https://www.googleapis.com/auth/admin.reports.audit.readonly",
+    "https://www.googleapis.com/auth/admin.reports.usage.readonly",
+  ]);
+  expect(googleOAuthConsentScopes["google-apps-script"]).toEqual([
+    "https://www.googleapis.com/auth/script.projects",
+    "https://www.googleapis.com/auth/script.deployments",
+    "https://www.googleapis.com/auth/script.processes",
+    "https://www.googleapis.com/auth/script.metrics",
+  ]);
+  expect(googleOAuthConsentScopes["google-youtube-data"]).toEqual([
+    "https://www.googleapis.com/auth/youtube.force-ssl",
+    "https://www.googleapis.com/auth/youtube.channel-memberships.creator",
+  ]);
+  expect(googleOAuthConsentScopes["google-sheets"]).toEqual([
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.file",
+  ]);
+});
+
+it("does not publish the domain-wide-delegation-only Keep preset", () => {
+  expect(googleOpenApiPresets.some((preset) => preset.id === "google-keep")).toBe(true);
+  expect(googleCatalog.some((preset) => preset.id === "google-keep")).toBe(false);
 });
 
 it("classifies every Google service for bundle OAuth UX", () => {
@@ -299,7 +338,12 @@ it.effect("resolves fixture-backed Google catalog health checks in converted spe
       expect(preset?.healthCheck, `${presetId} declares a health check`).toBeTruthy();
 
       const converted = yield* convertGoogleDiscoveryBundleToOpenApi({
-        documents: [{ discoveryUrl: fixture.url, documentText: JSON.stringify(fixture.document) }],
+        documents: [
+          {
+            discoveryUrl: fixture.url,
+            documentText: JSON.stringify(fixture.document),
+          },
+        ],
       });
       const compiled = yield* compileOpenApiSpec(converted.specText);
       expect(compiled.definitions.map((definition) => definition.toolPath)).toContain(
@@ -325,11 +369,31 @@ it("omits Google health checks when the service spec has no stable cheap read", 
     "google-slides",
     "google-forms",
     "google-photos-picker",
-    "google-admin-reports",
   ];
 
   for (const presetId of omitted) {
     const preset = googleCatalog.find((candidate) => candidate.id === presetId);
     expect(preset?.healthCheck, `${presetId} should not declare a health check`).toBeUndefined();
   }
+});
+
+it("uses bounded, non-mutating health probes for audited services", () => {
+  const health = (presetId: string) =>
+    googleCatalog.find((preset) => preset.id === presetId)?.healthCheck;
+
+  expect(health("google-meet")).toEqual({
+    operation: "meet.conferenceRecords.list",
+  });
+  expect(health("google-tasks")).toEqual({
+    operation: "tasks.tasklists.list",
+    args: { maxResults: 1 },
+  });
+  expect(health("google-admin-reports")).toEqual({
+    operation: "reports.activities.list",
+    args: { userKey: "all", applicationName: "login", maxResults: 1 },
+  });
+  expect(health("google-cloud-resource-manager")).toEqual({
+    operation: "cloudresourcemanager.projects.search",
+    args: { pageSize: 1 },
+  });
 });

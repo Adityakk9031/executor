@@ -6,6 +6,7 @@ it("filters Google scopes that cannot be shown on a user OAuth consent screen", 
   expect(
     filterGoogleUserConsentOAuthScopes([
       "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/calendar.addons.execute",
       "https://www.googleapis.com/auth/chat.app.messages.readonly",
       "https://www.googleapis.com/auth/chat.bot",
       "https://www.googleapis.com/auth/chat.import",
@@ -16,6 +17,31 @@ it("filters Google scopes that cannot be shown on a user OAuth consent screen", 
   ).toEqual([
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/chat.messages.readonly",
+  ]);
+});
+
+it("only compacts scopes that a broad Google scope actually covers", () => {
+  expect(
+    compactGoogleOAuthScopes([
+      "https://www.googleapis.com/auth/drive",
+      "https://www.googleapis.com/auth/drive.file",
+      "https://www.googleapis.com/auth/drive.readonly",
+      "https://www.googleapis.com/auth/drive.apps.readonly",
+      "https://www.googleapis.com/auth/drive.activity.readonly",
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/spreadsheets.readonly",
+      "https://www.googleapis.com/auth/tasks",
+      "https://www.googleapis.com/auth/tasks.readonly",
+      "https://www.googleapis.com/auth/webmasters",
+      "https://www.googleapis.com/auth/webmasters.readonly",
+    ]),
+  ).toEqual([
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.apps.readonly",
+    "https://www.googleapis.com/auth/drive.activity.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/tasks",
+    "https://www.googleapis.com/auth/webmasters",
   ]);
 });
 
