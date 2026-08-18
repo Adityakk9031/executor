@@ -1031,9 +1031,106 @@ it.effect("filters Gmail operations to the explicitly selected consent scope", (
   }),
 );
 
+it.effect("keeps consumer Gmail settings tools alongside full mailbox access", () =>
+  Effect.gen(function* () {
+    const fullScope = "https://mail.google.com/";
+    const settingsBasicScope = "https://www.googleapis.com/auth/gmail.settings.basic";
+    const settingsSharingScope = "https://www.googleapis.com/auth/gmail.settings.sharing";
+    const result = yield* convertGoogleDiscoveryBundleToOpenApi({
+      consentScopes: [fullScope, settingsBasicScope],
+      documents: [
+        {
+          discoveryUrl: "https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest",
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          documentText: JSON.stringify({
+            name: "gmail",
+            version: "v1",
+            title: "Gmail API",
+            rootUrl: "https://gmail.googleapis.com/",
+            servicePath: "",
+            auth: {
+              oauth2: {
+                scopes: {
+                  [fullScope]: { description: "Full Gmail access" },
+                  [settingsBasicScope]: { description: "Manage Gmail settings" },
+                  [settingsSharingScope]: { description: "Manage Gmail sharing settings" },
+                },
+              },
+            },
+            resources: {
+              users: {
+                resources: {
+                  messages: {
+                    methods: {
+                      delete: {
+                        id: "gmail.users.messages.delete",
+                        httpMethod: "DELETE",
+                        path: "gmail/v1/users/{userId}/messages/{id}",
+                        scopes: [fullScope],
+                        parameters: {
+                          userId: { location: "path", required: true, type: "string" },
+                          id: { location: "path", required: true, type: "string" },
+                        },
+                      },
+                    },
+                  },
+                  settings: {
+                    resources: {
+                      filters: {
+                        methods: {
+                          create: {
+                            id: "gmail.users.settings.filters.create",
+                            httpMethod: "POST",
+                            path: "gmail/v1/users/{userId}/settings/filters",
+                            scopes: [settingsBasicScope],
+                            parameters: {
+                              userId: { location: "path", required: true, type: "string" },
+                            },
+                          },
+                        },
+                      },
+                      forwardingAddresses: {
+                        methods: {
+                          create: {
+                            id: "gmail.users.settings.forwardingAddresses.create",
+                            httpMethod: "POST",
+                            path: "gmail/v1/users/{userId}/settings/forwardingAddresses",
+                            scopes: [settingsSharingScope],
+                            parameters: {
+                              userId: { location: "path", required: true, type: "string" },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            schemas: {},
+          }),
+        },
+      ],
+    });
+
+    const spec = decodeConvertedSpec(result.specText);
+    const operationIds = Object.values(spec.paths).flatMap((path) =>
+      Object.values(path).map((operation) => operation.operationId),
+    );
+    expect(operationIds).toContain("gmail.users.messages.delete");
+    expect(operationIds).toContain("gmail.users.settings.filters.create");
+    expect(operationIds).not.toContain("gmail.users.settings.forwardingAddresses.create");
+    const oauthTemplate = result.authenticationTemplate?.find((entry) => entry.kind === "oauth2");
+    expect(oauthTemplate?.kind === "oauth2" ? oauthTemplate.scopes : undefined).toEqual([
+      fullScope,
+      settingsBasicScope,
+    ]);
+  }),
+);
+
 // ---------------------------------------------------------------------------
 // The merged bundle scope set is the COMPACTED + FILTERED union: sub-scopes
-// collapse under their broad parent (`gmail.*` → `mail.google.com/`,
+// collapse under their broad parent (Gmail message scopes → `mail.google.com/`,
 // `calendar.*` → `calendar`, `userinfo.email` → `email`), and scopes a user
 // OAuth consent screen can't show (`chat.bot`, `chat.app.*`, `keep`) are
 // dropped. The persisted auth template, the spec `securitySchemes.googleOAuth2`
@@ -1171,6 +1268,17 @@ it.effect("compacts and filters the merged bundle scope set into a clean consent
                   // Broad parent + a sub-scope that must collapse under it.
                   "https://mail.google.com/": { description: "Full Gmail access" },
                   "https://www.googleapis.com/auth/gmail.readonly": { description: "Read Gmail" },
+                  // Basic settings remain independent; admin-only sharing and
+                  // contextual add-on scopes must not enter user consent.
+                  "https://www.googleapis.com/auth/gmail.settings.basic": {
+                    description: "Manage Gmail settings",
+                  },
+                  "https://www.googleapis.com/auth/gmail.settings.sharing": {
+                    description: "Manage Gmail sharing settings",
+                  },
+                  "https://www.googleapis.com/auth/gmail.addons.current.message.readonly": {
+                    description: "Read the current add-on message",
+                  },
                   // Identity scope normalized to `email`.
                   "https://www.googleapis.com/auth/userinfo.email": { description: "Email" },
                 },
@@ -1241,12 +1349,14 @@ it.effect("compacts and filters the merged bundle scope set into a clean consent
 
     const expectedConsentScopes = [
       "https://mail.google.com/",
+      "https://www.googleapis.com/auth/gmail.settings.basic",
       "email",
       "https://www.googleapis.com/auth/chat.spaces.readonly",
     ];
 
     // The derived oauth auth template carries the compacted/filtered set
-    // (gmail.readonly collapsed, userinfo.email → email, chat.bot/chat.app.* dropped).
+    // (gmail.readonly collapsed, settings.basic preserved, userinfo.email → email,
+    // and admin-only/contextual/chat scopes dropped).
     const oauthTemplate = result.authenticationTemplate?.find((entry) => entry.kind === "oauth2");
     expect(oauthTemplate?.kind === "oauth2" ? [...oauthTemplate.scopes].sort() : undefined).toEqual(
       [...expectedConsentScopes].sort(),

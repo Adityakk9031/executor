@@ -215,14 +215,18 @@ it("keeps Select all limited to Google services that can use normal user OAuth",
   expect(standardIds).not.toContain("google-admin-reports");
 });
 
-it("requests full Gmail and the complete user-facing Meet surface", () => {
+it("requests full consumer Gmail access and the complete user-facing Meet surface", () => {
   const gmail = googleCatalog.find((preset) => preset.id === "google-gmail");
   const meet = googleCatalog.find((preset) => preset.id === "google-meet");
   const gmailOAuth = gmail?.authTemplate?.find((template) => template.kind === "oauth2");
   const meetOAuth = meet?.authTemplate?.find((template) => template.kind === "oauth2");
 
   expect(gmailOAuth?.scopes).toContain("https://mail.google.com/");
+  expect(gmailOAuth?.scopes).toContain("https://www.googleapis.com/auth/gmail.settings.basic");
   expect(gmailOAuth?.scopes).not.toContain("https://www.googleapis.com/auth/gmail.modify");
+  expect(gmailOAuth?.scopes).not.toContain(
+    "https://www.googleapis.com/auth/gmail.settings.sharing",
+  );
   expect(meetOAuth?.scopes).toEqual(
     expect.arrayContaining([
       "https://www.googleapis.com/auth/meetings.space.created",

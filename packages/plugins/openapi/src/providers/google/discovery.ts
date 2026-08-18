@@ -569,11 +569,12 @@ const discoveryScopes = (document: DiscoveryDocument): Record<string, string> =>
 // requests at connect) must match the consent the picker previews. Both run the
 // raw Discovery union through `compactGoogleOAuthScopes`, which drops scopes a
 // user OAuth consent screen can't show (`chat.bot`/`chat.app.*`/`keep`) and
-// collapses sub-scopes under their broad parent (`gmail.*` → `mail.google.com`,
-// `userinfo.email` → `email`). Descriptions are preserved where the raw map had
-// them; compaction-introduced identity scopes (`email`/`profile`) fall back to
-// the broad parent's description. Per-operation `x-google-scopes`/`security`
-// stay RAW - they describe which scope each method needs, not consent.
+// collapses content sub-scopes under their broad parent (Gmail message scopes →
+// `mail.google.com`, `userinfo.email` → `email`) while preserving independent
+// settings scopes. Descriptions are preserved where the raw map had them;
+// compaction-introduced identity scopes (`email`/`profile`) fall back to the
+// broad parent's description. Per-operation `x-google-scopes`/`security` stay
+// RAW - they describe which scope each method needs, not consent.
 const compactDiscoveryScopeMap = (raw: Record<string, string>): Record<string, string> => {
   const descriptionFor = (scope: string): string => {
     if (raw[scope] !== undefined) return raw[scope];

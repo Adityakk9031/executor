@@ -223,6 +223,12 @@ scenario(
       );
       expect(google.origin.allowedScopes).toContain("https://www.googleapis.com/auth/gmail.modify");
       expect(google.origin.allowedScopes).toContain("https://mail.google.com/");
+      expect(google.origin.allowedScopes).toContain(
+        "https://www.googleapis.com/auth/gmail.settings.basic",
+      );
+      expect(google.origin.allowedScopes).not.toContain(
+        "https://www.googleapis.com/auth/gmail.settings.sharing",
+      );
       expect(google.origin.allowedScopes).toContain("https://www.googleapis.com/auth/spreadsheets");
       expect(google.origin.allowedScopes).toContain("https://www.googleapis.com/auth/drive");
       expect(google.origin.allowedScopes).toContain("https://www.googleapis.com/auth/documents");
@@ -332,6 +338,7 @@ scenario(
             "email",
             "profile",
             "https://mail.google.com/",
+            "https://www.googleapis.com/auth/gmail.settings.basic",
           ]),
           slug: fullGmail,
         },
@@ -351,7 +358,15 @@ scenario(
         fullGmailStarted.status === "redirect" ? fullGmailStarted.authorizationUrl : "";
       expect(
         new Set(new URL(fullGmailAuthorizationUrl).searchParams.get("scope")?.split(" ") ?? []),
-      ).toEqual(new Set(["openid", "email", "profile", "https://mail.google.com/"]));
+      ).toEqual(
+        new Set([
+          "openid",
+          "email",
+          "profile",
+          "https://mail.google.com/",
+          "https://www.googleapis.com/auth/gmail.settings.basic",
+        ]),
+      );
 
       const drive = IntegrationSlug.make(unique("google_drive"));
       yield* client.openapi.addSpec({

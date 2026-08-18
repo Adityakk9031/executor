@@ -24,11 +24,20 @@ it("compacts Google OAuth scopes after filtering user-consent-incompatible scope
     compactGoogleOAuthScopes([
       "https://mail.google.com/",
       "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.settings.basic",
+      "https://www.googleapis.com/auth/gmail.settings.sharing",
+      "https://www.googleapis.com/auth/gmail.addons.current.message.readonly",
       "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/userinfo.profile",
       "openid",
       "https://www.googleapis.com/auth/chat.app.spaces",
       "https://www.googleapis.com/auth/keep.readonly",
     ]),
-  ).toEqual(["https://mail.google.com/", "email", "profile", "openid"]);
+  ).toEqual([
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.settings.basic",
+    "email",
+    "profile",
+    "openid",
+  ]);
 });

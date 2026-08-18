@@ -264,7 +264,10 @@ export const googleOAuthConsentScopes: Readonly<Record<string, readonly string[]
     "https://www.googleapis.com/auth/meetings.space.readonly",
     "https://www.googleapis.com/auth/meetings.space.settings",
   ],
-  "google-gmail": ["https://mail.google.com/"],
+  "google-gmail": [
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.settings.basic",
+  ],
   "google-sheets": ["https://www.googleapis.com/auth/spreadsheets"],
   "google-drive": ["https://www.googleapis.com/auth/drive"],
   "google-docs": ["https://www.googleapis.com/auth/documents"],
