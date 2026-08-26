@@ -165,8 +165,15 @@ import {
   refreshAccessToken,
   exchangeClientCredentials,
   shouldRefreshToken,
+  type OAuth2TokenResponse,
   type OAuthEndpointUrlPolicy,
 } from "./oauth-helpers";
+import {
+  ENTERPRISE_MANAGED_PROVIDER_STATE_KEY,
+  enterpriseManagedStateFrom,
+  mintEnterpriseManagedAccessToken,
+  type EnterpriseManagedMintError,
+} from "./oauth-ema";
 import { connectionIdentifier } from "./connection-name-identifier";
 import { annotateToolResultOutcome } from "./tool-result";
 import { isUnauthorizedToolFailure } from "./auth-tool-failure";
@@ -1825,6 +1832,178 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         .pipe(Effect.ignore);
     };
 
+    /** Write a re-minted token back: the access token into the connection's
+     *  primary provider item, a ROTATED refresh token into the refresh item,
+     *  and the new expiry/scope onto the row. Shared by every grant so their
+     *  persistence stays identical — the grants differ in how they mint, not in
+     *  what a mint means. */
+    const persistRefreshedToken = (
+      row: ConnectionRow,
+      provider: CredentialProvider,
+      token: OAuth2TokenResponse,
+    ): Effect.Effect<void, StorageFailure> =>
+      Effect.gen(function* () {
+        if (provider.set) {
+          // OAuth is always single-input: the access token lives in the `token`
+          // item. Fall back to a deterministic id if the map is somehow empty.
+          const tokenItemId =
+            connectionItemIds(row)[PRIMARY_INPUT_VARIABLE] ??
+            `connection:${row.owner}:${row.integration}:${row.name}:${PRIMARY_INPUT_VARIABLE}`;
+          yield* provider.set(ProviderItemId.make(tokenItemId), token.access_token);
+          if (token.refresh_token && row.refresh_item_id) {
+            yield* provider.set(ProviderItemId.make(row.refresh_item_id), token.refresh_token);
+          }
+        }
+
+        const nextExpiresAt =
+          typeof token.expires_in === "number" ? Date.now() + token.expires_in * 1000 : null;
+        const set: Record<string, unknown> = {
+          expires_at: nextExpiresAt,
+          updated_at: new Date(),
+        };
+        if (token.scope !== undefined) set.oauth_scope = token.scope;
+        yield* core.updateMany("connection", {
+          where: (b: AnyCb) =>
+            b.and(
+              byOwner(row.owner as Owner)(b),
+              b("integration", "=", String(row.integration)),
+              b("name", "=", String(row.name)),
+            ),
+          set,
+        });
+      });
+
+    /** The rendered message of a typed enterprise-managed failure. */
+    const enterpriseManagedMessage = (cause: EnterpriseManagedMintError): string =>
+      // oxlint-disable-next-line executor/no-unknown-error-message -- boundary: every EMA error declares `message` as a getter over its own typed fields, so this is a projection of a typed failure, not a read off an unknown throwable
+      cause.message;
+
+    /** Re-mint an enterprise-managed access token: exchange the stored identity
+     *  assertion for a fresh ID-JAG at the enterprise IdP, then redeem it at the
+     *  MCP server's authorization server. Runs with no user interaction, which
+     *  is the point of the profile.
+     *
+     *  The grant profile is NOT re-discovered here. It was confirmed when the
+     *  connection was made and persisted as part of its enterprise state; a
+     *  fresh discovery round trip on every renewal could only ever restate it. */
+    const performEnterpriseManagedRefresh = (input: {
+      readonly row: ConnectionRow;
+      readonly provider: CredentialProvider;
+      readonly client: RefreshClient;
+      readonly tokenUrl: string;
+      readonly scopes: readonly string[];
+      readonly reauth: (message: string) => CredentialResolutionError;
+    }): Effect.Effect<OAuth2TokenResponse, StorageFailure | CredentialResolutionError> =>
+      Effect.gen(function* () {
+        const { row, provider, client } = input;
+        const owner = row.owner as Owner;
+        const state = enterpriseManagedStateFrom(decodeJsonColumn(row.provider_state));
+        if (state === null) {
+          return yield* input.reauth(
+            "This connection is missing its enterprise-managed authorization settings. Reconnect to continue.",
+          );
+        }
+        const idpRow = yield* loadOAuthClientRow(state.idpClientOwner, state.idpClient);
+        if (!idpRow) {
+          return yield* input.reauth(
+            `The enterprise identity provider OAuth app "${state.idpClient}" is no longer registered.`,
+          );
+        }
+        if (!row.refresh_item_id) {
+          return yield* input.reauth(
+            "No enterprise identity assertion is stored for this connection.",
+          );
+        }
+        const subjectToken = yield* provider.get(ProviderItemId.make(row.refresh_item_id));
+        if (!subjectToken) {
+          return yield* input.reauth(
+            "The stored enterprise identity assertion could not be resolved.",
+          );
+        }
+        const idpClientSecret = idpRow.client_secret_item_id
+          ? ((yield* provider.get(ProviderItemId.make(String(idpRow.client_secret_item_id)))) ?? "")
+          : "";
+
+        const grant = yield* mintEnterpriseManagedAccessToken({
+          idp: {
+            tokenUrl: String(idpRow.token_url),
+            clientId: String(idpRow.client_id),
+            clientSecret: idpClientSecret,
+          },
+          resourceAuthorizationServer: {
+            tokenUrl: input.tokenUrl,
+            issuer: state.audience,
+            clientId: client.clientId,
+            clientSecret: client.clientSecret,
+          },
+          subjectToken,
+          subjectTokenType: state.subjectTokenType,
+          resource: client.resource,
+          scopes: input.scopes,
+          endpointUrlPolicy: config.oauthEndpointUrlPolicy,
+          fetch: config.fetch,
+        }).pipe(
+          // A policy denial and a dead identity assertion are both definitive —
+          // neither retries into success — but they are DIFFERENT products: one
+          // is "your administrator has not allowed this", the other is "sign in
+          // again". Only the transport failure stays a StorageError so the next
+          // invoke retries it.
+          Effect.catchTags({
+            EmaPolicyDenied: (cause) =>
+              Effect.fail(
+                new CredentialResolutionError({
+                  owner,
+                  integration: IntegrationSlug.make(row.integration),
+                  name: ConnectionName.make(row.name),
+                  message: enterpriseManagedMessage(cause),
+                  reauthRequired: true,
+                  blockedByAdmin: true,
+                  oauthErrorCode: cause.error,
+                }),
+              ),
+            EmaSubjectTokenRejected: (cause) =>
+              Effect.fail(
+                new CredentialResolutionError({
+                  owner,
+                  integration: IntegrationSlug.make(row.integration),
+                  name: ConnectionName.make(row.name),
+                  message: enterpriseManagedMessage(cause),
+                  reauthRequired: true,
+                }),
+              ),
+            EmaRedemptionRejected: (cause) =>
+              Effect.fail(
+                new CredentialResolutionError({
+                  owner,
+                  integration: IntegrationSlug.make(row.integration),
+                  name: ConnectionName.make(row.name),
+                  message: enterpriseManagedMessage(cause),
+                  reauthRequired: cause.error === "invalid_grant",
+                  ...(cause.error === undefined ? {} : { oauthErrorCode: cause.error }),
+                }),
+              ),
+            EmaUpstreamUnavailable: (cause) =>
+              Effect.fail(new StorageError({ message: enterpriseManagedMessage(cause), cause })),
+          }),
+          Effect.tapError((error) =>
+            Predicate.isTagged(error, "CredentialResolutionError") && error.reauthRequired === true
+              ? // oxlint-disable-next-line executor/no-unknown-error-message -- boundary: CredentialResolutionError carries a typed `message` field
+                markRefreshGrantDead(row, error.message)
+              : Effect.void,
+          ),
+        );
+
+        // Draft §4.4.3: the Resource Authorization Server SHOULD NOT issue a
+        // refresh token here. Drop one that arrives anyway — persisting it
+        // would overwrite the identity assertion that shares that slot, and the
+        // ID-JAG chain is already the renewal path.
+        const { refresh_token: _unused, ...token } = grant.token;
+        return {
+          ...token,
+          ...(grant.scope === null ? {} : { scope: grant.scope }),
+        } satisfies OAuth2TokenResponse;
+      });
+
     // Perform the actual refresh-token grant and persist the rotated material.
     const performTokenRefresh = (
       row: ConnectionRow,
@@ -1912,6 +2091,23 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         // recorded at connect time (multi-site providers like Datadog), else
         // the oauth_client's configured token endpoint.
         const tokenUrl = row.oauth_token_url ? String(row.oauth_token_url) : clientRow.tokenUrl;
+
+        // Enterprise-managed authorization (the ID-JAG grant profile) issues NO
+        // refresh token by design — the identity assertion in `refresh_item_id`
+        // is re-exchanged for a fresh ID-JAG and redeemed again. No user
+        // interaction, so both the proactive and reactive triggers can run it.
+        if (clientRow.grant === "id_jag") {
+          const token = yield* performEnterpriseManagedRefresh({
+            row,
+            provider,
+            client: clientRow,
+            tokenUrl,
+            scopes: grantedScopes,
+            reauth,
+          });
+          yield* persistRefreshedToken(row, provider, token);
+          return token.access_token;
+        }
 
         // client_credentials (machine-to-machine) has NO refresh token — the
         // token is RE-MINTED from the client id/secret. The authorization_code
@@ -2004,35 +2200,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
                 );
               });
 
-        if (provider.set) {
-          // OAuth is always single-input: the access token lives in the `token`
-          // item. Fall back to a deterministic id if the map is somehow empty.
-          const tokenItemId =
-            connectionItemIds(row)[PRIMARY_INPUT_VARIABLE] ??
-            `connection:${row.owner}:${row.integration}:${row.name}:${PRIMARY_INPUT_VARIABLE}`;
-          yield* provider.set(ProviderItemId.make(tokenItemId), token.access_token);
-          if (token.refresh_token && row.refresh_item_id) {
-            yield* provider.set(ProviderItemId.make(row.refresh_item_id), token.refresh_token);
-          }
-        }
-
-        const nextExpiresAt =
-          typeof token.expires_in === "number" ? Date.now() + token.expires_in * 1000 : null;
-        const set: Record<string, unknown> = {
-          expires_at: nextExpiresAt,
-          updated_at: new Date(),
-        };
-        if (token.scope !== undefined) set.oauth_scope = token.scope;
-        yield* core.updateMany("connection", {
-          where: (b: AnyCb) =>
-            b.and(
-              byOwner(owner)(b),
-              b("integration", "=", String(row.integration)),
-              b("name", "=", String(row.name)),
-            ),
-          set,
-        });
-
+        yield* persistRefreshedToken(row, provider, token);
         return token.access_token;
       }).pipe(
         // The refresh path was previously invisible to telemetry: no span, no
@@ -2987,6 +3155,22 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         // `description` below, a reconnect or token refresh must not erase a
         // label the user curated. Resolved once, used by every write below.
         let identityLabel: string | null = null;
+        // The core-owned per-connection state this mint writes WHOLESALE:
+        // whatever a previous grant recorded (a stale reauth verdict, an old
+        // missing-scope set) describes a credential that no longer exists.
+        const nextProviderState = {
+          ...(input.missingOAuthScopes === undefined || input.missingOAuthScopes.length === 0
+            ? {}
+            : { missingOAuthScopes: input.missingOAuthScopes }),
+          ...(input.enterpriseManaged === undefined
+            ? {}
+            : { [ENTERPRISE_MANAGED_PROVIDER_STATE_KEY]: input.enterpriseManaged }),
+        };
+        // Null, not `{}`, when this grant records nothing: an empty object would
+        // read back as "state exists and is empty" on a column whose absence is
+        // what every reader tests.
+        const providerState =
+          Object.keys(nextProviderState).length === 0 ? null : nextProviderState;
         yield* transaction(
           Effect.gen(function* () {
             const existing = yield* findConnectionRow(ref);
@@ -3004,10 +3188,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
               expires_at: input.expiresAt,
               oauth_scope: input.oauthScope,
               oauth_token_url: input.oauthTokenUrl ?? null,
-              provider_state:
-                input.missingOAuthScopes && input.missingOAuthScopes.length > 0
-                  ? { missingOAuthScopes: input.missingOAuthScopes }
-                  : null,
+              provider_state: providerState,
               // A re-mint replaces the grant, so any persisted verdict describes
               // a credential that no longer exists. Clear it rather than let a
               // pre-reconnect "expired" outlive the reconnect; the next health
@@ -3045,10 +3226,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
                 expires_at: input.expiresAt,
                 oauth_scope: input.oauthScope,
                 oauth_token_url: input.oauthTokenUrl ?? null,
-                provider_state:
-                  input.missingOAuthScopes && input.missingOAuthScopes.length > 0
-                    ? { missingOAuthScopes: input.missingOAuthScopes }
-                    : null,
+                provider_state: providerState,
                 created_at: now,
                 updated_at: now,
               });
@@ -3082,10 +3260,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
               expires_at: input.expiresAt,
               oauth_scope: input.oauthScope,
               oauth_token_url: input.oauthTokenUrl ?? null,
-              provider_state:
-                input.missingOAuthScopes && input.missingOAuthScopes.length > 0
-                  ? { missingOAuthScopes: input.missingOAuthScopes }
-                  : null,
+              provider_state: providerState,
               created_at: now,
               updated_at: now,
             } as ConnectionRow);
