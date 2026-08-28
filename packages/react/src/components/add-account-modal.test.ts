@@ -17,6 +17,7 @@ import {
   connectionLabelForHost,
   createCredentialPayloadOrigin,
   DEFAULT_CONNECTION_OWNER,
+  hasDcr,
   mergeCustomMethods,
   oauthIdentityLabelFromHealth,
   runAutomaticOAuthConnect,
@@ -496,6 +497,123 @@ describe("runAutomaticOAuthConnect", () => {
       resource: "https://mcp.example.com/mcp",
     });
     expect(startArgs!.reservation).toBe(RESERVED);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reconnect (issue #1542). A DCR client is bound to the redirect URI it
+// registered with, so when the app's callback origin moves (127.0.0.1 ->
+// localhost) re-authorizing against the STORED client is rejected by the
+// authorization server and the connection can never be repaired. Reconnect
+// therefore takes the same probe -> (CIMD | register) -> start route as the
+// initial connect, which re-registers against the CURRENT redirect URI.
+//
+// `hasDcr` is the routing decision the modal's reconnect handoff makes; the
+// orchestrator run below is what that decision buys.
+// ---------------------------------------------------------------------------
+describe("hasDcr (which methods reconnect through the automatic path)", () => {
+  const oauthMethod = (oauth: NonNullable<AuthMethod["oauth"]>): AuthMethod => ({
+    id: "oauth",
+    label: "OAuth",
+    kind: "oauth",
+    source: "spec",
+    template: AuthTemplateSlug.make("oauth"),
+    placements: [{ carrier: "header", name: "Authorization", prefix: "Bearer " }],
+    oauth,
+  });
+
+  it("routes a method advertising dynamic registration", () => {
+    expect(hasDcr(oauthMethod({ supportsDynamicRegistration: true }))).toBe(true);
+  });
+
+  it("routes a method carrying a discovery URL we can probe at connect time", () => {
+    expect(hasDcr(oauthMethod({ discoveryUrl: "https://mcp.example.com/mcp" }))).toBe(true);
+  });
+
+  // A fixed, hand-registered app has no stranded-client problem: its redirect
+  // URI is whatever the human entered, so reconnect keeps using it directly.
+  it("leaves a plain registered-app OAuth method on the stored-client path", () => {
+    expect(hasDcr(oauthMethod({ authorizationUrl: "https://auth.example.com/authorize" }))).toBe(
+      false,
+    );
+    expect(hasDcr(oauthMethod({ supportsDynamicRegistration: false }))).toBe(false);
+  });
+
+  it("never routes a non-OAuth or absent method", () => {
+    expect(hasDcr(apiKeyMethod("api", "spec"))).toBe(false);
+    expect(hasDcr(undefined)).toBe(false);
+    expect(hasDcr(null)).toBe(false);
+  });
+});
+
+describe("runAutomaticOAuthConnect (reconnect)", () => {
+  // The fix for #1542: reconnect must MINT a client against the redirect URI in
+  // force now, not reuse the one the connection was originally bound to.
+  it("re-registers against the current redirect URI and starts on the fresh client", async () => {
+    const popup = popupSpy();
+    let registerArgs: RegisterArgs | null = null;
+    let startArgs: StartArgs | null = null;
+
+    const outcome = await runDcrConnect(
+      {
+        ...popup,
+        probe: (): Promise<ProbeResult> =>
+          Promise.resolve({
+            authorizationUrl: "https://auth.example.com/authorize",
+            tokenUrl: "https://auth.example.com/token",
+            registrationEndpoint: "https://auth.example.com/register",
+          }),
+        register: (args: RegisterArgs): Promise<OAuthClientSlug> => {
+          registerArgs = args;
+          return Promise.resolve(OAuthClientSlug.make("reconnected-app"));
+        },
+        start: (args: StartArgs): void => {
+          startArgs = args;
+        },
+      },
+      {
+        discoveryUrl: "https://mcp.example.com/mcp",
+        // The connection was registered under the old origin; this is the one
+        // the app serves its callback on now.
+        redirectUri: "http://localhost:4788/api/oauth/callback",
+        owner: "user" as Owner,
+        integration: TEST_INTEGRATION,
+      },
+    );
+
+    expect(outcome).toEqual({ kind: "started", flow: "dcr" });
+    expect(registerArgs!.redirectUri).toBe("http://localhost:4788/api/oauth/callback");
+    // The stranded client is replaced, not reused.
+    expect(startArgs!.client).toBe(OAuthClientSlug.make("reconnected-app"));
+    expect(startArgs!.owner).toBe("user");
+  });
+
+  // Reconnect keeps the BYO picker as its recovery path, exactly as connect
+  // does, rather than dead-ending on a server that cannot self-register.
+  it("falls back with the probe when the server advertises no registration endpoint", async () => {
+    const popup = popupSpy();
+    const outcome = await runDcrConnect(
+      {
+        ...popup,
+        probe: (): Promise<ProbeResult> =>
+          Promise.resolve({
+            authorizationUrl: "https://auth.example.com/authorize",
+            tokenUrl: "https://auth.example.com/token",
+          }),
+        register: (): Promise<OAuthClientSlug> =>
+          Promise.resolve(OAuthClientSlug.make("unexpected")),
+        start: (): void => {},
+      },
+      {
+        discoveryUrl: "https://mcp.example.com/mcp",
+        redirectUri: "http://localhost:4788/api/oauth/callback",
+        owner: "user" as Owner,
+        integration: TEST_INTEGRATION,
+      },
+    );
+
+    expect(outcome).toMatchObject({ kind: "fallback", reason: "no-registration-endpoint" });
+    expect(popup.calls).toEqual(["reserve", "release"]);
   });
 });
 
