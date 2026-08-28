@@ -35,8 +35,12 @@ export type DurableObjectFailureKind =
   | "storage_timeout"
   /** The storage backend failed internally and reset the object. */
   | "storage_internal"
+  /** The storage backend failed internally *while bringing the object up*. */
+  | "startup_internal_error"
   /** `blockConcurrencyWhile()` ran past its cap and was cancelled. */
   | "concurrency_reset"
+  /** An invocation ran past the per-invocation CPU ceiling; the object was reset. */
+  | "cpu_limit"
   /** A generic platform blip: `internal error; reference = <id>`. */
   | "internal_error"
   /** The runtime itself flagged the error as retryable. */
@@ -79,6 +83,26 @@ const MESSAGE_PATTERNS: ReadonlyArray<{
     failure: { kind: "storage_internal", disposition: "transient" },
   },
   {
+    // The startup sibling of the entry above: the storage backend faults while
+    // the object is being brought up rather than while it is serving, and the
+    // runtime says so in a different clause ("… while starting up Durable
+    // Object storage caused object to be reset; reference = <id>").
+    //
+    // Deliberately stops before "storage": the two known members of this family
+    // agree on "Internal error … Durable Object" and disagree on everything
+    // that follows the verb, so the qualifier is the part most likely to move
+    // and is not what identifies the failure. Equally deliberately NOT
+    // shortened to the shared tail "caused object to be reset" — that tail is
+    // common to several unrelated storage faults and would stop this bucket
+    // from meaning anything on a span.
+    //
+    // Transient for the same reason as its sibling: nothing about the request
+    // caused it, the id still routes, and the object gets a fresh start on the
+    // next attempt.
+    fragment: "internal error while starting up durable object",
+    failure: { kind: "startup_internal_error", disposition: "transient" },
+  },
+  {
     // Deliberately the whole phrase, not the bare method name: an application
     // defect thrown from inside a `blockConcurrencyWhile` callback also resets
     // the object, and a message that merely names the method must not be read
@@ -87,9 +111,37 @@ const MESSAGE_PATTERNS: ReadonlyArray<{
     failure: { kind: "concurrency_reset", disposition: "transient" },
   },
   {
+    // Deliberately starts at the verb, not at "Durable Object": the runtime's
+    // resource-limit messages disagree about the subject noun (the memory
+    // variant says "Durable Object's isolate exceeded its memory limit"), and
+    // pinning a subject here would let a rewording defeat the match. From
+    // "exceeded its CPU time limit" onward the phrase is the runtime's alone.
+    //
+    // Transient, not a defect: the invocation was cut off but the object's
+    // durable storage is untouched and the session id still routes, so the next
+    // attempt — a smaller unit of work, or the same one under a warm isolate —
+    // can succeed. Retrying the same id is strictly better than the unhandled
+    // 500 this produced before.
+    fragment: "exceeded its cpu time limit and was reset",
+    failure: { kind: "cpu_limit", disposition: "transient" },
+  },
+  {
+    // Only the bare blip. A reference id at the end of the message is NOT the
+    // marker: the runtime also appends one to described faults such as the
+    // startup failure above, and because this fragment includes the semicolon
+    // that immediately follows "internal error", any interposed description
+    // defeats it. Those variants each need their own entry rather than a
+    // loosened version of this one, which would turn every referenced error
+    // into an opaque "internal_error" bucket.
     fragment: "internal error; reference =",
     failure: { kind: "internal_error", disposition: "transient" },
   },
+  // Not listed, on purpose: the sibling memory-limit reset ("Durable Object's
+  // isolate exceeded its memory limit due to overflowing the storage cache …
+  // All objects in the isolate were reset."). The runtime tags that one as a
+  // user error, and it names its own cause — too many un-awaited writes, or one
+  // oversized read. Retrying reproduces it, so calling it transient would bury
+  // an application defect behind a 503 instead of surfacing it.
 ];
 
 /**
