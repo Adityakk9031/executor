@@ -16,6 +16,7 @@ import { Cause, Effect, Layer, Predicate } from "effect";
 import type * as Tracer from "effect/Tracer";
 
 import { ErrorCapture } from "@executor-js/api";
+import { withStableGroupingFingerprint } from "@executor-js/sdk/sentry-grouping";
 
 // Drizzle/postgres-js include the failing SQL (params + bound values) in
 // their error message. For OpenAPI source inserts that's 1MB+ of spec
@@ -145,6 +146,53 @@ export const beforeSendWithOtelCorrelation = (
   }
   return event;
 };
+
+/**
+ * The single `beforeSend` the worker and its Durable Objects install.
+ *
+ * The worker ships as content-hashed chunks and its frames are not resolved
+ * back to source, so Sentry's default grouping keys on names like
+ * `execution-rate-limit-<hash>` and re-opens every issue on the next deploy.
+ * `withStableGroupingFingerprint` pins a key with the hash normalized out;
+ * events with no hashed grouping input are left on the default algorithm.
+ *
+ * The two stages are independent and compose in this order: the capture-owner
+ * pass decides WHETHER the event is reported at all (a cause the Durable
+ * Object already claimed is dropped, and a dropped event is never
+ * fingerprinted), and the grouping pass then decides HOW whatever survives is
+ * grouped.
+ */
+export const beforeSendCloudEvent = (
+  event: ErrorEvent,
+  options?: { readonly logPayload?: boolean },
+): ErrorEvent | null => {
+  const reported = beforeSendWithOtelCorrelation(event, options);
+  return reported === null ? null : withStableGroupingFingerprint(reported);
+};
+
+/**
+ * The Sentry options the worker and every Durable Object install. It lives
+ * beside the `beforeSend` it wires so the composition is covered by
+ * observability.test.ts; `server.ts` only passes this through.
+ *
+ * NOTE: do NOT enable `instrumentPrototypeMethods`. It walks the DO prototype
+ * and reads every property — including accessors — to find methods to wrap,
+ * which invokes the `sessionId` getter with `this` bound to the prototype
+ * (where `ctx` is undefined) and throws during construction, 500ing every
+ * session create / cold restore. The DO captures its own errors via the
+ * `captureCause` seam (→ Sentry) instead.
+ */
+export const cloudSentryOptions = (env: Env) => ({
+  dsn: env.SENTRY_DSN,
+  tracesSampleRate: 0,
+  enableLogs: true,
+  sendDefaultPii: true,
+  skipOpenTelemetrySetup: true,
+  beforeSend: (event: ErrorEvent) =>
+    beforeSendCloudEvent(event, {
+      logPayload: !env.SENTRY_DSN || env.SENTRY_OTEL_LOG_PAYLOAD === "true",
+    }),
+});
 
 export const addCurrentOtelCorrelationTags = <
   T extends { readonly tags?: Record<string, unknown> },

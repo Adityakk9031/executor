@@ -6,7 +6,9 @@ import type { ErrorEvent } from "@sentry/cloudflare";
 
 import {
   addCurrentOtelCorrelationTags,
+  beforeSendCloudEvent,
   beforeSendWithOtelCorrelation,
+  cloudSentryOptions,
   DO_CAUSE_OWNER_TAG,
   DO_CAUSE_OWNER_VALUE,
   OTEL_SPAN_ID_TAG,
@@ -81,6 +83,83 @@ describe("sentryPayloadForCause", () => {
     const { primary, pretty } = sentryPayloadForCause(err);
     expect(primary).toBe(err);
     expect(pretty).toBeNull();
+  });
+});
+
+// Grouping keys are decided inside the Sentry SDK and never appear on any
+// product surface, so the e2e harness cannot observe them. The split is:
+// e2e/cloud/sentry-otel-correlation.test.ts proves the worker really installs
+// `cloudSentryOptions.beforeSend` (its correlation payload only exists if that
+// hook ran), and the tests here prove the hook it installs fingerprints.
+describe("Sentry grouping", () => {
+  // The worker bundle ships as content-hashed chunks, so the only module name
+  // Sentry ever sees for a given frame changes on every deploy.
+  const workerEvent = (chunkHash: string): ErrorEvent => ({
+    type: undefined,
+    exception: {
+      values: [
+        {
+          type: "GateCheckTimeoutError",
+          value: "balance check timed out",
+          stacktrace: {
+            frames: [
+              {
+                filename: `/assets/execution-rate-limit-${chunkHash}.js`,
+                module: `execution-rate-limit-${chunkHash}`,
+                function: "timeoutOrElse",
+                in_app: true,
+              },
+            ],
+          },
+        },
+      ],
+    },
+  });
+
+  it("pins one fingerprint across two deploys of the same chunk", () => {
+    const before = beforeSendCloudEvent(workerEvent("BAuwphPA"), {});
+    const after = beforeSendCloudEvent(workerEvent("DkcPBbWe"), {});
+
+    expect(before?.fingerprint).toBeDefined();
+    expect(before?.fingerprint).toEqual(after?.fingerprint);
+  });
+
+  it("leaves unhashed events on Sentry's default grouping", () => {
+    const event: ErrorEvent = {
+      type: undefined,
+      exception: {
+        values: [
+          {
+            type: "AutumnError",
+            stacktrace: {
+              frames: [
+                { filename: "/src/engine/execution-gate.ts", function: "checkExecutionBalance" },
+              ],
+            },
+          },
+        ],
+      },
+    };
+
+    const sent = beforeSendCloudEvent(event, {});
+
+    expect(sent).not.toBeNull();
+    expect(sent?.fingerprint).toBeUndefined();
+  });
+
+  // The wiring check: this is the exact object handed to `Sentry.withSentry`
+  // and `instrumentDurableObjectWithSentry` in server.ts. If the normalizer is
+  // ever dropped from the hook the worker installs, this fails.
+  it("the options the worker and DOs install carry the fingerprinting hook", () => {
+    const options = cloudSentryOptions({ SENTRY_DSN: "https://public@example.invalid/1" } as Env);
+    const sent = options.beforeSend(workerEvent("BAuwphPA"));
+
+    expect(sent?.fingerprint).toEqual([
+      "GateCheckTimeoutError",
+      "timeoutOrElse@execution-rate-limit",
+    ]);
+    // Same source, next deploy, new chunk hash — one issue, not two.
+    expect(options.beforeSend(workerEvent("DkcPBbWe"))?.fingerprint).toEqual(sent?.fingerprint);
   });
 });
 
@@ -161,5 +240,63 @@ describe("Durable Object capture ownership", () => {
       },
     };
     expect(beforeSendWithOtelCorrelation(workerEvent)).not.toBeNull();
+  });
+
+  // The two stages of the installed `beforeSend` answer different questions and
+  // must both keep working: capture ownership decides WHETHER an event is
+  // reported, stable grouping decides HOW a reported one is grouped. A dropped
+  // event is never fingerprinted, and a surviving one still is.
+  describe("composed with stable grouping", () => {
+    const hashedFrames = (chunkHash: string) => ({
+      stacktrace: {
+        frames: [
+          {
+            filename: `/assets/session-durable-object-${chunkHash}.js`,
+            module: `session-durable-object-${chunkHash}`,
+            function: "handleSessionRequest",
+            in_app: true,
+          },
+        ],
+      },
+    });
+
+    it("drops a claimed echo rather than fingerprinting it", () => {
+      const echo = doEcho({
+        exception: {
+          values: [
+            {
+              type: "Error",
+              value: "Durable Object reset because its code was updated.",
+              mechanism: { type: "auto.faas.cloudflare.durable_object", handled: false },
+              ...hashedFrames("BAuwphPA"),
+            },
+          ],
+        },
+      });
+
+      expect(beforeSendCloudEvent(echo, {})).toBeNull();
+    });
+
+    it("pins a stable fingerprint on the report the DO itself owns", () => {
+      const ownReport = (chunkHash: string): ErrorEvent =>
+        doEcho({
+          exception: {
+            values: [
+              {
+                type: "Error",
+                value: "Durable Object reset because its code was updated.",
+                mechanism: { type: "generic", handled: true },
+                ...hashedFrames(chunkHash),
+              },
+            ],
+          },
+        });
+
+      const before = beforeSendCloudEvent(ownReport("BAuwphPA"), {});
+      const after = beforeSendCloudEvent(ownReport("DkcPBbWe"), {});
+
+      expect(before?.fingerprint).toBeDefined();
+      expect(before?.fingerprint).toEqual(after?.fingerprint);
+    });
   });
 });
