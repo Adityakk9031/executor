@@ -206,20 +206,26 @@ const resolveOrgSlug = (): string => {
 // The value forwards to the SDK's `toolsSyncTtlMs` verbatim, so `0` keeps the
 // SDK's meaning — every catalog is expired on every read. "off", "null" and
 // "false" disable time-based re-sync (the SDK's `null` sentinel), since
-// operators reach for all three spellings.
+// operators reach for all three spellings. The comparison is case-insensitive:
+// "OFF" and "False" are the same intent typed by a different operator.
 //
 // Like the other knobs here a malformed or negative value is refused rather
 // than silently ignored: an operator who sets the TTL and typos it should find
 // out at boot, not by wondering months later why catalogs never refresh.
+const TOOLS_SYNC_TTL_DISABLE_TOKENS = new Set(["off", "null", "false"]);
+
 const resolveToolsSyncTtlMs = (): number | null | undefined => {
   const raw = process.env.EXECUTOR_TOOLS_SYNC_TTL_MS?.trim();
   if (!raw) return undefined;
-  if (raw === "off" || raw === "null" || raw === "false") return null;
+  if (TOOLS_SYNC_TTL_DISABLE_TOKENS.has(raw.toLowerCase())) return null;
   const parsed = Number(raw);
-  if (!Number.isInteger(parsed)) {
+  // `isSafeInteger`, not `isInteger`: past 2^53 a decimal literal silently
+  // rounds to a nearby representable value, so an operator's typo'd digit
+  // would boot as a TTL they never wrote. Refuse it instead.
+  if (!Number.isSafeInteger(parsed)) {
     // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: refuse to boot on a malformed operator knob
     throw new Error(
-      `EXECUTOR_TOOLS_SYNC_TTL_MS ${JSON.stringify(raw)} is not a whole number of milliseconds ("off", "null" or "false" disable time-based re-sync)`,
+      `EXECUTOR_TOOLS_SYNC_TTL_MS ${JSON.stringify(raw)} is not an exactly representable whole number of milliseconds ("off", "null" or "false" disable time-based re-sync)`,
     );
   }
   if (parsed < 0) {

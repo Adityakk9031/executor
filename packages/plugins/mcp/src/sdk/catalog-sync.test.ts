@@ -14,13 +14,14 @@
 // ---------------------------------------------------------------------------
 
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Option, Ref, Schema } from "effect";
+import { Deferred, Effect, Fiber, Option, Ref, Schema } from "effect";
 import { HttpServerResponse } from "effect/unstable/http";
 
 import {
   AuthTemplateSlug,
   ConnectionName,
   IntegrationSlug,
+  STALE_TOOLS_SYNC_CONCURRENCY,
   ToolAddress,
   createExecutor,
 } from "@executor-js/sdk";
@@ -274,18 +275,26 @@ describe("MCP tools/list pagination", () => {
 // A tools read rebuilds every stale connection it finds. Each rebuild is an
 // independent upstream listing, so a host with several stale remote catalogs
 // must not pay the sum of every server's latency on the read that trips the
-// TTL. This is the regression guard for that: the fixture below refuses to
-// answer any listing until all of them are in flight together, so a serial
-// refresh cannot finish at all.
+// TTL. Nor may one read open an unbounded number of upstream listings.
+//
+// The fixture below refuses to answer any listing until the bound is reached,
+// which pins both edges at once: a serial refresh parks on the first listing
+// and never finishes, while an unbounded refresh puts more than
+// STALE_TOOLS_SYNC_CONCURRENCY listings in flight. The stale set is deliberately
+// one larger than the bound, so the last connection can only be served after an
+// earlier one completes.
 // ---------------------------------------------------------------------------
 
-const STALE_CONNECTIONS = 4;
+const STALE_CONNECTIONS = STALE_TOOLS_SYNC_CONCURRENCY + 1;
 
 const serveLatchedListServer = () =>
   Effect.gen(function* () {
     const armed = yield* Ref.make(false);
     const listings = yield* Ref.make(0);
-    const allInFlight = yield* Deferred.make<void>();
+    // Signalled when the bound is saturated; released by the test, not by the
+    // fixture, so the test can first prove nothing beyond the bound arrives.
+    const atLimit = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
 
     const server = yield* serveTestHttpApp((request) =>
       Effect.gen(function* () {
@@ -310,12 +319,14 @@ const serveLatchedListServer = () =>
         if (rpc.method !== "tools/list") {
           return HttpServerResponse.text("Unexpected JSON-RPC method", { status: 400 });
         }
-        // Once armed, park every listing until the whole stale set has arrived.
-        // Serial refresh parks on the first one forever.
+        // Once armed, park every listing until the test releases them. A serial
+        // refresh parks on the first one and never reaches the bound.
         if (yield* Ref.get(armed)) {
           const arrived = yield* Ref.updateAndGet(listings, (n) => n + 1);
-          if (arrived >= STALE_CONNECTIONS) yield* Deferred.succeed(allInFlight, undefined);
-          yield* Deferred.await(allInFlight);
+          if (arrived >= STALE_TOOLS_SYNC_CONCURRENCY) {
+            yield* Deferred.succeed(atLimit, undefined);
+          }
+          yield* Deferred.await(release);
         }
         return jsonRpcResult(rpc, { tools: [pageTool("alpha")] });
       }),
@@ -326,12 +337,17 @@ const serveLatchedListServer = () =>
       // instead of sharing one pooled client.
       endpoint: (index: number) => server.url(`/mcp/${index}`),
       arm: Ref.set(armed, true),
+      awaitLimit: Deferred.await(atLimit),
+      release: Deferred.succeed(release, undefined),
       listings: Ref.get(listings),
     } as const;
   });
 
 describe("MCP stale-catalog refresh", () => {
-  it.effect("rebuilds every stale connection concurrently, not one after another", () =>
+  // `it.live` (real clock): proving that nothing beyond the bound is dialled
+  // means giving a real HTTP round trip a real window to happen in, and the
+  // timeouts below must actually fire. The TestClock advances neither.
+  it.live("rebuilds stale connections concurrently up to the bound, then queues the rest", () =>
     Effect.gen(function* () {
       const fixture = yield* serveLatchedListServer();
       const executor = yield* createExecutor({
@@ -362,11 +378,24 @@ describe("MCP stale-catalog refresh", () => {
       yield* executor.tools.list();
       yield* fixture.arm;
 
-      // Well inside the harness timeout, so a serial refresh fails on the
-      // assertion below rather than as an opaque test-runner timeout.
-      const refreshed = yield* executor.tools.list().pipe(Effect.timeoutOption("10 seconds"));
+      const readFiber = yield* Effect.forkChild(executor.tools.list());
 
-      // A serial refresh never releases the latch, so the read times out here.
+      // Timeouts are well inside the harness limit, so a broken fan-out fails
+      // on an assertion here rather than as an opaque test-runner timeout.
+      // A serial refresh never saturates the bound and fails on this line.
+      const saturated = yield* fixture.awaitLimit.pipe(Effect.timeoutOption("10 seconds"));
+      expect(Option.isSome(saturated)).toBe(true);
+
+      // The bound is reached and every one of those listings is still parked.
+      // Give an unbounded fan-out ample time to dial the remaining connection:
+      // it never may, because no permit has been given back yet.
+      yield* Effect.sleep("500 millis");
+      expect(yield* fixture.listings).toBe(STALE_TOOLS_SYNC_CONCURRENCY);
+
+      // Releasing the parked listings frees permits, and only then does the
+      // last connection get dialled.
+      yield* fixture.release;
+      const refreshed = yield* Fiber.join(readFiber).pipe(Effect.timeoutOption("10 seconds"));
       expect(Option.isSome(refreshed)).toBe(true);
       expect(yield* fixture.listings).toBe(STALE_CONNECTIONS);
     }),
