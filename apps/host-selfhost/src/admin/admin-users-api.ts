@@ -49,7 +49,7 @@ import {
 import type { Executor } from "@executor-js/sdk";
 
 import { BetterAuth, type BetterAuthHandle } from "../auth/better-auth";
-import { requireInstanceAdmin } from "./require-admin";
+import { requireInstanceAdmin } from "@executor-js/api/server";
 import { SelfHostDb, SelfHostDbProvider, type SelfHostDbHandle } from "../db/self-host-db";
 import { SelfHostHostConfig, SelfHostPluginsProvider } from "../execution";
 

@@ -25,20 +25,15 @@ import { DevicePage } from "../chromeless/device-page";
 import { McpConsentPage } from "../chromeless/mcp-consent-page";
 import { LoginPage } from "../login";
 import { SetupPage } from "../setup";
-import { fetchNeedsSetup } from "../setup-status";
+import { fetchNeedsSetup, SetupStatusError } from "../setup-status";
 
 // ---------------------------------------------------------------------------
-// Self-host root: the SHARED multiplayer composition with Better Auth as the
-// provider. Same shell, pages, and account surface as cloud — the only
-// self-host specifics are the login form (email/password) and sign-out (Better
-// Auth), injected here. No billing, Sentry, or PostHog.
+// Unified web SPA root: supporting both Better Auth and Cloudflare Access.
+// If the /api/setup-status endpoint returns 404, we assume Access mode is
+// active, bypassing the in-app login/setup forms and delegating authentication
+// endpoints to Cloudflare Access (/cdn-cgi/access/*).
 // ---------------------------------------------------------------------------
 
-// The MCP-Apps shell is browser-only — it imports `@tailwindcss/browser`, which
-// touches `document` at import scope. It is registered as a dynamic import the
-// artifact page resolves in the browser, never a static one, so it stays out of
-// any server graph. Module scope keeps the loader identity stable, so the lazy
-// component behind it never remounts.
 const artifactRendererLoader = () => import("@executor-js/mcp-apps-shell/shell/artifact-renderer");
 
 export const Route = createRootRoute({
@@ -46,26 +41,13 @@ export const Route = createRootRoute({
   component: RootComponent,
 });
 
-// Self-host adds the account's API keys and the instance Admin page (members +
-// invite links) to the shared nav. The Admin page and its API gate to
-// owner/admin, so a non-admin who opens it just sees the access notice.
 const selfHostNavItems = [
   ...defaultShellNavItems,
   { to: "/api-keys", label: "API keys" },
   { to: "/admin", label: "Admin" },
 ];
 
-// Sections only an owner/admin of the instance may open. Users reads the
-// tenant-wide admin plane, gated on a Better Auth owner/admin member, so a
-// plain member is not shown a link that would only refuse them. (The existing
-// /admin entry predates this and stays unconditional — it is this instance's
-// member/invite page, and its own notice covers a non-admin who opens it.)
 const selfHostAdminNavItems = [{ to: "/users", label: "Users" }];
-
-const signOut = async () => {
-  await authClient.signOut();
-  window.location.href = "/";
-};
 
 function NotFoundPage() {
   return (
@@ -112,39 +94,58 @@ const SetupStatusErrorCard = ({ onRetry }: { onRetry: () => void }) => (
   </div>
 );
 
-function AuthGate({ children }: { children: ReactNode }) {
+function AuthGate({
+  children,
+  authMode,
+  setAuthMode,
+}: {
+  children: ReactNode;
+  authMode: "access" | "builtin" | "loading";
+  setAuthMode: (mode: "access" | "builtin" | "loading") => void;
+}) {
   const auth = useAuth();
-  // When unauthenticated, decide between first-run setup and sign-in by asking
-  // the server whether the instance still has zero members.
   const [setupStatus, setSetupStatus] = useState<
     | { state: "checking"; attempt: number }
     | { state: "ready"; needsSetup: boolean }
     | { state: "error"; attempt: number }
   >({ state: "checking", attempt: 0 });
+
   useEffect(() => {
     if (auth.status !== "unauthenticated") return;
     let alive = true;
     setSetupStatus((current) => ({ state: "checking", attempt: current.attempt }));
     void fetchNeedsSetup().then(
       (value) => {
-        if (alive) setSetupStatus({ state: "ready", needsSetup: value });
-      },
-      () => {
         if (alive) {
-          setSetupStatus((current) => ({
-            state: "error",
-            attempt: current.state === "ready" ? 0 : current.attempt,
-          }));
+          setAuthMode("builtin");
+          setSetupStatus({ state: "ready", needsSetup: value });
+        }
+      },
+      (err) => {
+        if (alive) {
+          if (err instanceof SetupStatusError && err.status === 404) {
+            setAuthMode("access");
+            window.location.href = "/cdn-cgi/access/login";
+          } else {
+            setAuthMode("builtin");
+            setSetupStatus((current) => ({
+              state: "error",
+              attempt: current.state === "ready" ? 0 : current.attempt,
+            }));
+          }
         }
       },
     );
     return () => {
       alive = false;
     };
-  }, [auth.status, setupStatus.attempt]);
+  }, [auth.status, setupStatus.attempt, setAuthMode]);
 
-  if (auth.status === "loading") return <Loading />;
+  if (auth.status === "loading" || authMode === "loading") return <Loading />;
   if (auth.status === "unauthenticated") {
+    if (authMode === "access") {
+      return <Loading />;
+    }
     if (setupStatus.state === "checking") return <Loading />;
     if (setupStatus.state === "error") {
       return (
@@ -163,16 +164,23 @@ function AuthGate({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-function AuthenticatedApp() {
+function AuthenticatedApp({ authMode }: { authMode: "access" | "builtin" | "loading" }) {
   const auth = useAuth();
   const organization = auth.status === "authenticated" ? (auth.organization ?? null) : null;
   const navItems = useAdminNavItems(selfHostNavItems, selfHostAdminNavItems);
 
-  // Single-org instance: a bare URL canonicalizes onto the instance org's
-  // slug. There's only ever one org, so no other slug is reachable.
+  const handleSignOut = async () => {
+    if (authMode === "access") {
+      window.location.href = "/cdn-cgi/access/logout";
+    } else {
+      await authClient.signOut();
+      window.location.href = "/";
+    }
+  };
+
   const gated = (
     <>
-      <Shell onSignOut={signOut} navItems={navItems} />
+      <Shell onSignOut={handleSignOut} navItems={navItems} />
       <Toaster />
     </>
   );
@@ -180,9 +188,6 @@ function AuthenticatedApp() {
   return (
     <ExecutorProvider>
       <ExecutorPluginsProvider plugins={clientPlugins}>
-        {/* No organizationSlug: the self-host MCP endpoint is the bare /mcp —
-            a slug-pinned URL would 404, and a single-org instance has nothing
-            to select anyway. */}
         <OrganizationProvider organizationId={organization?.id ?? null}>
           <ArtifactRendererProvider loader={artifactRendererLoader}>
             {organization ? (
@@ -199,9 +204,29 @@ function AuthenticatedApp() {
 
 function RootComponent() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const [authMode, setAuthMode] = useState<"access" | "builtin" | "loading">("loading");
 
-  // The join page is public + chromeless: a new user redeeming an invite link
-  // has no session yet, so it renders outside the auth gate and the shell.
+  useEffect(() => {
+    let alive = true;
+    fetchNeedsSetup().then(
+      () => {
+        if (alive) setAuthMode("builtin");
+      },
+      (err) => {
+        if (alive) {
+          if (err instanceof SetupStatusError && err.status === 404) {
+            setAuthMode("access");
+          } else {
+            setAuthMode("builtin");
+          }
+        }
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   if (pathname.startsWith("/join/")) {
     return (
       <>
@@ -211,14 +236,10 @@ function RootComponent() {
     );
   }
 
-  // The MCP OAuth approval screen: chromeless (no shell) but inside the auth
-  // gate — the user is already signed in (Better Auth's authorize requires a
-  // session before redirecting here). Rendered directly (static import), not as
-  // a lazy route, so it can't hit Vite's dynamic-import dep flake.
   if (pathname === "/mcp-consent") {
     return (
       <AuthProvider>
-        <AuthGate>
+        <AuthGate authMode={authMode} setAuthMode={setAuthMode}>
           <McpConsentPage />
           <Toaster />
         </AuthGate>
@@ -226,13 +247,10 @@ function RootComponent() {
     );
   }
 
-  // The CLI device-login verification page: chromeless, inside the auth gate
-  // (the user signs in here if needed, then authorizes the code). Same
-  // static-import + pathname-branch convention as /mcp-consent.
   if (pathname === "/device") {
     return (
       <AuthProvider>
-        <AuthGate>
+        <AuthGate authMode={authMode} setAuthMode={setAuthMode}>
           <DevicePage />
           <Toaster />
         </AuthGate>
@@ -242,8 +260,8 @@ function RootComponent() {
 
   return (
     <AuthProvider>
-      <AuthGate>
-        <AuthenticatedApp />
+      <AuthGate authMode={authMode} setAuthMode={setAuthMode}>
+        <AuthenticatedApp authMode={authMode} />
       </AuthGate>
     </AuthProvider>
   );
