@@ -84,12 +84,12 @@ const principalFromSession = (
   betterAuth: BetterAuthHandle,
 ): Principal => ({
   accountId: resolved.user.id,
-  organizationId: resolved.session.activeOrganizationId ?? betterAuth.organizationId,
+  organizationId: (resolved.session as any).activeOrganizationId ?? betterAuth.organizationId,
   organizationName: betterAuth.organizationName,
   email: resolved.user.email,
   name: resolved.user.name ?? null,
   avatarUrl: resolved.user.image ?? null,
-  roles: parseRoles(resolved.user.role ?? null),
+  roles: parseRoles((resolved.user as any).role ?? null),
 });
 
 /**

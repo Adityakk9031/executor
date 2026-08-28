@@ -8,6 +8,7 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import executorVitePlugin from "@executor-js/vite-plugin";
 import { innerRendererPlugin, mcpAppsShellAsset } from "@executor-js/mcp-apps-shell/vite";
 
+// oxlint-disable-next-line executor/no-cross-package-relative-imports
 import { routes } from "../host-selfhost/tsr.routes";
 
 // The real release version (matches the published `executor` dist-tags the
@@ -74,7 +75,9 @@ export default defineConfig({
       target: "react",
       autoCodeSplitting: true,
       routesDirectory: fileURLToPath(new URL("../host-selfhost/web/routes", import.meta.url)),
-      generatedRouteTree: fileURLToPath(new URL("../host-selfhost/web/routeTree.gen.ts", import.meta.url)),
+      generatedRouteTree: fileURLToPath(
+        new URL("../host-selfhost/web/routeTree.gen.ts", import.meta.url),
+      ),
       // The route tree definition lives in tsr.routes.ts (shared with
       // packages/react's routes:gen so a CLI regen matches dev/build).
       virtualRouteConfig: routes,

@@ -161,7 +161,8 @@ export const loadConfig = (env: CloudflareConfigEnv): CloudflareConfig => {
   }
 
   const enableDevAuth = authMode === "access" && env.ENABLE_DEV_AUTH === "true";
-  const accessTeamDomain = authMode === "access" ? normalizeAccessTeamDomain(env.ACCESS_TEAM_DOMAIN) : "";
+  const accessTeamDomain =
+    authMode === "access" ? normalizeAccessTeamDomain(env.ACCESS_TEAM_DOMAIN) : "";
   const accessAud = authMode === "access" ? (env.ACCESS_AUD ?? "").trim() : "";
 
   if (authMode === "access") {

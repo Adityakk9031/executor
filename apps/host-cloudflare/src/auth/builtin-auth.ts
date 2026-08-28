@@ -53,8 +53,9 @@ export const buildD1BetterAuth = async (
     database: db,
   };
 
-  auth = betterAuth(authOptions);
-  await (await auth.$context).runMigrations();
+  const authInstance = betterAuth(authOptions);
+  auth = authInstance as any;
+  await (await authInstance.$context).runMigrations();
   await ensureInviteCodeTable(dbClient);
 
   const seedConfig = {
@@ -65,15 +66,19 @@ export const buildD1BetterAuth = async (
     bootstrapAdminName: config.bootstrapAdminName,
   };
 
-  const { organizationId, organizationName } = await seedOrgAndAdmin(auth, dbClient, seedConfig);
+  const { organizationId, organizationName } = await seedOrgAndAdmin(
+    authInstance as any,
+    dbClient,
+    seedConfig,
+  );
   orgRef.id = organizationId;
 
   return {
-    auth,
+    auth: authInstance as any,
     organizationId,
     organizationName,
     organizationSlug: config.organizationSlug,
-    handler: auth.handler,
+    handler: authInstance.handler,
     dbClient,
   };
 };

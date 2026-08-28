@@ -678,4 +678,3 @@ describe("cloudflare host e2e with built-in auth (AUTH_MODE=builtin)", () => {
     expect(meUserBody.user.email).toBe("user@test.local");
   }, 90_000);
 });
-

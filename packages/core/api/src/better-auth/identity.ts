@@ -44,7 +44,8 @@ export const betterAuthIdentityLayer: Layer.Layer<IdentityProvider, never, Bette
               }
             }
             if (!resolved) return yield* new Unauthorized();
-            const resolvedOrganizationId = resolved.session.activeOrganizationId ?? organizationId;
+            const resolvedOrganizationId =
+              (resolved.session as any).activeOrganizationId ?? organizationId;
             return {
               kind: "member" as const,
               accountId: resolved.user.id,
@@ -54,7 +55,7 @@ export const betterAuthIdentityLayer: Layer.Layer<IdentityProvider, never, Bette
               email: resolved.user.email,
               name: resolved.user.name ?? null,
               avatarUrl: resolved.user.image ?? null,
-              roles: (resolved.user.role ?? "user")
+              roles: (((resolved.user as any).role ?? "user") as string)
                 .split(",")
                 .map((role) => role.trim())
                 .filter((role) => role.length > 0),

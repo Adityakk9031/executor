@@ -15,7 +15,7 @@ export const seedOrgAndAdmin = async (
   config: SeedConfig,
 ): Promise<{ organizationId: string; organizationName: string }> => {
   const result = await client.execute(
-    "SELECT id, name, slug FROM organization ORDER BY createdAt ASC LIMIT 1"
+    "SELECT id, name, slug FROM organization ORDER BY createdAt ASC LIMIT 1",
   );
   const existingOrg = result.rows[0] as { id: string; name: string; slug: string } | undefined;
   if (existingOrg) {
@@ -56,9 +56,11 @@ export const seedOrgAndAdmin = async (
   }
 
   const organizationId = randomBytes(16).toString("hex");
-  await client.execute(
-    "INSERT INTO organization (id, name, slug, createdAt) VALUES (?, ?, ?, ?)",
-    [organizationId, config.organizationName, config.orgSlug, new Date().toISOString()]
-  );
+  await client.execute("INSERT INTO organization (id, name, slug, createdAt) VALUES (?, ?, ?, ?)", [
+    organizationId,
+    config.organizationName,
+    config.orgSlug,
+    new Date().toISOString(),
+  ]);
   return { organizationId, organizationName: config.organizationName };
 };

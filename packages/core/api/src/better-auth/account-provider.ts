@@ -45,7 +45,7 @@ export const betterAuthAccountProvider: Layer.Layer<AccountProvider, never, Bett
                 avatarUrl: resolved.user.image ?? null,
               },
               organization: {
-                id: resolved.session.activeOrganizationId ?? organizationId,
+                id: (resolved.session as any).activeOrganizationId ?? organizationId,
                 name: organizationName,
                 slug: organizationSlug,
               },

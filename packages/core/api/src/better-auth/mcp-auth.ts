@@ -140,7 +140,7 @@ export const betterAuthMcpAuth: Layer.Layer<McpAuthProvider, never, BetterAuth |
       const asMetadata = oAuthDiscoveryMetadata(auth);
       const prMetadata = oAuthProtectedResourceMetadata(auth);
 
-      const baseURL = auth.options.baseURL;
+      const baseURL = (auth.options as any).baseURL;
       const resourceMetadataUrl = (request: Request): string =>
         resourceMetadataUrlFor(baseURL, request);
 

@@ -87,7 +87,9 @@ export const createInviteCode = async (
   return row;
 };
 
-export const listInviteCodes = async (client: BetterAuthDbClient): Promise<readonly InviteCodeRow[]> => {
+export const listInviteCodes = async (
+  client: BetterAuthDbClient,
+): Promise<readonly InviteCodeRow[]> => {
   const result = await client.execute("SELECT * FROM invite_code ORDER BY created_at DESC");
   return result.rows.map(toRow);
 };
@@ -100,9 +102,10 @@ export const findRedeemableCode = async (
   client: BetterAuthDbClient,
   code: string,
 ): Promise<InviteCodeRow | null> => {
-  const result = await client.execute("SELECT * FROM invite_code WHERE code = ? AND used_at IS NULL", [
-    code.trim().toUpperCase(),
-  ]);
+  const result = await client.execute(
+    "SELECT * FROM invite_code WHERE code = ? AND used_at IS NULL",
+    [code.trim().toUpperCase()],
+  );
   const raw = result.rows[0];
   if (!raw) return null;
   const row = toRow(raw);

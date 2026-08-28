@@ -36,13 +36,14 @@ export const makeCloudflareApprovalHandler = (
         }).pipe(
           Effect.map((resolved) => {
             if (!resolved) return null;
-            const roles = (resolved.user.role ?? "user")
+            const roles = (((resolved.user as any).role ?? "user") as string)
               .split(",")
               .map((role) => role.trim())
               .filter((role) => role.length > 0);
             return {
               accountId: resolved.user.id,
-              organizationId: resolved.session.activeOrganizationId ?? betterAuth.organizationId,
+              organizationId:
+                (resolved.session as any).activeOrganizationId ?? betterAuth.organizationId,
               organizationName: betterAuth.organizationName,
               email: resolved.user.email,
               name: resolved.user.name ?? null,
@@ -55,7 +56,7 @@ export const makeCloudflareApprovalHandler = (
       );
     }
     return Effect.runPromise(verify(request)).then((principal) =>
-      principal && principal.kind !== "platform" ? (principal as Principal) : null,
+      principal ? (principal as Principal) : null,
     );
   };
 

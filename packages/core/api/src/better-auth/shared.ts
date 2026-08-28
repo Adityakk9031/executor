@@ -12,8 +12,13 @@ export interface BetterAuthDbClient {
 export interface SignupGate {
   readonly organizationId: string;
   readonly getAuth: () => BetterAuthInstance | null;
-  readonly findRedeemableCode: (code: string) => Promise<{ role: "admin" | "member"; expiresAt: string | null } | null>;
-  readonly consumeInviteCode: (code: string, by: { usedBy: string; usedByEmail: string }) => Promise<boolean>;
+  readonly findRedeemableCode: (
+    code: string,
+  ) => Promise<{ role: "admin" | "member"; expiresAt: string | null } | null>;
+  readonly consumeInviteCode: (
+    code: string,
+    by: { usedBy: string; usedByEmail: string },
+  ) => Promise<boolean>;
 }
 
 export const getSharedPlugins = () => [
@@ -43,7 +48,10 @@ export const inviteCodeFrom = (context: { body?: unknown }): string | undefined 
   return undefined;
 };
 
-export const countOrgMembers = (auth: BetterAuthInstance, organizationId: string): Promise<number> =>
+export const countOrgMembers = (
+  auth: BetterAuthInstance,
+  organizationId: string,
+): Promise<number> =>
   auth.$context.then(({ adapter }) =>
     adapter.count({ model: "member", where: [{ field: "organizationId", value: organizationId }] }),
   );
@@ -57,7 +65,7 @@ const orgHasNoMembers = async (gate: SignupGate): Promise<boolean> => {
 export const makeBetterAuthSharedOptions = (
   getOrganizationId: () => string,
   config: { authSecret: string; webBaseUrl: string },
-  gate?: SignupGate
+  gate?: SignupGate,
 ) => {
   return {
     secret: config.authSecret,

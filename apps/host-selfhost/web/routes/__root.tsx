@@ -25,7 +25,7 @@ import { DevicePage } from "../chromeless/device-page";
 import { McpConsentPage } from "../chromeless/mcp-consent-page";
 import { LoginPage } from "../login";
 import { SetupPage } from "../setup";
-import { fetchNeedsSetup, SetupStatusError } from "../setup-status";
+import { fetchNeedsSetup } from "../setup-status";
 
 // ---------------------------------------------------------------------------
 // Unified web SPA root: supporting both Better Auth and Cloudflare Access.
@@ -123,7 +123,7 @@ function AuthGate({
       },
       (err) => {
         if (alive) {
-          if (err instanceof SetupStatusError && err.status === 404) {
+          if (err && (err as any).name === "SetupStatusError" && (err as any).status === 404) {
             setAuthMode("access");
             window.location.href = "/cdn-cgi/access/login";
           } else {
@@ -214,7 +214,7 @@ function RootComponent() {
       },
       (err) => {
         if (alive) {
-          if (err instanceof SetupStatusError && err.status === 404) {
+          if (err && (err as any).name === "SetupStatusError" && (err as any).status === 404) {
             setAuthMode("access");
           } else {
             setAuthMode("builtin");

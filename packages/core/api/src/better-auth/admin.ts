@@ -139,8 +139,6 @@ export const makeBetterAuthAdminApiLayer = ({
   return HttpApiBuilder.layer(AdminHttpApi).pipe(
     Layer.provide(AdminHandlers),
     Layer.provide(prefixedRouter),
-    HttpRouter.provideRequest(
-      Layer.succeed(BetterAuth)(betterAuth),
-    ),
+    HttpRouter.provideRequest(Layer.succeed(BetterAuth)(betterAuth)),
   );
 };

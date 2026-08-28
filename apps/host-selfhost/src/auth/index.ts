@@ -11,7 +11,7 @@ import {
 } from "@executor-js/api/server";
 
 import { loadConfig } from "../config";
-import { BetterAuth, buildBetterAuth, type BetterAuthHandle } from "./better-auth";
+import { buildBetterAuth, type BetterAuthHandle } from "./better-auth";
 
 export { BetterAuth, buildBetterAuth, type BetterAuthHandle } from "./better-auth";
 export { betterAuthIdentityLayer } from "@executor-js/api/server";
@@ -22,9 +22,7 @@ export interface ResolvedAuthProviders {
   readonly betterAuth: BetterAuthHandle;
 }
 
-export const resolveAuthProviders = async (
-  client: any,
-): Promise<ResolvedAuthProviders> => {
+export const resolveAuthProviders = async (client: any): Promise<ResolvedAuthProviders> => {
   const betterAuth = await buildBetterAuth(client);
   const betterAuthLayer = Layer.succeed(SharedBetterAuth)(betterAuth);
 

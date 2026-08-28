@@ -54,18 +54,23 @@ export const buildBetterAuth = async (client: Client): Promise<BetterAuthHandle>
     },
   };
 
-  auth = betterAuth(authOptions);
-  await (await auth.$context).runMigrations();
+  const authInstance = betterAuth(authOptions);
+  auth = authInstance as any;
+  await (await authInstance.$context).runMigrations();
   await ensureInviteCodeTable(dbClient);
-  const { organizationId, organizationName } = await seedOrgAndAdmin(auth, dbClient, config);
+  const { organizationId, organizationName } = await seedOrgAndAdmin(
+    authInstance as any,
+    dbClient,
+    config,
+  );
   orgRef.id = organizationId;
 
   return {
-    auth,
+    auth: authInstance as any,
     organizationId,
     organizationName,
     organizationSlug: config.orgSlug,
-    handler: auth.handler,
+    handler: authInstance.handler,
     dbClient,
   };
 };

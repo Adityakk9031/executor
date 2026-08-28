@@ -3,7 +3,7 @@ import { HttpRouter } from "effect/unstable/http";
 import { Effect, Layer } from "effect";
 
 import { SystemError, SystemHttpApi } from "./system-api";
-import { BetterAuth } from "./identity";
+import { BetterAuth, type BetterAuthHandle } from "./identity";
 import { countOrgMembers } from "./shared";
 import { findRedeemableCode } from "./invites";
 
@@ -59,8 +59,6 @@ export const makeBetterAuthSystemApiLayer = ({
   return HttpApiBuilder.layer(SystemHttpApi).pipe(
     Layer.provide(SystemHandlers),
     Layer.provide(prefixedRouter),
-    HttpRouter.provideRequest(
-      Layer.succeed(BetterAuth)(betterAuth),
-    ),
+    HttpRouter.provideRequest(Layer.succeed(BetterAuth)(betterAuth)),
   );
 };
