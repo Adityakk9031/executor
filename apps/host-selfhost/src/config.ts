@@ -52,6 +52,11 @@ export interface SelfHostConfig {
    */
   readonly sandboxTimeoutMs: number | undefined;
   /**
+   * How long an MCP session may sit idle before the in-process store evicts it,
+   * or undefined for the store's own default (30 minutes). 0 disables eviction.
+   */
+  readonly mcpSessionIdleTtlMs: number | undefined;
+  /**
    * How long a connection's persisted remote tool catalog stays fresh, in ms.
    * `undefined` takes the SDK default (15 minutes); `null` disables time-based
    * re-sync, leaving stale-marking and config revision as the only triggers.
@@ -163,6 +168,7 @@ export const loadConfig = (): SelfHostConfig => {
     organizationName: process.env.EXECUTOR_ORG_NAME ?? "Default",
     orgSlug: resolveOrgSlug(),
     sandboxTimeoutMs: resolveSandboxTimeoutMs(),
+    mcpSessionIdleTtlMs: resolveMcpSessionIdleTtlMs(),
     toolsSyncTtlMs: resolveToolsSyncTtlMs(),
   };
 };
@@ -178,6 +184,23 @@ const resolveSandboxTimeoutMs = (): number | undefined => {
     // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: refuse to boot on a malformed operator knob
     throw new Error(
       `EXECUTOR_SANDBOX_TIMEOUT_MS ${JSON.stringify(raw)} is not a positive number of milliseconds`,
+    );
+  }
+  return Math.floor(parsed);
+};
+
+// How long an MCP session may sit idle before the store evicts it. 0 disables
+// eviction, which restores the old behaviour of holding every session for the
+// lifetime of the process — only useful for diagnosing a client that cannot
+// tolerate re-initializing.
+const resolveMcpSessionIdleTtlMs = (): number | undefined => {
+  const raw = process.env.EXECUTOR_MCP_SESSION_IDLE_TTL_MS;
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: refuse to boot on a malformed operator knob
+    throw new Error(
+      `EXECUTOR_MCP_SESSION_IDLE_TTL_MS ${JSON.stringify(raw)} is not a non-negative number of milliseconds`,
     );
   }
   return Math.floor(parsed);
