@@ -14,7 +14,7 @@
 // redeems the session, exchanges the code, and mints the connection.
 // ---------------------------------------------------------------------------
 
-import { Duration, Effect, Layer, Match, Option, Schema } from "effect";
+import { Duration, Effect, Layer, Match, Option, Predicate, Schema } from "effect";
 import { FetchHttpClient, type HttpClient } from "effect/unstable/http";
 
 import { connectionIdentifier } from "./connection-name-identifier";
@@ -1627,6 +1627,35 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
 
       const now = new Date();
       const expiresAt = Date.now() + OAUTH2_SESSION_TTL_MS;
+
+      // Drop verifiers that have already expired before parking a new one.
+      // `complete` discards an expired session lazily, but an ABANDONED flow is
+      // never completed, so that check never runs for it — and nothing else
+      // sweeps this table, so its verifier would sit here in plaintext forever.
+      // Doing it on `start` costs one delete on a path that is already writing,
+      // needs no scheduler in any host, and bounds the table by how often
+      // authorization is STARTED rather than by how often it is abandoned.
+      //
+      // Owner-scoped by the table's own delete policy, so a caller only ever
+      // sweeps rows it can already see.
+      //
+      // Best-effort, but NOT silent. Failing to tidy up must not stop someone
+      // connecting an account, so the failure is caught — and logged, because
+      // this is the only caller that ever runs the sweep, so a sweep that keeps
+      // failing quietly reinstates the very leak it exists to prevent. Warning
+      // rather than error: the authorization itself is unharmed.
+      yield* deps.fuma
+        .use("oauth_session.sweepExpired", (db) =>
+          looseDb(db).deleteMany("oauth_session", {
+            where: (b: any) => b("expires_at", "<", Date.now()),
+          }),
+        )
+        .pipe(
+          Effect.catch((failure) =>
+            Effect.logWarning("executor oauth expired-session sweep failed", { cause: failure }),
+          ),
+        );
+
       yield* deps.fuma.use("oauth_session.create", (db) =>
         looseDb(db).create("oauth_session", {
           tenant: keys.tenant,
@@ -1842,6 +1871,20 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
       yield* deleteSession(input.state);
       return connection;
     }).pipe(
+      // A completion that cannot be retried has finished with this session, so
+      // drop it rather than leaving its PKCE verifier sitting in the table. The
+      // happy path and `cancel` already delete; the failure paths did not, and
+      // nothing sweeps the table, so a flow that died here kept its verifier
+      // indefinitely. `restartRequired` is the authorization the code already
+      // computes for this: false means the caller may redeem the same state
+      // again, and deleting it then would turn a retryable hiccup into a
+      // restart. Best-effort — a failed cleanup must not replace the real
+      // error with a storage one.
+      Effect.tapError((error) =>
+        Predicate.isTagged(error, "OAuthCompleteError") && error.restartRequired === true
+          ? deleteSession(input.state).pipe(Effect.ignore)
+          : Effect.void,
+      ),
       Effect.withSpan("executor.oauth.complete", {
         attributes: {
           "executor.oauth.grant": "authorization_code",
