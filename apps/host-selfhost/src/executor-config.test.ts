@@ -79,10 +79,14 @@ test("a positive tools-sync TTL is forwarded verbatim", () => {
   expect(loadConfig().toolsSyncTtlMs).toBe(60000);
 });
 
-// 0 is the operator-facing way to turn the TTL off. It is deliberately NOT
-// forwarded as 0, which the SDK reads as "expired on every read" — the exact
-// opposite — so the resolver maps it onto the SDK's `null` disable sentinel.
-test.each(["0", "off", "null", "false"])("the tools-sync TTL is disabled by %s", (raw) => {
+// 0 keeps the SDK's own meaning — every catalog is expired on every read —
+// so the env var never means the opposite of the config field it feeds.
+test("a zero tools-sync TTL forwards as the SDK's always-stale 0", () => {
+  process.env[TTL_ENV_NAME] = "0";
+  expect(loadConfig().toolsSyncTtlMs).toBe(0);
+});
+
+test.each(["off", "null", "false"])("the tools-sync TTL is disabled by %s", (raw) => {
   process.env[TTL_ENV_NAME] = raw;
   expect(loadConfig().toolsSyncTtlMs).toBeNull();
 });

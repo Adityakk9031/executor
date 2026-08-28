@@ -203,10 +203,10 @@ const resolveOrgSlug = (): string => {
 // fresh before the next tools read re-lists it. Unset takes the SDK default of
 // 15 minutes.
 //
-// `0` disables time-based re-sync, and is mapped to the SDK's `null` sentinel
-// rather than forwarded: to the SDK a TTL of 0 means the opposite — every
-// catalog is expired on every read. "off", "null" and "false" spell the same
-// disable, since operators reach for all three.
+// The value forwards to the SDK's `toolsSyncTtlMs` verbatim, so `0` keeps the
+// SDK's meaning — every catalog is expired on every read. "off", "null" and
+// "false" disable time-based re-sync (the SDK's `null` sentinel), since
+// operators reach for all three spellings.
 //
 // Like the other knobs here a malformed or negative value is refused rather
 // than silently ignored: an operator who sets the TTL and typos it should find
@@ -219,14 +219,14 @@ const resolveToolsSyncTtlMs = (): number | null | undefined => {
   if (!Number.isInteger(parsed)) {
     // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: refuse to boot on a malformed operator knob
     throw new Error(
-      `EXECUTOR_TOOLS_SYNC_TTL_MS ${JSON.stringify(raw)} is not a whole number of milliseconds ("0", "off", "null" or "false" disable time-based re-sync)`,
+      `EXECUTOR_TOOLS_SYNC_TTL_MS ${JSON.stringify(raw)} is not a whole number of milliseconds ("off", "null" or "false" disable time-based re-sync)`,
     );
   }
   if (parsed < 0) {
     // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: refuse to boot on a malformed operator knob
     throw new Error(
-      `EXECUTOR_TOOLS_SYNC_TTL_MS ${JSON.stringify(raw)} must not be negative (use "0" to disable time-based re-sync)`,
+      `EXECUTOR_TOOLS_SYNC_TTL_MS ${JSON.stringify(raw)} must not be negative (use "off" to disable time-based re-sync)`,
     );
   }
-  return parsed === 0 ? null : parsed;
+  return parsed;
 };
