@@ -715,6 +715,11 @@ export interface ExecutorConfig<TPlugins extends readonly AnyPlugin[] = readonly
  *  `ExecutorConfig.toolsSyncTtlMs`). */
 export const DEFAULT_TOOLS_SYNC_TTL_MS = 15 * 60 * 1000;
 
+/** How many stale connection catalogs are rebuilt at once on a tools read.
+ *  Bounded so a host with a large stale set cannot open an unbounded number of
+ *  upstream listings from a single read. */
+const STALE_TOOLS_SYNC_CONCURRENCY = 10;
+
 // ---------------------------------------------------------------------------
 // collectTables — return the executor-owned Fuma table set. Plugins persist
 // through host-owned facades (`pluginStorage`, `blobs`) instead of contributing
@@ -4040,7 +4045,11 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             ? b.isNull("tools_synced_at")
             : b.or(b.isNull("tools_synced_at"), b("tools_synced_at", "<", staleBefore)),
       });
-      const tasks = [];
+      // Each rebuild is an independent upstream listing, so they run together
+      // rather than one after another: a host with many stale remote-catalog
+      // connections otherwise pays the sum of every server's latency on the
+      // read that trips the TTL.
+      const rebuilds: Effect.Effect<readonly Tool[]>[] = [];
       for (const connection of connections) {
         const integrationRow = integrationBySlug.get(connection.integration);
         if (!integrationRow) continue;
@@ -4067,7 +4076,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           syncedAt < cutoff;
         if (!staleMarked && !configRevised && !expired) continue;
 
-        tasks.push(
+        rebuilds.push(
           produceConnectionTools(
             integrationRow,
             {
@@ -4087,9 +4096,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           ),
         );
       }
-      if (tasks.length > 0) {
-        yield* Effect.all(tasks, { concurrency: 10 });
-      }
+      yield* Effect.all(rebuilds, { concurrency: STALE_TOOLS_SYNC_CONCURRENCY });
     });
 
     const toolsList = (filter?: ToolListFilter): Effect.Effect<readonly Tool[], StorageFailure> =>

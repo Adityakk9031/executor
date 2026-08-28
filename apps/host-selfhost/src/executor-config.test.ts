@@ -66,19 +66,38 @@ test("stdio MCP is enabled when the opt-in is exactly true", () => {
   expect(allowStdio()).toBe(true);
 });
 
-test("toolsSyncTtlMs parses integer, null/false/0 disable values, and undefined fallback", () => {
+test("an unset tools-sync TTL leaves the SDK default in place", () => {
   delete process.env[TTL_ENV_NAME];
   expect(loadConfig().toolsSyncTtlMs).toBeUndefined();
 
+  process.env[TTL_ENV_NAME] = "   ";
+  expect(loadConfig().toolsSyncTtlMs).toBeUndefined();
+});
+
+test("a positive tools-sync TTL is forwarded verbatim", () => {
   process.env[TTL_ENV_NAME] = "60000";
   expect(loadConfig().toolsSyncTtlMs).toBe(60000);
+});
 
-  process.env[TTL_ENV_NAME] = "null";
+// 0 is the operator-facing way to turn the TTL off. It is deliberately NOT
+// forwarded as 0, which the SDK reads as "expired on every read" — the exact
+// opposite — so the resolver maps it onto the SDK's `null` disable sentinel.
+test.each(["0", "off", "null", "false"])("the tools-sync TTL is disabled by %s", (raw) => {
+  process.env[TTL_ENV_NAME] = raw;
   expect(loadConfig().toolsSyncTtlMs).toBeNull();
+});
 
-  process.env[TTL_ENV_NAME] = "false";
-  expect(loadConfig().toolsSyncTtlMs).toBeNull();
+// A typo'd knob must not silently degrade into the 15-minute default; the
+// operator finds out at boot instead of wondering why catalogs never refresh.
+test.each(["abc", "60_000", "1.5", "1e3ms", "NaN", "Infinity"])(
+  "a malformed tools-sync TTL (%s) refuses to boot",
+  (raw) => {
+    process.env[TTL_ENV_NAME] = raw;
+    expect(() => loadConfig()).toThrow(/EXECUTOR_TOOLS_SYNC_TTL_MS/);
+  },
+);
 
-  process.env[TTL_ENV_NAME] = "0";
-  expect(loadConfig().toolsSyncTtlMs).toBeNull();
+test("a negative tools-sync TTL refuses to boot", () => {
+  process.env[TTL_ENV_NAME] = "-1";
+  expect(() => loadConfig()).toThrow(/must not be negative/);
 });

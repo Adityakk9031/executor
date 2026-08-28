@@ -14,7 +14,7 @@
 // ---------------------------------------------------------------------------
 
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Option, Schema } from "effect";
+import { Deferred, Effect, Option, Ref, Schema } from "effect";
 import { HttpServerResponse } from "effect/unstable/http";
 
 import {
@@ -264,6 +264,111 @@ describe("MCP tools/list pagination", () => {
         "beta",
         "gamma",
       ]);
+    }),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Stale-catalog refresh concurrency.
+//
+// A tools read rebuilds every stale connection it finds. Each rebuild is an
+// independent upstream listing, so a host with several stale remote catalogs
+// must not pay the sum of every server's latency on the read that trips the
+// TTL. This is the regression guard for that: the fixture below refuses to
+// answer any listing until all of them are in flight together, so a serial
+// refresh cannot finish at all.
+// ---------------------------------------------------------------------------
+
+const STALE_CONNECTIONS = 4;
+
+const serveLatchedListServer = () =>
+  Effect.gen(function* () {
+    const armed = yield* Ref.make(false);
+    const listings = yield* Ref.make(0);
+    const allInFlight = yield* Deferred.make<void>();
+
+    const server = yield* serveTestHttpApp((request) =>
+      Effect.gen(function* () {
+        if (request.method === "GET") {
+          return HttpServerResponse.text("SSE disabled", { status: 405 });
+        }
+        const body = yield* request.text.pipe(Effect.orDie);
+        const rpc = Option.getOrUndefined(decodeJsonRpcRequest(body));
+        if (!rpc) {
+          return HttpServerResponse.text("Invalid JSON-RPC fixture request", { status: 400 });
+        }
+        if (rpc.method === "initialize") {
+          return jsonRpcResult(rpc, {
+            protocolVersion: "2025-06-18",
+            capabilities: { tools: { listChanged: true } },
+            serverInfo: { name: "latched-fixture", version: "1.0.0" },
+          });
+        }
+        if (rpc.method === "notifications/initialized") {
+          return HttpServerResponse.text("", { status: 202 });
+        }
+        if (rpc.method !== "tools/list") {
+          return HttpServerResponse.text("Unexpected JSON-RPC method", { status: 400 });
+        }
+        // Once armed, park every listing until the whole stale set has arrived.
+        // Serial refresh parks on the first one forever.
+        if (yield* Ref.get(armed)) {
+          const arrived = yield* Ref.updateAndGet(listings, (n) => n + 1);
+          if (arrived >= STALE_CONNECTIONS) yield* Deferred.succeed(allInFlight, undefined);
+          yield* Deferred.await(allInFlight);
+        }
+        return jsonRpcResult(rpc, { tools: [pageTool("alpha")] });
+      }),
+    );
+
+    return {
+      // Distinct endpoint paths so each connection dials its own MCP session
+      // instead of sharing one pooled client.
+      endpoint: (index: number) => server.url(`/mcp/${index}`),
+      arm: Ref.set(armed, true),
+      listings: Ref.get(listings),
+    } as const;
+  });
+
+describe("MCP stale-catalog refresh", () => {
+  it.effect("rebuilds every stale connection concurrently, not one after another", () =>
+    Effect.gen(function* () {
+      const fixture = yield* serveLatchedListServer();
+      const executor = yield* createExecutor({
+        ...makeTestConfig({ plugins: [memoryCredentialsPlugin(), mcpPlugin()] as const }),
+        // Everything is expired on every read, so a single tools read has the
+        // whole set to rebuild.
+        toolsSyncTtlMs: 0,
+      });
+
+      for (let index = 0; index < STALE_CONNECTIONS; index++) {
+        const slug = IntegrationSlug.make(`latched_mcp_${index}`);
+        yield* executor.mcp.addServer({
+          name: `latched-mcp-${index}`,
+          endpoint: fixture.endpoint(index),
+          slug: String(slug),
+        });
+        yield* executor.connections.create({
+          owner: "org",
+          name: CONNECTION,
+          integration: slug,
+          template: TEMPLATE,
+          value: "",
+        });
+      }
+
+      // Warm every catalog while the fixture still answers freely, so the
+      // latched read below is purely the stale-refresh fan-out.
+      yield* executor.tools.list();
+      yield* fixture.arm;
+
+      // Well inside the harness timeout, so a serial refresh fails on the
+      // assertion below rather than as an opaque test-runner timeout.
+      const refreshed = yield* executor.tools.list().pipe(Effect.timeoutOption("10 seconds"));
+
+      // A serial refresh never releases the latch, so the read times out here.
+      expect(Option.isSome(refreshed)).toBe(true);
+      expect(yield* fixture.listings).toBe(STALE_CONNECTIONS);
     }),
   );
 });

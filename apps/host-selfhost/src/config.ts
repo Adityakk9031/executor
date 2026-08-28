@@ -51,8 +51,12 @@ export interface SelfHostConfig {
    * minutes (the same pattern as MCP_PAUSED_SESSION_IDLE_TIMEOUT_MS on cloud).
    */
   readonly sandboxTimeoutMs: number | undefined;
-  /** Freshness TTL (in ms) for remote tool catalogs, or `null` to disable. */
-  readonly toolsSyncTtlMs?: number | null;
+  /**
+   * How long a connection's persisted remote tool catalog stays fresh, in ms.
+   * `undefined` takes the SDK default (15 minutes); `null` disables time-based
+   * re-sync, leaving stale-marking and config revision as the only triggers.
+   */
+  readonly toolsSyncTtlMs: number | null | undefined;
 }
 
 export const resolveDataDir = (): string =>
@@ -194,10 +198,35 @@ const resolveOrgSlug = (): string => {
   return slug;
 };
 
+// EXECUTOR_TOOLS_SYNC_TTL_MS — how long a remote tool catalog (an MCP server's
+// tool set, which changes server-side with no executor-visible signal) stays
+// fresh before the next tools read re-lists it. Unset takes the SDK default of
+// 15 minutes.
+//
+// `0` disables time-based re-sync, and is mapped to the SDK's `null` sentinel
+// rather than forwarded: to the SDK a TTL of 0 means the opposite — every
+// catalog is expired on every read. "off", "null" and "false" spell the same
+// disable, since operators reach for all three.
+//
+// Like the other knobs here a malformed or negative value is refused rather
+// than silently ignored: an operator who sets the TTL and typos it should find
+// out at boot, not by wondering months later why catalogs never refresh.
 const resolveToolsSyncTtlMs = (): number | null | undefined => {
   const raw = process.env.EXECUTOR_TOOLS_SYNC_TTL_MS?.trim();
   if (!raw) return undefined;
-  if (raw === "null" || raw === "false" || raw === "0") return null;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isNaN(parsed) ? undefined : parsed;
+  if (raw === "off" || raw === "null" || raw === "false") return null;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed)) {
+    // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: refuse to boot on a malformed operator knob
+    throw new Error(
+      `EXECUTOR_TOOLS_SYNC_TTL_MS ${JSON.stringify(raw)} is not a whole number of milliseconds ("0", "off", "null" or "false" disable time-based re-sync)`,
+    );
+  }
+  if (parsed < 0) {
+    // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: refuse to boot on a malformed operator knob
+    throw new Error(
+      `EXECUTOR_TOOLS_SYNC_TTL_MS ${JSON.stringify(raw)} must not be negative (use "0" to disable time-based re-sync)`,
+    );
+  }
+  return parsed === 0 ? null : parsed;
 };
