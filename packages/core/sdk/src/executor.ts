@@ -2000,6 +2000,8 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       readonly tokenUrl: string;
       readonly grant: string;
       readonly resource: string | null;
+      readonly tokenEndpointAuthMethod?: "body" | "basic";
+      readonly tokenRequestFormat?: "form" | "json";
     }
 
     /** What drove a refresh: the pre-call expiry check (`proactive`), or an
@@ -2307,7 +2309,13 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
               clientSecret: firstParty.clientSecret,
               tokenUrl: firstParty.tokenUrl,
               grant: "authorization_code",
-              resource: null,
+              resource: firstParty.resource ?? null,
+              ...(firstParty.tokenEndpointAuthMethod === undefined
+                ? {}
+                : { tokenEndpointAuthMethod: firstParty.tokenEndpointAuthMethod }),
+              ...(firstParty.tokenRequestFormat === undefined
+                ? {}
+                : { tokenRequestFormat: firstParty.tokenRequestFormat }),
             } satisfies RefreshClient;
           }
           const clientOwner = (row.oauth_client_owner ?? row.owner) as Owner;
@@ -2439,6 +2447,8 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
                   // RFC 8707: keep the re-minted token bound to the same resource
                   // (MCP servers require this on refresh).
                   resource: clientRow.resource ?? undefined,
+                  clientAuth: clientRow.tokenEndpointAuthMethod,
+                  requestFormat: clientRow.tokenRequestFormat,
                   endpointUrlPolicy: config.oauthEndpointUrlPolicy,
                   fetch: config.fetch,
                 }).pipe(
