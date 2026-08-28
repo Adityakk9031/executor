@@ -41,6 +41,7 @@ import type {
   InvokeOptions,
 } from "./elicitation";
 import type {
+  ConnectionAlreadyExistsError,
   ExecuteError,
   ConnectionNotFoundError,
   CredentialProviderNotRegisteredError,
@@ -208,6 +209,7 @@ export interface PluginCtx<TStore = unknown> {
     ) => Effect.Effect<
       Connection,
       | IntegrationNotFoundError
+      | ConnectionAlreadyExistsError
       | CredentialProviderNotRegisteredError
       | InvalidConnectionInputError
       | StorageFailure

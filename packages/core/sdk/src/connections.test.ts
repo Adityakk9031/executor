@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  Cause,
   Deferred,
   Effect,
   Exit,
@@ -23,6 +24,7 @@ import {
   ToolAddress,
   ToolName,
 } from "./ids";
+import { ConnectionAlreadyExistsError } from "./errors";
 import { createExecutor } from "./executor";
 import { StorageError, type FumaDb } from "./fuma-runtime";
 import { HealthCheckResult } from "./health-check";
@@ -178,6 +180,269 @@ describe("connections.create", () => {
     }),
   );
 
+  // Create is never a replace: a second create with the same (owner,
+  // integration, name) must fail with ConnectionAlreadyExistsError and leave
+  // the first connection fully intact — including its stored secret, which a
+  // silent upsert would overwrite (the pasted value's item id is derived from
+  // the name, so the provider write alone clobbers it).
+  it.effect("rejects a duplicate (owner, integration, name) and keeps the original intact", () =>
+    Effect.gen(function* () {
+      const executor = yield* setup();
+      yield* executor.connections.create({
+        owner: "org",
+        name: ConnectionName.make("main"),
+        integration: INTEG,
+        template: TEMPLATE,
+        value: "original-token",
+        description: "original",
+      });
+
+      const result = yield* Effect.result(
+        executor.connections.create({
+          owner: "org",
+          name: ConnectionName.make("main"),
+          integration: INTEG,
+          template: TEMPLATE,
+          value: "clobbered-token",
+          description: "clobbered",
+        }),
+      );
+      expect(Result.isFailure(result)).toBe(true);
+      if (!Result.isFailure(result)) return;
+      expect(Predicate.isTagged("ConnectionAlreadyExistsError")(result.failure)).toBe(true);
+
+      // The original row and its secret both survived.
+      const connections = yield* executor.connections.list();
+      expect(connections.length).toBe(1);
+      expect(connections[0]?.description).toBe("original");
+      const value = yield* executor.demo.resolveValue("org", "main");
+      expect(value).toBe("original-token");
+    }),
+  );
+
+  // Names collide AFTER identifier normalization: "my-api-key" and "my api key"
+  // both normalize to myApiKey, so the second must be rejected even though the
+  // raw inputs differ.
+  it.effect("rejects a duplicate that only collides after name normalization", () =>
+    Effect.gen(function* () {
+      const executor = yield* setup();
+      yield* executor.connections.create({
+        owner: "org",
+        name: ConnectionName.make("my-api-key"),
+        integration: INTEG,
+        template: TEMPLATE,
+        value: "v1",
+      });
+      const result = yield* Effect.result(
+        executor.connections.create({
+          owner: "org",
+          name: ConnectionName.make("my api key"),
+          integration: INTEG,
+          template: TEMPLATE,
+          value: "v2",
+        }),
+      );
+      expect(Result.isFailure(result)).toBe(true);
+      if (!Result.isFailure(result)) return;
+      expect(Predicate.isTagged("ConnectionAlreadyExistsError")(result.failure)).toBe(true);
+      const value = yield* executor.demo.resolveValue("org", "myApiKey");
+      expect(value).toBe("v1");
+    }),
+  );
+
+  // The race the early duplicate check cannot answer: two creates for the same
+  // (owner, integration, name) in flight at once. The row insert picks the
+  // winner and the loser gets the typed 409 — and, the load-bearing part, the
+  // provider write is winner-only. A pasted value's item id is deterministic,
+  // so a pre-insert write from the LOSING create would silently replace the
+  // winner's stored secret while the winner's row keeps resolving through it.
+  // The gate parks the first create inside its provider write, so the second
+  // create runs its full duplicate handling while the first is mid-flight.
+  it.effect("concurrent creates: one winner, a typed 409, and the winner's secret intact", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstWriteEntered = yield* Deferred.make<void>();
+        const releaseFirstWrite = yield* Deferred.make<void>();
+        const store = new Map<string, string>();
+        let writes = 0;
+        const gatedProvider: CredentialProvider = {
+          key: ProviderKey.make("memory"),
+          writable: true,
+          get: (id) => Effect.sync(() => store.get(String(id)) ?? null),
+          set: (id, value) =>
+            Effect.gen(function* () {
+              writes += 1;
+              if (writes === 1) {
+                yield* Deferred.succeed(firstWriteEntered, undefined);
+                yield* Deferred.await(releaseFirstWrite);
+              }
+              store.set(String(id), value);
+            }),
+        };
+        const gatedPlugin = definePlugin(() => ({
+          id: "gated" as const,
+          credentialProviders: [gatedProvider],
+          storage: () => ({}),
+          resolveTools: () =>
+            Effect.succeed({
+              tools: [{ name: ToolName.make("deploy"), description: "deploy" }],
+            }),
+          invokeTool: ({ toolRow }) => Effect.succeed({ ran: toolRow.name }),
+          extension: (ctx) => ({
+            seed: () =>
+              ctx.core.integrations.register({
+                slug: INTEG,
+                description: "Vercel",
+                config: {},
+              }),
+            resolveValue: (name: string) =>
+              ctx.connections.resolveValue({
+                owner: "org",
+                integration: INTEG,
+                name: ConnectionName.make(name),
+              }),
+          }),
+        }))();
+        const config = makeTestConfig({ plugins: [gatedPlugin] as const });
+        const executor = yield* createExecutor(config);
+        yield* executor.gated.seed();
+
+        const createWith = (value: string) =>
+          Effect.result(
+            executor.connections.create({
+              owner: "org",
+              name: ConnectionName.make("main"),
+              integration: INTEG,
+              template: TEMPLATE,
+              value,
+            }),
+          );
+
+        const firstFiber = yield* Effect.forkChild(createWith("first-value"));
+        yield* Deferred.await(firstWriteEntered);
+        const second = yield* createWith("second-value");
+        yield* Deferred.succeed(releaseFirstWrite, undefined);
+        const first = yield* Fiber.join(firstFiber);
+
+        const attempts = [
+          { result: first, value: "first-value" },
+          { result: second, value: "second-value" },
+        ];
+        const winners = attempts.filter((attempt) => Result.isSuccess(attempt.result));
+        const losers = attempts.filter((attempt) => Result.isFailure(attempt.result));
+        expect(winners).toHaveLength(1);
+        expect(losers).toHaveLength(1);
+        const loser = losers[0];
+        if (!loser || !Result.isFailure(loser.result)) return;
+        expect(loser.result.failure).toBeInstanceOf(ConnectionAlreadyExistsError);
+
+        // Exactly one connection survived, and it resolves to the WINNER's
+        // value — the losing create never reached the provider.
+        const connections = yield* executor.connections.list();
+        expect(connections).toHaveLength(1);
+        const value = yield* executor.gated.resolveValue("main");
+        expect(value).toBe(winners[0]?.value);
+      }),
+    ),
+  );
+
+  // When both creates observe absence, both reach the insert and the primary
+  // key breaks the tie — the loser must still get the typed 409, not a raw
+  // unique-constraint storage failure. The proxy blinds every connection-table
+  // read for the second create, so its early and transactional checks both
+  // miss the existing row and its insert genuinely collides in the database.
+  it.effect("maps a lost insert race to the typed 409, not a storage failure", () =>
+    Effect.gen(function* () {
+      let blind = false;
+      const blindfoldConnectionReads = (db: FumaDb): FumaDb => {
+        const wrap = (inner: FumaDb): FumaDb =>
+          new Proxy(inner, {
+            get(target, prop) {
+              if (prop === "withContext") {
+                return (context: unknown) =>
+                  wrap((target.withContext as (c: unknown) => FumaDb)(context));
+              }
+              if (prop === "transaction") {
+                return (run: (tx: FumaDb) => Promise<unknown>) =>
+                  (target.transaction as (r: (tx: FumaDb) => Promise<unknown>) => Promise<unknown>)(
+                    (tx) => run(wrap(tx)),
+                  );
+              }
+              if (prop === "findFirst") {
+                return (table: unknown, query: unknown) =>
+                  blind && table === "connection"
+                    ? Promise.resolve(null)
+                    : (target.findFirst as (t: unknown, q: unknown) => Promise<unknown>)(
+                        table,
+                        query,
+                      );
+              }
+              return Reflect.get(target, prop);
+            },
+          });
+        return wrap(db);
+      };
+
+      const config = makeTestConfig({ plugins: [demoPlugin] as const });
+      const executor = yield* createExecutor({
+        ...config,
+        db: blindfoldConnectionReads(config.db),
+      });
+      yield* executor.demo.seed();
+      yield* executor.connections.create({
+        owner: "org",
+        name: ConnectionName.make("main"),
+        integration: INTEG,
+        template: TEMPLATE,
+        value: "first-value",
+      });
+
+      blind = true;
+      const result = yield* Effect.result(
+        executor.connections.create({
+          owner: "org",
+          name: ConnectionName.make("main"),
+          integration: INTEG,
+          template: TEMPLATE,
+          value: "second-value",
+        }),
+      );
+      blind = false;
+
+      expect(Result.isFailure(result)).toBe(true);
+      if (!Result.isFailure(result)) return;
+      expect(result.failure).toBeInstanceOf(ConnectionAlreadyExistsError);
+
+      // The losing insert wrote nothing: the original secret is untouched.
+      const connections = yield* executor.connections.list();
+      expect(connections).toHaveLength(1);
+      const value = yield* executor.demo.resolveValue("org", "main");
+      expect(value).toBe("first-value");
+    }),
+  );
+
+  it.effect("allows the same name under a different owner", () =>
+    Effect.gen(function* () {
+      const executor = yield* setup();
+      yield* executor.connections.create({
+        owner: "org",
+        name: ConnectionName.make("main"),
+        integration: INTEG,
+        template: TEMPLATE,
+        value: "org-token",
+      });
+      const personal = yield* executor.connections.create({
+        owner: "user",
+        name: ConnectionName.make("main"),
+        integration: INTEG,
+        template: TEMPLATE,
+        value: "user-token",
+      });
+      expect(String(personal.address)).toBe("tools.vercel.user.main");
+      expect((yield* executor.connections.list()).length).toBe(2);
+    }),
+  );
+
   it.effect("external `from` references a provider item without writing it", () =>
     Effect.gen(function* () {
       const executor = yield* setup();
@@ -312,6 +577,853 @@ describe("connections.create", () => {
       const tools = yield* executor.tools.list();
       expect(tools.map((t) => String(t.name)).sort()).toEqual(["deploy", "list"]);
     }),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Credential-write compensation. The row insert and the provider write cannot
+// be atomic — the provider may live outside the database — so the create
+// sequences them: the provider is touched only after this create wins the row
+// insert, and a write that does not complete must tear down everything it
+// already stored. The worst outcome is a committed row whose credentials were
+// never written: it 409s every retry while resolving nothing.
+// ---------------------------------------------------------------------------
+
+const trackingProvider = (
+  store: Map<string, string>,
+  overrides?: Partial<Pick<CredentialProvider, "set" | "delete">>,
+): CredentialProvider => ({
+  key: ProviderKey.make("memory"),
+  writable: true,
+  get: (id) => Effect.sync(() => store.get(String(id)) ?? null),
+  set: (id, value) => Effect.sync(() => void store.set(String(id), value)),
+  delete: (id) => Effect.sync(() => void store.delete(String(id))),
+  ...overrides,
+});
+
+const durabilityPlugin = (provider: CredentialProvider) =>
+  definePlugin(() => ({
+    id: "durable" as const,
+    credentialProviders: [provider],
+    storage: () => ({}),
+    resolveTools: () =>
+      Effect.succeed({ tools: [{ name: ToolName.make("deploy"), description: "deploy" }] }),
+    invokeTool: ({ toolRow }) => Effect.succeed({ ran: toolRow.name }),
+    extension: (ctx) => ({
+      seed: () =>
+        ctx.core.integrations.register({ slug: INTEG, description: "Vercel", config: {} }),
+    }),
+  }))();
+
+/** Wrap a test `FumaDb` so deletes on the `connection` table can be made to
+ *  fail on demand — the raw driver-level failure the compensating delete must
+ *  survive loudly. A rejection during the delete statement is ambiguous on an
+ *  auto-commit adapter (the statement may have executed first), so this
+ *  failure is reported as unconfirmed, never as definitively stranded.
+ *  Transactions hand out wrapped handles too, so the guarded delete inside
+ *  the compensation transaction is covered. */
+const failableConnectionDeletes = (db: FumaDb, shouldFail: () => boolean): FumaDb => {
+  const wrap = (inner: FumaDb): FumaDb =>
+    new Proxy(inner, {
+      get(target, prop) {
+        if (prop === "withContext") {
+          return (context: unknown) =>
+            wrap((target.withContext as (c: unknown) => FumaDb)(context));
+        }
+        if (prop === "transaction") {
+          return (run: (tx: FumaDb) => Promise<unknown>) =>
+            (target.transaction as (r: (tx: FumaDb) => Promise<unknown>) => Promise<unknown>)(
+              (tx) => run(wrap(tx)),
+            );
+        }
+        if (prop === "deleteMany") {
+          return (table: unknown, query: unknown) =>
+            shouldFail() && table === "connection"
+              ? // oxlint-disable-next-line executor/no-promise-reject -- boundary: the proxy fakes a driver-level rejection from the raw FumaDb handle
+                Promise.reject(new StorageError({ message: "delete refused", cause: undefined }))
+              : (target.deleteMany as (t: unknown, q: unknown) => Promise<unknown>)(table, query);
+        }
+        return Reflect.get(target, prop);
+      },
+    });
+  return wrap(db);
+};
+
+/** Wrap a test `FumaDb` so compensation fails strictly BEFORE its guarded
+ *  delete statement is issued: the identity read that opens the compensation
+ *  transaction rejects. Only a pre-attempt failure keeps the definitive
+ *  stranded-row claim truthful — a rejection during the delete statement
+ *  itself is reported as unconfirmed instead (see
+ *  `failableConnectionDeletes`). The read is identified by sequence: the
+ *  first `connection` read after this create's row insert. The conflict-check
+ *  read runs before the insert and no other `connection` read happens in
+ *  between, so that read is compensation's. Transactions hand out wrapped
+ *  handles too. */
+const failableCompensationRowDelete = (db: FumaDb, shouldFail: () => boolean): FumaDb => {
+  let insertSeen = false;
+  const wrap = (inner: FumaDb): FumaDb =>
+    new Proxy(inner, {
+      get(target, prop) {
+        if (prop === "withContext") {
+          return (context: unknown) =>
+            wrap((target.withContext as (c: unknown) => FumaDb)(context));
+        }
+        if (prop === "transaction") {
+          return (run: (tx: FumaDb) => Promise<unknown>) =>
+            (target.transaction as (r: (tx: FumaDb) => Promise<unknown>) => Promise<unknown>)(
+              (tx) => run(wrap(tx)),
+            );
+        }
+        if (prop === "create") {
+          return async (table: unknown, values: unknown) => {
+            const row = await (target.create as (t: unknown, v: unknown) => Promise<unknown>)(
+              table,
+              values,
+            );
+            if (table === "connection") insertSeen = true;
+            return row;
+          };
+        }
+        if (prop === "findFirst") {
+          return (table: unknown, query: unknown) =>
+            shouldFail() && insertSeen && table === "connection"
+              ? // oxlint-disable-next-line executor/no-promise-reject -- boundary: the proxy fakes a driver-level rejection from the raw FumaDb handle
+                Promise.reject(
+                  new StorageError({ message: "identity read refused", cause: undefined }),
+                )
+              : (target.findFirst as (t: unknown, q: unknown) => Promise<unknown>)(table, query);
+        }
+        return Reflect.get(target, prop);
+      },
+    });
+  return wrap(db);
+};
+
+/** Wrap a test `FumaDb` so one armed `connection` read observes a stale row.
+ *  This models the read/delete race inside the compensation transaction: under
+ *  read-committed isolation the pre-delete identity read can see this create's
+ *  row while a concurrent remove/recreate has already replaced it by the time
+ *  the guarded delete runs. SQLite serializes the whole transaction, so that
+ *  interleaving cannot be produced with real concurrency here — the wrapper
+ *  reproduces the exact observation order instead: the armed read returns the
+ *  create's own (captured) row while the table already holds the successor;
+ *  every other read, including the confirmation read after the guarded
+ *  delete, sees the real table. */
+const staleCompensationRead = (db: FumaDb, state: { armed: boolean }): FumaDb => {
+  let captured: Record<string, unknown> | null = null;
+  const wrap = (inner: FumaDb): FumaDb =>
+    new Proxy(inner, {
+      get(target, prop) {
+        if (prop === "withContext") {
+          return (context: unknown) =>
+            wrap((target.withContext as (c: unknown) => FumaDb)(context));
+        }
+        if (prop === "transaction") {
+          return (run: (tx: FumaDb) => Promise<unknown>) =>
+            (target.transaction as (r: (tx: FumaDb) => Promise<unknown>) => Promise<unknown>)(
+              (tx) => run(wrap(tx)),
+            );
+        }
+        if (prop === "create") {
+          return async (table: unknown, values: unknown) => {
+            const row = await (
+              target.create as (t: unknown, v: unknown) => Promise<Record<string, unknown>>
+            )(table, values);
+            // Keep the FIRST inserted connection row — the raced create's own.
+            if (table === "connection" && captured === null) captured = row;
+            return row;
+          };
+        }
+        if (prop === "findFirst") {
+          return (table: unknown, query: unknown) => {
+            if (table === "connection" && state.armed && captured !== null) {
+              state.armed = false;
+              return Promise.resolve(captured);
+            }
+            return (target.findFirst as (t: unknown, q: unknown) => Promise<unknown>)(table, query);
+          };
+        }
+        return Reflect.get(target, prop);
+      },
+    });
+  return wrap(db);
+};
+
+/** Wrap a test `FumaDb` so the confirmation read AFTER the guarded delete
+ *  fails at the driver. While armed, the first `connection` read that follows
+ *  a `connection` delete rejects; every other statement passes through.
+ *  Transactions hand out wrapped handles too, so the read inside the
+ *  compensation transaction is covered. */
+const failableConfirmationRead = (db: FumaDb, state: { armed: boolean }): FumaDb => {
+  let deleteSeen = false;
+  const wrap = (inner: FumaDb): FumaDb =>
+    new Proxy(inner, {
+      get(target, prop) {
+        if (prop === "withContext") {
+          return (context: unknown) =>
+            wrap((target.withContext as (c: unknown) => FumaDb)(context));
+        }
+        if (prop === "transaction") {
+          return (run: (tx: FumaDb) => Promise<unknown>) =>
+            (target.transaction as (r: (tx: FumaDb) => Promise<unknown>) => Promise<unknown>)(
+              (tx) => run(wrap(tx)),
+            );
+        }
+        if (prop === "deleteMany") {
+          return (table: unknown, query: unknown) => {
+            if (state.armed && table === "connection") deleteSeen = true;
+            return (target.deleteMany as (t: unknown, q: unknown) => Promise<unknown>)(
+              table,
+              query,
+            );
+          };
+        }
+        if (prop === "findFirst") {
+          return (table: unknown, query: unknown) => {
+            if (state.armed && deleteSeen && table === "connection") {
+              state.armed = false;
+              deleteSeen = false;
+              // oxlint-disable-next-line executor/no-promise-reject -- boundary: the proxy fakes a driver-level rejection from the raw FumaDb handle
+              return Promise.reject(
+                new StorageError({ message: "confirmation read refused", cause: undefined }),
+              );
+            }
+            return (target.findFirst as (t: unknown, q: unknown) => Promise<unknown>)(table, query);
+          };
+        }
+        return Reflect.get(target, prop);
+      },
+    });
+  return wrap(db);
+};
+
+describe("connections.create credential-write compensation", () => {
+  // Interruption is not an error: error-channel compensation never sees it. A
+  // create interrupted mid-write must still tear down what it already did —
+  // the committed row and every item that landed before the interrupt.
+  it.effect("an interrupted create removes the row and the items it already wrote", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const secondWriteEntered = yield* Deferred.make<void>();
+        const store = new Map<string, string>();
+        const provider = trackingProvider(store, {
+          set: (id, value) =>
+            String(id).endsWith(":second")
+              ? Deferred.succeed(secondWriteEntered, undefined).pipe(Effect.andThen(Effect.never))
+              : Effect.sync(() => void store.set(String(id), value)),
+        });
+        const executor = yield* makeTestExecutor({
+          plugins: [durabilityPlugin(provider)] as const,
+        });
+        yield* executor.durable.seed();
+
+        const fiber = yield* Effect.forkChild(
+          executor.connections.create({
+            owner: "org",
+            name: ConnectionName.make("main"),
+            integration: INTEG,
+            template: TEMPLATE,
+            values: { first: "1", second: "2" },
+          }),
+        );
+        yield* Deferred.await(secondWriteEntered);
+        yield* Fiber.interrupt(fiber);
+
+        // The first item had landed before the interrupt; compensation removed
+        // it together with the row it belonged to.
+        expect(store.size).toBe(0);
+        expect(yield* executor.connections.list()).toEqual([]);
+      }),
+    ),
+  );
+
+  // One provider.set can succeed and a later one fail. Deleting only the row
+  // leaves the earlier secret at its deterministic item id, waiting to be
+  // adopted by the next create of the same name. Compensation must remove the
+  // items already written, not just the row.
+  it.effect("a failed later variable write cleans up the earlier items and the row", () =>
+    Effect.gen(function* () {
+      const store = new Map<string, string>();
+      const provider = trackingProvider(store, {
+        set: (id, value) =>
+          String(id).endsWith(":second")
+            ? Effect.fail(new StorageError({ message: "provider write refused", cause: undefined }))
+            : Effect.sync(() => void store.set(String(id), value)),
+      });
+      const executor = yield* makeTestExecutor({ plugins: [durabilityPlugin(provider)] as const });
+      yield* executor.durable.seed();
+
+      const result = yield* Effect.result(
+        executor.connections.create({
+          owner: "org",
+          name: ConnectionName.make("main"),
+          integration: INTEG,
+          template: TEMPLATE,
+          values: { first: "1", second: "2" },
+        }),
+      );
+
+      expect(Result.isFailure(result)).toBe(true);
+      if (!Result.isFailure(result)) return;
+      expect(Predicate.isTagged("StorageError")(result.failure)).toBe(true);
+      // Neither half survives: the first item is gone with the row.
+      expect(store.size).toBe(0);
+      expect(yield* executor.connections.list()).toEqual([]);
+    }),
+  );
+
+  // A provider can expose `set` without `delete`. Compensation then cannot
+  // undo the items already written — that is acceptable only if it is loud:
+  // a warning must name the item that may be stranded, never a silent skip.
+  it.effect("warns about possibly stranded items when the provider has no delete", () =>
+    Effect.gen(function* () {
+      const store = new Map<string, string>();
+      const provider = trackingProvider(store, {
+        set: (id, value) =>
+          String(id).endsWith(":second")
+            ? Effect.fail(new StorageError({ message: "provider write refused", cause: undefined }))
+            : Effect.sync(() => void store.set(String(id), value)),
+        delete: undefined,
+      });
+      const executor = yield* makeTestExecutor({ plugins: [durabilityPlugin(provider)] as const });
+      yield* executor.durable.seed();
+
+      const warnings: string[] = [];
+      const capture = Logger.make<unknown, void>((options) => {
+        if (options.logLevel === "Warn") {
+          warnings.push(Inspectable.toStringUnknown(options.message, 0));
+        }
+      });
+      const result = yield* Effect.result(
+        executor.connections
+          .create({
+            owner: "org",
+            name: ConnectionName.make("main"),
+            integration: INTEG,
+            template: TEMPLATE,
+            values: { first: "1", second: "2" },
+          })
+          .pipe(Effect.provide(Logger.layer([capture]))),
+      );
+
+      expect(Result.isFailure(result)).toBe(true);
+      if (!Result.isFailure(result)) return;
+      expect(Predicate.isTagged("StorageError")(result.failure)).toBe(true);
+      // The row is gone, but the first item cannot be undone without a
+      // provider delete ...
+      expect(yield* executor.connections.list()).toEqual([]);
+      expect(store.size).toBe(1);
+      // ... and the create said so, naming the item.
+      expect(warnings.some((line) => line.includes("stranded"))).toBe(true);
+      expect(warnings.some((line) => line.includes("first"))).toBe(true);
+    }),
+  );
+
+  // The compensating delete can fail before its guarded delete statement is
+  // even issued (here: the identity read that opens the compensation
+  // transaction rejects). Nothing can have been deleted, so the surviving
+  // credential-less row is definitively stranded — and swallowing that
+  // failure hides it behind an error that never mentions it. The create must
+  // fail with an error that NAMES the stranded connection so an operator can
+  // act on it.
+  it.effect("names the stranded connection when the compensating delete fails", () =>
+    Effect.gen(function* () {
+      let failRowDelete = false;
+      const store = new Map<string, string>();
+      const provider = trackingProvider(store, {
+        set: (id, value) =>
+          String(id).endsWith(":second")
+            ? Effect.fail(new StorageError({ message: "provider write refused", cause: undefined }))
+            : Effect.sync(() => void store.set(String(id), value)),
+      });
+      const config = makeTestConfig({ plugins: [durabilityPlugin(provider)] as const });
+      const executor = yield* createExecutor({
+        ...config,
+        db: failableCompensationRowDelete(config.db, () => failRowDelete),
+      });
+      yield* executor.durable.seed();
+      failRowDelete = true;
+
+      const result = yield* Effect.result(
+        executor.connections.create({
+          owner: "org",
+          name: ConnectionName.make("main"),
+          integration: INTEG,
+          template: TEMPLATE,
+          values: { first: "1", second: "2" },
+        }),
+      );
+
+      expect(Result.isFailure(result)).toBe(true);
+      if (!Result.isFailure(result)) return;
+      const failure = result.failure;
+      expect(Predicate.isTagged("StorageError")(failure)).toBe(true);
+      if (!Predicate.isTagged("StorageError")(failure)) return;
+      expect(failure.message).toContain("main");
+      expect(failure.message).toContain("vercel");
+      // Pre-attempt failure: the stranded claim is definitive and stated.
+      expect(failure.message).toContain("stranded");
+      // The original write failure is retained as the cause, not replaced.
+      const isStorageError = (u: unknown): u is StorageError =>
+        Predicate.isTagged("StorageError")(u);
+      expect(isStorageError(failure.cause)).toBe(true);
+      if (!isStorageError(failure.cause)) return;
+      expect(failure.cause.message).toBe("provider write refused");
+
+      // Non-vacuous: the compensating delete really did fail, so the
+      // row the error names is still there.
+      failRowDelete = false;
+      const rows = yield* executor.connections.list();
+      expect(rows.length).toBe(1);
+      expect(String(rows[0]?.name)).toBe("main");
+    }),
+  );
+
+  // Compensation can be slow (provider calls). In that window a concurrent
+  // remove can free the name and a new create can take it, writing fresh
+  // secrets at the SAME deterministic item ids. Late compensation must then
+  // recognize that the row is no longer the one it inserted — identified by
+  // the storage surrogate row id — and touch neither the replacement row nor
+  // its credentials. Losing compensation to a concurrent remove is correct:
+  // the remover already cleaned up.
+  it.effect("late compensation leaves a concurrent replacement untouched", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const secondWriteEntered = yield* Deferred.make<void>();
+        const releaseSecondWrite = yield* Deferred.make<void>();
+        const store = new Map<string, string>();
+        let parkNextSecondWrite = true;
+        const provider = trackingProvider(store, {
+          set: (id, value) => {
+            if (String(id).endsWith(":second") && parkNextSecondWrite) {
+              parkNextSecondWrite = false;
+              return Deferred.succeed(secondWriteEntered, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseSecondWrite)),
+                Effect.andThen(
+                  Effect.fail(
+                    new StorageError({ message: "provider write refused", cause: undefined }),
+                  ),
+                ),
+              );
+            }
+            return Effect.sync(() => void store.set(String(id), value));
+          },
+        });
+        const executor = yield* makeTestExecutor({
+          plugins: [durabilityPlugin(provider)] as const,
+        });
+        yield* executor.durable.seed();
+
+        const fiber = yield* Effect.forkChild(
+          executor.connections.create({
+            owner: "org",
+            name: ConnectionName.make("main"),
+            integration: INTEG,
+            template: TEMPLATE,
+            values: { first: "a-1", second: "a-2" },
+          }),
+        );
+        yield* Deferred.await(secondWriteEntered);
+
+        // While the first create is parked in its provider write, the user
+        // removes the connection and recreates it with different secrets.
+        yield* executor.connections.remove({
+          owner: "org",
+          integration: INTEG,
+          name: ConnectionName.make("main"),
+        });
+        yield* executor.connections.create({
+          owner: "org",
+          name: ConnectionName.make("main"),
+          integration: INTEG,
+          template: TEMPLATE,
+          values: { first: "c-1", second: "c-2" },
+        });
+
+        // Release the parked write: the first create fails and compensates
+        // late, against a name it no longer owns.
+        yield* Deferred.succeed(releaseSecondWrite, undefined);
+        const exit = yield* Fiber.await(fiber);
+        expect(Exit.isFailure(exit)).toBe(true);
+
+        // The replacement row AND its credentials survive.
+        const rows = yield* executor.connections.list();
+        expect(rows.length).toBe(1);
+        expect(String(rows[0]?.name)).toBe("main");
+        expect(store.get("connection:org:vercel:main:first")).toBe("c-1");
+        expect(store.get("connection:org:vercel:main:second")).toBe("c-2");
+      }),
+    ),
+  );
+
+  // fumadb's `deleteMany` returns void, so the guarded delete cannot report
+  // whether it removed anything. Under read-committed isolation the identity
+  // read and the delete can straddle a concurrent remove/recreate: the read
+  // sees this create's row, then the delete matches ZERO rows because a
+  // successor already holds the name. Treating that zero-row delete as "our
+  // row is gone, the items are ours to undo" destroys the successor's freshly
+  // written secrets at the same deterministic item ids. The confirmation read
+  // after the guarded delete, in the same transaction, must observe the
+  // surviving row, skip ALL item deletion, and say so.
+  it.effect("a zero-row guarded delete never touches a successor's credentials", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const secondWriteEntered = yield* Deferred.make<void>();
+        const releaseSecondWrite = yield* Deferred.make<void>();
+        const store = new Map<string, string>();
+        let parkNextSecondWrite = true;
+        const provider = trackingProvider(store, {
+          set: (id, value) => {
+            if (String(id).endsWith(":second") && parkNextSecondWrite) {
+              parkNextSecondWrite = false;
+              return Deferred.succeed(secondWriteEntered, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseSecondWrite)),
+                Effect.andThen(
+                  Effect.fail(
+                    new StorageError({ message: "provider write refused", cause: undefined }),
+                  ),
+                ),
+              );
+            }
+            return Effect.sync(() => void store.set(String(id), value));
+          },
+        });
+        const raceState = { armed: false };
+        const config = makeTestConfig({ plugins: [durabilityPlugin(provider)] as const });
+        const executor = yield* createExecutor({
+          ...config,
+          db: staleCompensationRead(config.db, raceState),
+        });
+        yield* executor.durable.seed();
+
+        const infos: string[] = [];
+        const capture = Logger.make<unknown, void>((options) => {
+          if (options.logLevel === "Info") {
+            infos.push(Inspectable.toStringUnknown(options.message, 0));
+          }
+        });
+        const fiber = yield* Effect.forkChild(
+          executor.connections
+            .create({
+              owner: "org",
+              name: ConnectionName.make("main"),
+              integration: INTEG,
+              template: TEMPLATE,
+              values: { first: "a-1", second: "a-2" },
+            })
+            .pipe(Effect.provide(Logger.layer([capture]))),
+        );
+        yield* Deferred.await(secondWriteEntered);
+
+        // While the first create is parked in its provider write, the user
+        // removes the connection and recreates it with different secrets.
+        yield* executor.connections.remove({
+          owner: "org",
+          integration: INTEG,
+          name: ConnectionName.make("main"),
+        });
+        yield* executor.connections.create({
+          owner: "org",
+          name: ConnectionName.make("main"),
+          integration: INTEG,
+          template: TEMPLATE,
+          values: { first: "c-1", second: "c-2" },
+        });
+
+        // Arm the stale read and release the parked write: compensation's
+        // identity read sees the raced create's own row (the race), its
+        // guarded delete then removes zero rows.
+        raceState.armed = true;
+        yield* Deferred.succeed(releaseSecondWrite, undefined);
+        const exit = yield* Fiber.await(fiber);
+        expect(Exit.isFailure(exit)).toBe(true);
+
+        // The successor row AND its credentials survive untouched, and the
+        // skip was reported, not silent.
+        const rows = yield* executor.connections.list();
+        expect(rows.length).toBe(1);
+        expect(String(rows[0]?.name)).toBe("main");
+        expect(store.get("connection:org:vercel:main:first")).toBe("c-1");
+        expect(store.get("connection:org:vercel:main:second")).toBe("c-2");
+        expect(infos.some((line) => line.includes("removed nothing"))).toBe(true);
+      }),
+    ),
+  );
+
+  // The confirmation read after the guarded delete can itself fail. On an
+  // interactive adapter that failure rolls the delete back with the
+  // transaction, so "stranded" would be truthful — but on an auto-commit
+  // adapter (Cloudflare D1 runs `interactiveTransactions: false`) every
+  // statement commits immediately: the delete has already removed the row
+  // when the read fails, and a stranded-row claim would be false. The row
+  // state is genuinely unknown at this layer, so the create must say exactly
+  // that — skip ALL credential-item deletion and report the row as
+  // unconfirmed, never as stranded.
+  it.effect("a failed confirmation read skips item cleanup and reports the row unconfirmed", () =>
+    Effect.gen(function* () {
+      const store = new Map<string, string>();
+      const provider = trackingProvider(store, {
+        set: (id, value) =>
+          String(id).endsWith(":second")
+            ? Effect.fail(new StorageError({ message: "provider write refused", cause: undefined }))
+            : Effect.sync(() => void store.set(String(id), value)),
+      });
+      const readState = { armed: false };
+      const config = makeTestConfig({ plugins: [durabilityPlugin(provider)] as const });
+      const executor = yield* createExecutor({
+        ...config,
+        db: failableConfirmationRead(config.db, readState),
+      });
+      yield* executor.durable.seed();
+      readState.armed = true;
+
+      const errors: string[] = [];
+      const capture = Logger.make<unknown, void>((options) => {
+        if (options.logLevel === "Error") {
+          errors.push(Inspectable.toStringUnknown(options.message, 0));
+        }
+      });
+      const result = yield* Effect.result(
+        executor.connections
+          .create({
+            owner: "org",
+            name: ConnectionName.make("main"),
+            integration: INTEG,
+            template: TEMPLATE,
+            values: { first: "1", second: "2" },
+          })
+          .pipe(Effect.provide(Logger.layer([capture]))),
+      );
+
+      // Non-vacuous: the armed rejection fired, so the statement that failed
+      // really was the confirmation read, after the guarded delete ran.
+      expect(readState.armed).toBe(false);
+
+      expect(Result.isFailure(result)).toBe(true);
+      if (!Result.isFailure(result)) return;
+      const failure = result.failure;
+      expect(Predicate.isTagged("StorageError")(failure)).toBe(true);
+      if (!Predicate.isTagged("StorageError")(failure)) return;
+      // The error names the connection and reports the unconfirmed state; it
+      // must NOT claim the row is stranded — on an auto-commit adapter the
+      // delete already committed and the row is gone.
+      expect(failure.message).toContain("main");
+      expect(failure.message).toContain("vercel");
+      expect(failure.message).toContain("could not be confirmed");
+      expect(failure.message).not.toContain("stranded");
+      // The original write failure is retained as the cause, not replaced.
+      const isStorageError = (u: unknown): u is StorageError =>
+        Predicate.isTagged("StorageError")(u);
+      expect(isStorageError(failure.cause)).toBe(true);
+      if (!isStorageError(failure.cause)) return;
+      expect(failure.cause.message).toBe("provider write refused");
+
+      // The unknown outcome skips ALL credential-item deletion: the item that
+      // landed before the failed write is untouched.
+      expect(store.get("connection:org:vercel:main:first")).toBe("1");
+      // The log reports the unconfirmed state, not a stranded-row claim.
+      expect(errors.some((line) => line.includes("could not confirm"))).toBe(true);
+      expect(errors.every((line) => !line.includes("stranded a connection row"))).toBe(true);
+    }),
+  );
+
+  // The guarded delete STATEMENT can itself reject. On an interactive adapter
+  // the rejection rolls the transaction back and the row survives — but on an
+  // auto-commit adapter (Cloudflare D1) the statement may have executed
+  // before the rejection surfaced, so a definitive stranded-row claim would
+  // be false. Once the delete has been attempted, the row state is genuinely
+  // unknown at this layer: the create must skip ALL credential-item deletion
+  // and report the delete as unconfirmed, never as stranded.
+  it.effect("a rejected delete statement skips item cleanup and reports the row unconfirmed", () =>
+    Effect.gen(function* () {
+      let failRowDelete = false;
+      const store = new Map<string, string>();
+      const provider = trackingProvider(store, {
+        set: (id, value) =>
+          String(id).endsWith(":second")
+            ? Effect.fail(new StorageError({ message: "provider write refused", cause: undefined }))
+            : Effect.sync(() => void store.set(String(id), value)),
+      });
+      const config = makeTestConfig({ plugins: [durabilityPlugin(provider)] as const });
+      const executor = yield* createExecutor({
+        ...config,
+        db: failableConnectionDeletes(config.db, () => failRowDelete),
+      });
+      yield* executor.durable.seed();
+      failRowDelete = true;
+
+      const errors: string[] = [];
+      const capture = Logger.make<unknown, void>((options) => {
+        if (options.logLevel === "Error") {
+          errors.push(Inspectable.toStringUnknown(options.message, 0));
+        }
+      });
+      const result = yield* Effect.result(
+        executor.connections
+          .create({
+            owner: "org",
+            name: ConnectionName.make("main"),
+            integration: INTEG,
+            template: TEMPLATE,
+            values: { first: "1", second: "2" },
+          })
+          .pipe(Effect.provide(Logger.layer([capture]))),
+      );
+
+      expect(Result.isFailure(result)).toBe(true);
+      if (!Result.isFailure(result)) return;
+      const failure = result.failure;
+      expect(Predicate.isTagged("StorageError")(failure)).toBe(true);
+      if (!Predicate.isTagged("StorageError")(failure)) return;
+      // The error names the connection and reports the unconfirmed state; it
+      // must NOT claim the row is stranded — on an auto-commit adapter the
+      // delete may already have executed before the rejection surfaced.
+      expect(failure.message).toContain("main");
+      expect(failure.message).toContain("vercel");
+      expect(failure.message).toContain("could not be confirmed");
+      expect(failure.message).not.toContain("stranded");
+      // The original write failure is retained as the cause, not replaced.
+      const isStorageError = (u: unknown): u is StorageError =>
+        Predicate.isTagged("StorageError")(u);
+      expect(isStorageError(failure.cause)).toBe(true);
+      if (!isStorageError(failure.cause)) return;
+      expect(failure.cause.message).toBe("provider write refused");
+
+      // The unknown outcome skips ALL credential-item deletion: the item that
+      // landed before the failed write is untouched.
+      expect(store.get("connection:org:vercel:main:first")).toBe("1");
+      // The log reports the unconfirmed state, not a stranded-row claim.
+      expect(errors.some((line) => line.includes("could not confirm"))).toBe(true);
+      expect(errors.every((line) => !line.includes("stranded a connection row"))).toBe(true);
+
+      // Non-vacuous: the armed proxy rejected the delete statement without
+      // running it, so on this interactive adapter the row survived.
+      failRowDelete = false;
+      const rows = yield* executor.connections.list();
+      expect(rows.length).toBe(1);
+      expect(String(rows[0]?.name)).toBe("main");
+    }),
+  );
+
+  // A provider write can die with a defect instead of failing. The stranded-
+  // row promise must hold there too: a defect followed by a compensating
+  // delete that fails before its delete statement is issued surfaces the
+  // same typed StorageError naming the stranded connection, not an anonymous
+  // crash.
+  it.effect("a defect followed by a failed row delete still names the stranded connection", () =>
+    Effect.gen(function* () {
+      let failRowDelete = false;
+      const store = new Map<string, string>();
+      const provider = trackingProvider(store, {
+        set: (id, value) =>
+          String(id).endsWith(":second")
+            ? Effect.die("provider crashed")
+            : Effect.sync(() => void store.set(String(id), value)),
+      });
+      const config = makeTestConfig({ plugins: [durabilityPlugin(provider)] as const });
+      const executor = yield* createExecutor({
+        ...config,
+        db: failableCompensationRowDelete(config.db, () => failRowDelete),
+      });
+      yield* executor.durable.seed();
+      failRowDelete = true;
+
+      const exit = yield* Effect.exit(
+        executor.connections.create({
+          owner: "org",
+          name: ConnectionName.make("main"),
+          integration: INTEG,
+          template: TEMPLATE,
+          values: { first: "1", second: "2" },
+        }),
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (!Exit.isFailure(exit)) return;
+      // Not an anonymous defect: the typed error is on the failure channel.
+      expect(Cause.hasFails(exit.cause)).toBe(true);
+      const failure = Cause.squash(exit.cause);
+      const isStorageError = (u: unknown): u is StorageError =>
+        Predicate.isTagged("StorageError")(u);
+      expect(isStorageError(failure)).toBe(true);
+      if (!isStorageError(failure)) return;
+      expect(failure.message).toContain("main");
+      expect(failure.message).toContain("vercel");
+      expect(failure.message).toContain("stranded");
+      // The original defect is retained as the cause, not replaced.
+      expect(failure.cause).toBe("provider crashed");
+
+      // Non-vacuous: the row the error names is still there.
+      failRowDelete = false;
+      const rows = yield* executor.connections.list();
+      expect(rows.length).toBe(1);
+      expect(String(rows[0]?.name)).toBe("main");
+    }),
+  );
+
+  // Interruption cannot carry a typed error — interrupting wins over failing
+  // — so when an interrupted create cannot delete its row (compensation
+  // fails before the delete statement is issued, leaving the row
+  // definitively stranded), the stranded row is reported through a loud
+  // error log and the create stays an interruption. The items that landed
+  // before the interrupt stay with the stranded row: credential teardown is
+  // gated on the row delete succeeding.
+  it.effect("an interrupted create with a failed row delete logs the stranded row", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let failRowDelete = false;
+        const secondWriteEntered = yield* Deferred.make<void>();
+        const store = new Map<string, string>();
+        const provider = trackingProvider(store, {
+          set: (id, value) =>
+            String(id).endsWith(":second")
+              ? Deferred.succeed(secondWriteEntered, undefined).pipe(Effect.andThen(Effect.never))
+              : Effect.sync(() => void store.set(String(id), value)),
+        });
+        const config = makeTestConfig({ plugins: [durabilityPlugin(provider)] as const });
+        const executor = yield* createExecutor({
+          ...config,
+          db: failableCompensationRowDelete(config.db, () => failRowDelete),
+        });
+        yield* executor.durable.seed();
+
+        const errors: string[] = [];
+        const capture = Logger.make<unknown, void>((options) => {
+          if (options.logLevel === "Error") {
+            errors.push(Inspectable.toStringUnknown(options.message, 0));
+          }
+        });
+        const fiber = yield* Effect.forkChild(
+          executor.connections
+            .create({
+              owner: "org",
+              name: ConnectionName.make("main"),
+              integration: INTEG,
+              template: TEMPLATE,
+              values: { first: "1", second: "2" },
+            })
+            .pipe(Effect.provide(Logger.layer([capture]))),
+        );
+        yield* Deferred.await(secondWriteEntered);
+        failRowDelete = true;
+        yield* Fiber.interrupt(fiber);
+        const exit = yield* Fiber.await(fiber);
+
+        // Still an interruption — and the stranded row was reported loudly.
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (!Exit.isFailure(exit)) return;
+        expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+        expect(errors.some((line) => line.includes("stranded"))).toBe(true);
+
+        // Non-vacuous: the row survived the failed delete, and the item that
+        // landed before the interrupt stayed with it.
+        failRowDelete = false;
+        const rows = yield* executor.connections.list();
+        expect(rows.length).toBe(1);
+        expect(String(rows[0]?.name)).toBe("main");
+        expect(store.size).toBe(1);
+      }),
+    ),
   );
 });
 

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import {
   ConnectionName,
@@ -605,6 +607,19 @@ export const connectionLabelForHost = (
   integrationName: string,
   organizationId: string | null,
 ): string => label.trim() || `${ownerLabelForHost(owner, organizationId)} ${integrationName}`;
+
+/** The create endpoint rejected the name as taken (409). Like
+ *  `isIntegrationAlreadyExistsExit`: the error's `message` is a getter derived
+ *  from its fields, so it doesn't survive the wire — match the tag and rebuild
+ *  the message client-side. */
+export const isConnectionAlreadyExistsExit = (exit: Exit.Exit<unknown, unknown>): boolean =>
+  Option.match(Exit.findErrorOption(exit), {
+    onNone: () => false,
+    onSome: Predicate.isTagged("ConnectionAlreadyExistsError"),
+  });
+
+export const connectionExistsMessage = (label: string): string =>
+  `A connection named "${label}" already exists. Pick a different name, or remove the existing connection first.`;
 
 /** The default owner a new connection is saved under when the user makes no
  *  explicit choice. Personal: a connection is most often a personal credential. */
@@ -1747,7 +1762,8 @@ function AddAccountModalView(props: AddAccountModalProps) {
   const showSavedToPicker = !oauthRegistering && savedToOptions.length > 1;
   // OAuth mints a NEW connection per connect, so its preview shows the
   // uniquified name (`personalGmail2`); credential saves keep the plain
-  // derivation (they surface an explicit overwrite through the same name).
+  // derivation, because a save under a taken name is a conflict the server
+  // rejects rather than something the client silently renames around.
   const callableName = isOAuth
     ? previewConnectionName(label, savedToOwner)
     : connectionNameFrom(label, savedToOwner, integrationName, organizationId);
@@ -1982,7 +1998,16 @@ function AddAccountModalView(props: AddAccountModalProps) {
     });
     if (Exit.isFailure(exit)) {
       setSubmitting(false);
-      toast.error(messageFromExit(exit, "Failed to add connection"));
+      // The conflict error's message is a getter derived from its fields, so
+      // it doesn't survive the wire — rebuild it from the tag (the same
+      // pattern as isIntegrationAlreadyExistsExit).
+      toast.error(
+        isConnectionAlreadyExistsExit(exit)
+          ? connectionExistsMessage(
+              connectionLabelForHost(label, owner, integrationName, organizationId),
+            )
+          : messageFromExit(exit, "Failed to add connection"),
+      );
       return;
     }
     toast.success("Connection added");

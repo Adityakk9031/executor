@@ -1,12 +1,15 @@
 import {
+  Cause,
   Deferred,
   Duration,
   Effect,
+  Exit,
   Fiber,
   Inspectable,
   Layer,
   Option,
   Predicate,
+  Ref,
   Schema,
   Semaphore,
 } from "effect";
@@ -81,6 +84,7 @@ import {
 } from "./artifact";
 import {
   ArtifactNotFoundError,
+  ConnectionAlreadyExistsError,
   ConnectionNotFoundError,
   CredentialProviderNotRegisteredError,
   CredentialResolutionError,
@@ -385,6 +389,7 @@ export type Executor<TPlugins extends readonly AnyPlugin[] = readonly []> = {
     ) => Effect.Effect<
       Connection,
       | IntegrationNotFoundError
+      | ConnectionAlreadyExistsError
       | CredentialProviderNotRegisteredError
       | InvalidConnectionInputError
       | StorageFailure
@@ -3437,6 +3442,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
     ): Effect.Effect<
       Connection,
       | IntegrationNotFoundError
+      | ConnectionAlreadyExistsError
       | CredentialProviderNotRegisteredError
       | InvalidConnectionInputError
       | StorageFailure
@@ -3455,6 +3461,24 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         if (!integrationRow) {
           return yield* new IntegrationNotFoundError({
             slug: input.integration,
+          });
+        }
+
+        // Create is never a replace. This early check answers the common case
+        // with a typed 409 before any other work, but it is NOT the guard
+        // against concurrent creates — the row insert below is: the
+        // transaction re-checks, the primary key breaks the tie, and the
+        // provider write happens only after the insert wins.
+        const duplicate = yield* findConnectionRow({
+          owner: input.owner,
+          integration: input.integration,
+          name,
+        });
+        if (duplicate) {
+          return yield* new ConnectionAlreadyExistsError({
+            owner: input.owner,
+            integration: input.integration,
+            name,
           });
         }
 
@@ -3484,6 +3508,15 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         }
         let providerKey: string;
         const itemIds: Record<string, string> = {};
+        // Pasted-value provider writes, built here but run only AFTER this
+        // create wins the row insert below. Each entry carries its own undo
+        // so a write that does not complete can tear down exactly the items
+        // it already stored.
+        const pastedWrites: Array<{
+          readonly itemId: ProviderItemId;
+          readonly write: Effect.Effect<void, StorageFailure>;
+          readonly remove: Effect.Effect<void, StorageFailure> | null;
+        }> = [];
         if (external.length > 0 && pasted.length > 0) {
           return yield* new InvalidConnectionInputError({
             message: "A connection cannot mix pasted and external-provider inputs.",
@@ -3519,8 +3552,17 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           providerKey = String(provider.key);
           for (const i of pasted) {
             const itemId = `connection:${input.owner}:${input.integration}:${name}:${i.variable}`;
+            // Deferred until the row insert wins: the item id is deterministic,
+            // so writing here would overwrite the credential of an existing (or
+            // concurrently created) connection with the same name even when
+            // this create loses the row conflict.
             if ("value" in i.origin && provider.set) {
-              yield* provider.set(ProviderItemId.make(itemId), i.origin.value);
+              const id = ProviderItemId.make(itemId);
+              pastedWrites.push({
+                itemId: id,
+                write: provider.set(id, i.origin.value),
+                remove: provider.delete ? provider.delete(id) : null,
+              });
             }
             itemIds[i.variable] = itemId;
           }
@@ -3531,56 +3573,331 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           catch: (cause) => storageFailureFromUnknown("invalid owner", cause),
         });
         const now = new Date();
-        yield* transaction(
+        // The storage surrogate id of the row THIS create inserted. The
+        // composite key (owner, integration, name) can change hands while a
+        // failed create is still compensating, and `created_at` round-trips
+        // at second precision, so neither identifies OUR row — only `row_id`
+        // does. `FumaRow` deliberately hides `row_id` from domain rows, so it
+        // is read through a narrow cast. Every adapter generates it ORM-side
+        // on insert; a create result without it is a broken storage contract
+        // and fails here, inside the transaction, before any provider write.
+        const rowIdOf = (row: unknown): string | null => {
+          const value = row == null ? null : (row as Record<string, unknown>)["row_id"];
+          return typeof value === "string" ? value : null;
+        };
+        const insertedRowId = yield* transaction(
           Effect.gen(function* () {
             const existing = yield* findConnectionRow({
               owner: input.owner,
               integration: input.integration,
               name,
             });
-            const set: Record<string, unknown> = {
+            if (existing) {
+              return yield* new ConnectionAlreadyExistsError({
+                owner: input.owner,
+                integration: input.integration,
+                name,
+              });
+            }
+            const inserted = yield* core.create("connection", {
+              tenant: keys.tenant,
+              owner: keys.owner,
+              subject: keys.subject,
+              integration: String(input.integration),
+              name: String(name),
               template: String(input.template),
               provider: providerKey,
               item_ids: itemIds,
               identity_label: input.identityLabel ?? null,
-              // Re-saving a credential keeps an existing curated description
-              // unless the caller explicitly provides one.
-              ...(input.description !== undefined ? { description: input.description } : {}),
+              description: input.description ?? null,
+              oauth_client: null,
+              refresh_item_id: null,
+              expires_at: null,
+              oauth_scope: null,
+              provider_state: null,
+              created_at: now,
               updated_at: now,
-            };
-            if (existing) {
-              yield* core.updateMany("connection", {
-                where: (b: AnyCb) =>
-                  b.and(
-                    byOwner(input.owner)(b),
-                    b("integration", "=", String(input.integration)),
-                    b("name", "=", String(name)),
-                  ),
-                set,
-              });
-            } else {
-              yield* core.create("connection", {
-                tenant: keys.tenant,
-                owner: keys.owner,
-                subject: keys.subject,
-                integration: String(input.integration),
-                name: String(name),
-                template: String(input.template),
-                provider: providerKey,
-                item_ids: itemIds,
-                identity_label: input.identityLabel ?? null,
-                description: input.description ?? null,
-                oauth_client: null,
-                refresh_item_id: null,
-                expires_at: null,
-                oauth_scope: null,
-                provider_state: null,
-                created_at: now,
-                updated_at: now,
+            });
+            const rowId = rowIdOf(inserted);
+            if (rowId === null) {
+              return yield* new StorageError({
+                message:
+                  "Storage adapter did not return the inserted connection row's row_id; the create cannot be compensated safely.",
+                cause: undefined,
               });
             }
+            return rowId;
           }),
+        ).pipe(
+          // Both racers can observe absence and reach the insert; the primary
+          // key then picks the winner. Map the loser's constraint violation to
+          // the same typed 409 the pre-checks produce.
+          Effect.catchTag("UniqueViolationError", () =>
+            Effect.fail(
+              new ConnectionAlreadyExistsError({
+                owner: input.owner,
+                integration: input.integration,
+                name,
+              }),
+            ),
+          ),
         );
+
+        // Winner-only credential write: only the create whose row insert
+        // committed may touch the provider — a pasted value's item id is
+        // deterministic, so a losing create would clobber the winner's (or a
+        // pre-existing connection's) secret. The writes run inline, straight
+        // after the transactional insert above and BEFORE the connection's
+        // tools are produced below: GraphQL/MCP plugins do authenticated
+        // introspection via `getValues()` at tool-production time, so the
+        // credentials must exist by then or the catalog is discovered
+        // empty/incomplete and never re-discovered.
+        //
+        // Known limitation (pre-existing, not addressed here): `transaction`
+        // nests by pass-through, so a create running inside an enclosing
+        // plugin `ctx.transaction` writes credentials before the OUTER
+        // commit. If that transaction rolls back, the row vanishes with it
+        // but the credential items survive as orphans at their deterministic
+        // ids — inert until the next same-shaped create overwrites them.
+        // External credential stores cannot join a database transaction, and
+        // deferring the write past the outer commit was tried and reverted:
+        // it broke the tool-production ordering above and could not guarantee
+        // the deferred hook runs exactly once under interruption.
+        if (pastedWrites.length > 0) {
+          const written: ProviderItemId[] = [];
+          const writeAll = Effect.gen(function* () {
+            for (const entry of pastedWrites) {
+              yield* entry.write;
+              written.push(entry.itemId);
+            }
+          });
+
+          // While the committed row exists no concurrent create can win, so
+          // on an incomplete write it is ours to tear down — a surviving row
+          // whose item_ids were never stored would 409 every retry while
+          // failing every invocation with `connection_value_missing`. But
+          // "ours" needs proof before anything is deleted: the composite key
+          // (owner, integration, name) can change hands while compensation is
+          // still pending (provider calls can be slow) — a concurrent remove
+          // frees the name, a new create takes it and writes fresh secrets at
+          // the SAME deterministic item ids. The one column that tells our
+          // row apart from such a successor is `insertedRowId`, so the row
+          // delete carries it in its WHERE (guarded delete), and the identity
+          // check runs in the same transaction as the delete so both see one
+          // consistent row.
+          //
+          // Order matters: the ROW is deleted first, and the credential items
+          // are undone only when the guarded delete actually removed OUR row.
+          // If the row is already gone or replaced, losing compensation is
+          // correct — the remover already cleaned up, and the deterministic
+          // item ids may by now carry the successor's secrets, so deleting
+          // them here would clobber a healthy connection. Nothing here is
+          // silent: every failed or impossible undo is logged, and
+          // `rowOutcome` converts a stranded row into an error that names it.
+          //
+          // Known limitations, accepted deliberately: provider credential
+          // stores expose no conditional delete, so perfect cleanup under a
+          // concurrent remove/recreate is impossible at this layer, and no
+          // further machinery is built for it.
+          // - Under concurrent remove/recreate, compensation may skip item
+          //   deletion, leaving orphaned credential values at the
+          //   deterministic item ids. Orphans are inert without a row and the
+          //   next same-shaped create overwrites them; orphans are preferred
+          //   over the alternative, clobbering a live successor's secrets.
+          // - A successor that overwrites one variable, fails before the
+          //   next, and then also fails its own compensating row delete
+          //   leaves a stranded connection that can resolve one stale
+          //   predecessor value. Closing this needs provider-side conditional
+          //   deletes, which do not exist; the stranded state is surfaced
+          //   loudly as the typed StorageError below, naming the connection.
+          // - On a non-transactional adapter (statements auto-commit, no
+          //   rollback — Cloudflare D1) the guarded delete may already have
+          //   committed when its own rejection surfaces or when the
+          //   confirmation read fails; the items are left in place as inert
+          //   orphans.
+          const rowOutcomeRef = yield* Ref.make<
+            "removed" | "superseded" | "overtaken" | "failed" | "unknown"
+          >("removed");
+          const logContext = {
+            owner: input.owner,
+            integration: String(input.integration),
+            connection: String(name),
+          };
+          const compensate = Effect.gen(function* () {
+            // Progress marker for the transaction below. It distinguishes
+            // "compensation failed before the guarded delete was issued"
+            // (nothing can have been deleted; a surviving row is truthfully
+            // stranded) from "the delete was attempted". Set BEFORE the
+            // delete statement is issued, not after it resolves: a rejection
+            // DURING the statement is already ambiguous on an auto-commit
+            // adapter (D1), where the delete may have executed before the
+            // rejection surfaced. Deliberately a plain mutable outside the
+            // transaction: a rollback cannot un-set it, which is the point —
+            // it records that the statement was issued, not committed state.
+            // On an interactive adapter a failure from the attempt onward
+            // rolls the delete back; on an auto-commit adapter the delete
+            // may already have committed. This layer cannot tell which world
+            // it is in, so any failure from the attempt onward is reported
+            // as "unknown", never as a stranded row.
+            let rowDeleteAttempted = false;
+            const rowOutcome = yield* transaction(
+              Effect.gen(function* () {
+                const current = yield* findConnectionRow({
+                  owner: input.owner,
+                  integration: input.integration,
+                  name,
+                });
+                if (rowIdOf(current) !== insertedRowId) {
+                  return "superseded" as const;
+                }
+                // From here on a failure can no longer prove the row
+                // survived: the statement below may execute before its
+                // rejection surfaces.
+                rowDeleteAttempted = true;
+                yield* core.deleteMany("connection", {
+                  where: (b: AnyCb) =>
+                    b.and(
+                      byOwner(input.owner)(b),
+                      b("integration", "=", String(input.integration)),
+                      b("name", "=", String(name)),
+                      // Even if the row changed hands between the read above
+                      // and this statement, only OUR row can match.
+                      b("row_id", "=", insertedRowId),
+                    ),
+                });
+                // `deleteMany` returns void, so whether the guarded delete
+                // removed OUR row cannot be read off its result — and the
+                // identity read above and the delete can straddle a
+                // concurrent remove/recreate under weak isolation. Confirm
+                // against the table instead, in this same transaction: the
+                // guarded delete could only ever match our row, so any row
+                // still holding the name is a successor (or restored
+                // original) — our delete removed nothing, and the surviving
+                // row's owner owns both the name and the credential items.
+                // Only when no row remains is ours provably gone and the
+                // items ours to undo. A successor inserting after this
+                // transaction commits can still interleave with the item
+                // deletes below; that residual is accepted (see the
+                // known-limitations note above).
+                const survivor = yield* findConnectionRow({
+                  owner: input.owner,
+                  integration: input.integration,
+                  name,
+                });
+                if (survivor !== null) {
+                  return "overtaken" as const;
+                }
+                return "removed" as const;
+              }),
+            ).pipe(
+              Effect.catchCause((cause) =>
+                rowDeleteAttempted
+                  ? Effect.logError(
+                      "executor connection create could not confirm its compensating row delete: the connection row may be deleted or stranded",
+                      { ...logContext, cause },
+                    ).pipe(Effect.as("unknown" as const))
+                  : Effect.logError(
+                      "executor connection create stranded a connection row it could not delete",
+                      { ...logContext, cause },
+                    ).pipe(Effect.as("failed" as const)),
+              ),
+            );
+            yield* Ref.set(rowOutcomeRef, rowOutcome);
+            if (rowOutcome === "superseded") {
+              // A concurrent remove took our row, and a successor may already
+              // own the name and the item ids. The remover cleaned up;
+              // nothing left here is ours to touch.
+              yield* Effect.logInfo(
+                "executor connection create skipped compensation: the connection row was already removed or replaced",
+                logContext,
+              );
+              return;
+            }
+            if (rowOutcome === "overtaken") {
+              // The guarded delete removed nothing and another row now holds
+              // the name: a concurrent remove/recreate interleaved between
+              // the identity read and the delete. The surviving row's owner
+              // owns the name and the credential items; deleting the items
+              // here would destroy that live connection's secrets.
+              yield* Effect.logInfo(
+                "executor connection create skipped credential cleanup: its guarded row delete removed nothing and another connection now holds the name; the surviving connection owns the credential items",
+                logContext,
+              );
+              return;
+            }
+            if (rowOutcome === "failed") {
+              // Compensation failed before the row delete was even issued,
+              // so the row — still ours — keeps holding the name together
+              // with the items that already landed. Leave the items in
+              // place (they belong to the
+              // stranded row the caller is told to remove) and let the exit
+              // handling below surface the error.
+              return;
+            }
+            if (rowOutcome === "unknown") {
+              // The guarded delete was attempted but its outcome could not
+              // be confirmed — the statement itself rejected, or the
+              // confirmation read after it failed — so whether OUR row
+              // survived cannot be known: an interactive adapter rolled the
+              // delete back with the transaction (row stranded), a
+              // non-transactional adapter may have already committed it (row
+              // gone). Deleting the items under a surviving row
+              // would strand it valueless, so ALL item deletion is skipped;
+              // the exit handling below reports the unconfirmed state.
+              return;
+            }
+            for (const entry of pastedWrites) {
+              if (!written.includes(entry.itemId)) continue;
+              if (entry.remove === null) {
+                // A provider exposing `set` without `delete` cannot undo its
+                // own writes; say so instead of silently skipping.
+                yield* Effect.logWarning(
+                  "executor connection create cannot undo a credential write: the provider has no delete, so a partial credential may be stranded",
+                  { ...logContext, item: String(entry.itemId) },
+                );
+                continue;
+              }
+              yield* entry.remove.pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logError("executor connection create failed to undo a credential write", {
+                    ...logContext,
+                    item: String(entry.itemId),
+                    cause,
+                  }),
+                ),
+              );
+            }
+          });
+
+          // `onExit`, not `tapError`: compensation must also run when the
+          // write is interrupted or dies with a defect. The stranded-row
+          // promise must hold on every one of those exit shapes, so the exit
+          // is captured and re-raised by hand: a typed failure or a defect
+          // that left the row behind becomes the StorageError below, while an
+          // interruption cannot carry a typed error at all (interrupting wins
+          // over failing) — for it the loud log inside `compensate` is the
+          // only signal, and the interruption is re-raised untouched.
+          const writeExit = yield* writeAll.pipe(
+            Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : compensate)),
+            Effect.exit,
+          );
+          if (Exit.isFailure(writeExit)) {
+            const rowOutcome = yield* Ref.get(rowOutcomeRef);
+            if (rowOutcome === "failed" && !Cause.hasInterruptsOnly(writeExit.cause)) {
+              return yield* new StorageError({
+                message: `Failed to store credentials for connection ${input.owner}/${String(input.integration)}/${String(name)}, and the compensating delete also failed: the connection row is stranded with incomplete credentials and must be removed manually.`,
+                cause: Cause.squash(writeExit.cause),
+              });
+            }
+            if (rowOutcome === "unknown" && !Cause.hasInterruptsOnly(writeExit.cause)) {
+              return yield* new StorageError({
+                message: `Failed to store credentials for connection ${input.owner}/${String(input.integration)}/${String(name)}, and its compensating delete could not be confirmed: the connection row may be deleted or may remain with incomplete credentials; its credential items were left in place.`,
+                cause: Cause.squash(writeExit.cause),
+              });
+            }
+            return yield* Effect.failCause(writeExit.cause);
+          }
+        }
 
         // Record the sighting. The request seam (`makeScopedExecutor`) already
         // does this for every hosted call, so this is the belt for direct
@@ -3628,8 +3945,10 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
 
     // Mint (or re-mint) an OAuth connection: write the connection row with its
     // OAuth lifecycle fields (the access token is already stored in the provider
-    // by the OAuth service) + produce the connection's tools. Mirrors
-    // `connectionsCreate`'s upsert + tool-production, stamping the OAuth columns.
+    // by the OAuth service) + produce the connection's tools. Unlike
+    // `connectionsCreate` (which rejects an existing name), this path upserts on
+    // purpose: reconnect/refresh re-mints the SAME connection, stamping the
+    // OAuth columns.
     const mintOAuthConnection = (
       input: MintOAuthConnectionInput,
     ): Effect.Effect<Connection, StorageFailure> =>
