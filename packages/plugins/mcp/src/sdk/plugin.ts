@@ -253,6 +253,54 @@ const McpAddServerOutputSchema = Schema.Struct({
   slug: Schema.String,
 });
 
+const McpUpdateRemoteServerInputSchema = Schema.Struct({
+  slug: Schema.String,
+  transport: Schema.optional(Schema.Literal("remote")),
+  name: Schema.optional(Schema.String),
+  family: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  endpoint: Schema.optional(Schema.String),
+  remoteTransport: Schema.optional(McpRemoteTransport),
+  headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  queryParams: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  authenticationTemplate: Schema.optional(Schema.Array(McpAuthMethodInput)),
+  auth: Schema.optional(McpAuthShorthand),
+});
+
+const McpUpdateStdioServerInputSchema = Schema.Struct({
+  slug: Schema.String,
+  transport: Schema.Literal("stdio"),
+  name: Schema.optional(Schema.String),
+  family: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  command: Schema.optional(Schema.String),
+  args: Schema.optional(Schema.Array(Schema.String)),
+  envVars: Schema.optional(Schema.Array(Schema.String)),
+  env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  cwd: Schema.optional(Schema.String),
+  versionNegotiation: Schema.optional(McpStdioVersionNegotiation),
+});
+
+const McpUpdateServerInputSchema = Schema.Union([
+  McpUpdateRemoteServerInputSchema,
+  McpUpdateStdioServerInputSchema,
+]);
+
+const McpUpdateServerOutputSchema = Schema.Struct({
+  slug: Schema.String,
+});
+
+const McpConfigureAuthToolInputSchema = Schema.Struct({
+  slug: Schema.String,
+  authenticationTemplate: Schema.Array(McpAuthMethodInput),
+  mode: Schema.optional(Schema.Literals(["merge", "replace"])),
+});
+
+const McpConfigureAuthToolOutputSchema = Schema.Struct({
+  slug: Schema.String,
+  authenticationTemplate: Schema.Array(Schema.Unknown),
+});
+
 /** Input for the custom-method-create flow. `merge` (default) appends onto the
  *  integration's existing `authenticationTemplate`; `replace` swaps the whole
  *  declared set. Mirrors the OpenAPI/GraphQL `configureAuth` inputs. */
@@ -292,6 +340,7 @@ const McpProbeEndpointOutputSchema = Schema.Struct({
 export type McpRemoteServerInput = typeof McpRemoteServerInputSchema.Type;
 export type McpStdioServerInput = typeof McpStdioServerInputSchema.Type;
 export type McpServerInput = typeof McpAddServerInputSchema.Type;
+export type McpUpdateServerInput = typeof McpUpdateServerInputSchema.Type;
 export type McpProbeResult = typeof McpProbeEndpointOutputSchema.Type;
 export type McpProbeEndpointInput = typeof McpProbeEndpointInputSchema.Type;
 
@@ -311,6 +360,14 @@ const schemaToStaticToolSchema = <A, I>(schema: Schema.Decoder<A, I>): StaticToo
 
 const McpAddServerInputStandardSchema = schemaToStaticToolSchema(McpAddServerInputSchema);
 const McpAddServerOutputStandardSchema = schemaToStaticToolSchema(McpAddServerOutputSchema);
+const McpUpdateServerInputStandardSchema = schemaToStaticToolSchema(McpUpdateServerInputSchema);
+const McpUpdateServerOutputStandardSchema = schemaToStaticToolSchema(McpUpdateServerOutputSchema);
+const McpConfigureAuthToolInputStandardSchema = schemaToStaticToolSchema(
+  McpConfigureAuthToolInputSchema,
+);
+const McpConfigureAuthToolOutputStandardSchema = schemaToStaticToolSchema(
+  McpConfigureAuthToolOutputSchema,
+);
 const McpProbeEndpointInputStandardSchema = schemaToStaticToolSchema(McpProbeEndpointInputSchema);
 const McpProbeEndpointOutputStandardSchema = schemaToStaticToolSchema(McpProbeEndpointOutputSchema);
 const McpGetServerInputStandardSchema = schemaToStaticToolSchema(McpGetServerInputSchema);
@@ -1248,6 +1305,82 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           }),
         );
 
+      const updateServer = (input: McpUpdateServerInput) =>
+        Effect.gen(function* () {
+          const slug = slugFrom(input.slug);
+          const record = yield* ctx.core.integrations.get(slug);
+          if (!record) {
+            return yield* new McpConnectionError({
+              message: `MCP server not found: ${input.slug}`,
+              transport: "remote",
+            });
+          }
+          const current = parseMcpIntegrationConfig(record.config);
+          if (!current) {
+            return yield* new McpConnectionError({
+              message: `Invalid configuration for MCP server: ${input.slug}`,
+              transport: "remote",
+            });
+          }
+
+          let updatedConfig: McpIntegrationConfigType;
+          if (current.transport === "stdio") {
+            const stdioInput = input as typeof McpUpdateStdioServerInputSchema.Type;
+            let authenticationTemplate = current.authenticationTemplate;
+            if (stdioInput.envVars !== undefined) {
+              authenticationTemplate =
+                stdioInput.envVars.length > 0
+                  ? [{ slug: "stdio_env", kind: "stdio_env", vars: stdioInput.envVars }]
+                  : [{ slug: "none", kind: "none" }];
+            }
+            updatedConfig = {
+              transport: "stdio",
+              family: stdioInput.family ?? current.family,
+              command: stdioInput.command ?? current.command,
+              args: stdioInput.args ?? current.args,
+              cwd: stdioInput.cwd !== undefined ? stdioInput.cwd : current.cwd,
+              ...(stdioInput.versionNegotiation !== undefined
+                ? { versionNegotiation: stdioInput.versionNegotiation }
+                : current.versionNegotiation !== undefined
+                  ? { versionNegotiation: current.versionNegotiation }
+                  : {}),
+              ...(authenticationTemplate !== undefined ? { authenticationTemplate } : {}),
+            };
+          } else {
+            const remoteInput = input as typeof McpUpdateRemoteServerInputSchema.Type;
+            let authenticationTemplate = current.authenticationTemplate;
+            if (remoteInput.authenticationTemplate !== undefined) {
+              authenticationTemplate = normalizeMcpAuthMethods(
+                remoteInput.authenticationTemplate,
+              );
+            } else if (remoteInput.auth !== undefined) {
+              authenticationTemplate = [mcpAuthMethodFromShorthand(remoteInput.auth)];
+            }
+
+            updatedConfig = {
+              transport: "remote",
+              family: remoteInput.family ?? current.family,
+              endpoint: remoteInput.endpoint ?? current.endpoint,
+              remoteTransport: remoteInput.remoteTransport ?? current.remoteTransport,
+              headers: remoteInput.headers ?? current.headers,
+              queryParams: remoteInput.queryParams ?? current.queryParams,
+              authenticationTemplate,
+            };
+          }
+
+          yield* ctx.core.integrations.update(slug, {
+            ...(input.name !== undefined ? { name: input.name } : {}),
+            ...(input.description !== undefined ? { description: input.description } : {}),
+            config: updatedConfig,
+          });
+
+          return { slug: String(input.slug) };
+        }).pipe(
+          Effect.withSpan("mcp.plugin.update_server", {
+            attributes: { "mcp.integration.slug": input.slug },
+          }),
+        );
+
       /** Merge-append auth methods onto the integration's existing
        *  `authenticationTemplate` (custom-method-create flow), mirroring the
        *  OpenAPI/GraphQL `configureAuth`. Returns the merged array. A no-op
@@ -1289,6 +1422,7 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
       return {
         probeEndpoint,
         addServer,
+        updateServer,
         removeServer,
         reconcileStdioConnections,
         getServer,
@@ -1814,6 +1948,53 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
               );
             },
           }),
+          tool({
+            name: "updateServer",
+            description:
+              "Update the configuration of an existing registered MCP server (transport settings, endpoint/command, headers, query params, or auth templates).",
+            annotations: {
+              requiresApproval: true,
+              approvalDescription: "Update an MCP server",
+            },
+            inputSchema: McpUpdateServerInputStandardSchema,
+            outputSchema: McpUpdateServerOutputStandardSchema,
+            execute: (rawInput) => {
+              const input = rawInput as typeof McpUpdateServerInputSchema.Type;
+              return self.updateServer(input).pipe(
+                Effect.map(ToolResult.ok),
+                Effect.catchTag("McpConnectionError", ({ message, transport }) =>
+                  Effect.succeed(mcpToolFailure("mcp_connection_failed", message, { transport })),
+                ),
+              );
+            },
+          }),
+          tool({
+            name: "configureAuth",
+            description:
+              "Configure or update the authentication templates on a registered remote MCP server. In 'merge' mode (default), new auth methods are appended to existing ones; in 'replace' mode, the entire authentication template is replaced.",
+            annotations: {
+              requiresApproval: true,
+              approvalDescription: "Configure MCP server authentication",
+            },
+            inputSchema: McpConfigureAuthToolInputStandardSchema,
+            outputSchema: McpConfigureAuthToolOutputStandardSchema,
+            execute: (rawInput) => {
+              const input = rawInput as typeof McpConfigureAuthToolInputSchema.Type;
+              return self
+                .configureAuth(input.slug, {
+                  authenticationTemplate: input.authenticationTemplate,
+                  mode: input.mode ?? "merge",
+                })
+                .pipe(
+                  Effect.map((authenticationTemplate) =>
+                    ToolResult.ok({
+                      slug: input.slug,
+                      authenticationTemplate,
+                    }),
+                  ),
+                );
+            },
+          }),
         ],
       },
     ],
@@ -1836,6 +2017,9 @@ export interface McpPluginExtension {
     { readonly slug: string },
     McpExtensionFailure | IntegrationAlreadyExistsError
   >;
+  readonly updateServer: (
+    input: McpUpdateServerInput,
+  ) => Effect.Effect<{ readonly slug: string }, McpExtensionFailure>;
   readonly removeServer: (slug: string) => Effect.Effect<void, McpExtensionFailure>;
   /** Ensure every stdio integration has its default connection (migrating any
    *  legacy inline env into the secret store). Idempotent; safe to run at boot. */

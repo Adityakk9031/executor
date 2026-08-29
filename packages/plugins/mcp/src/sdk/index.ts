@@ -4,6 +4,7 @@ export {
   type McpPluginExtension,
   type McpPluginOptions,
   type McpServerInput,
+  type McpUpdateServerInput,
   type McpRemoteServerInput,
   type McpStdioServerInput,
   type McpProbeResult,

@@ -956,6 +956,76 @@ describe("mcpPlugin", () => {
     }),
   );
 
+  it.effect("agent tool updateServer updates MCP server config and auth template", () =>
+    Effect.gen(function* () {
+      const config = makeTestConfig({ plugins: [mcpPlugin()] as const });
+      const executor = yield* createExecutor(config);
+
+      yield* executor.execute(ToolAddress.make("executor.mcp.addServer"), {
+        name: "Initial MCP",
+        endpoint: "https://mcp1.example.com/mcp",
+        slug: "test_update_mcp",
+      });
+
+      const updated = yield* executor.execute(ToolAddress.make("executor.mcp.updateServer"), {
+        slug: "test_update_mcp",
+        name: "Updated MCP Display",
+        endpoint: "https://mcp2.example.com/mcp",
+        authenticationTemplate: [
+          {
+            type: "apiKey",
+            headers: { Authorization: ["Bearer ", { type: "variable", name: "token" }] },
+          },
+        ],
+      });
+      expect(updated).toMatchObject({
+        ok: true,
+        data: { slug: "test_update_mcp" },
+      });
+
+      const integration = yield* executor.integrations.get(IntegrationSlug.make("test_update_mcp"));
+      expect(integration?.name).toBe("Updated MCP Display");
+      expect(integration?.authMethods.map((m) => m.kind)).toEqual(["apikey"]);
+
+      yield* executor.close();
+      yield* Effect.promise(() => config.testDb.close());
+    }),
+  );
+
+  it.effect("agent tool configureAuth updates authentication templates on remote server", () =>
+    Effect.gen(function* () {
+      const config = makeTestConfig({ plugins: [mcpPlugin()] as const });
+      const executor = yield* createExecutor(config);
+
+      yield* executor.execute(ToolAddress.make("executor.mcp.addServer"), {
+        name: "Auth MCP",
+        endpoint: "https://auth.example.com/mcp",
+        slug: "test_auth_mcp",
+      });
+
+      const configured = yield* executor.execute(ToolAddress.make("executor.mcp.configureAuth"), {
+        slug: "test_auth_mcp",
+        authenticationTemplate: [
+          {
+            type: "apiKey",
+            headers: { "X-API-Key": [{ type: "variable", name: "apiKey" }] },
+          },
+        ],
+        mode: "replace",
+      });
+      expect(configured).toMatchObject({
+        ok: true,
+        data: { slug: "test_auth_mcp" },
+      });
+
+      const integration = yield* executor.integrations.get(IntegrationSlug.make("test_auth_mcp"));
+      expect(integration?.authMethods.map((m) => m.kind)).toEqual(["apikey"]);
+
+      yield* executor.close();
+      yield* Effect.promise(() => config.testDb.close());
+    }),
+  );
+
   for (const status of [401, 403] as const) {
     it.effect(`returns an auth tool failure when tools/call responds HTTP ${status}`, () =>
       Effect.scoped(

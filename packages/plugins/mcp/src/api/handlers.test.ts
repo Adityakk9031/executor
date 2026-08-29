@@ -25,6 +25,7 @@ const failingExtension: McpPluginExtension = {
   // oxlint-disable-next-line executor/no-error-constructor -- boundary: test injects a defect to verify opaque handler error responses
   probeEndpoint: () => Effect.die(new Error("Not implemented")),
   addServer: () => unused,
+  updateServer: () => unused,
   removeServer: () => unused,
   reconcileStdioConnections: () => unused,
   getServer: () => Effect.succeed(null),
