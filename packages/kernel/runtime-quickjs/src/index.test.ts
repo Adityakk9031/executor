@@ -433,3 +433,72 @@ describe("quickjs executor", () => {
     }),
   );
 });
+
+describe("quickjs worker executor (worker_threads)", () => {
+  const workerExecutor = makeQuickJsExecutor({ worker: true, timeoutMs: 5_000 });
+
+  it.effect("runs plain code and returns results in a worker thread", () =>
+    Effect.gen(function* () {
+      const result = yield* workerExecutor.execute(`return 10 + 20;`, makeTestInvoker({}));
+      expect(result.result).toBe(30);
+      expect(result.error).toBeUndefined();
+    }),
+  );
+
+  it.effect("handles bidirectional tool invocations across the worker thread boundary", () =>
+    Effect.gen(function* () {
+      const result = yield* workerExecutor.execute(
+        `
+        const user = await tools.users.get({ id: 42 });
+        return { name: user.name, doubled: user.id * 2 };
+        `,
+        makeTestInvoker({
+          "users.get": (args: any) => ({ id: args.id, name: "Alice" }),
+        }),
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.result).toEqual({ name: "Alice", doubled: 84 });
+    }),
+  );
+
+  it.effect("handles tool errors across the worker thread boundary", () =>
+    Effect.gen(function* () {
+      const result = yield* workerExecutor.execute(
+        `
+        try {
+          await tools.db.query({ sql: "SELECT * FROM secrets" });
+          return "unexpected";
+        } catch (err) {
+          return err instanceof Error ? err.message : String(err);
+        }
+        `,
+        makeTestInvoker({
+          "db.query": () => {
+            throw new Error("connection refused");
+          },
+        }),
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.result).toBe("Internal tool error");
+    }),
+  );
+
+  it.effect("preempts a CPU-bound loop in the worker thread without hanging the main thread", () =>
+    Effect.gen(function* () {
+      const timedWorkerExecutor = makeQuickJsExecutor({ worker: true, timeoutMs: 1_000 });
+      const result = yield* timedWorkerExecutor.execute(
+        `
+        const t0 = Date.now();
+        while (true) {}
+        return "unreachable";
+        `,
+        makeTestInvoker({}),
+      );
+
+      expect(result.result).toBeNull();
+      expect(result.error).toContain("QuickJS execution timed out after 1000ms");
+    }),
+  );
+});

@@ -68,9 +68,10 @@ export const SelfHostCodeExecutorProvider: Layer.Layer<CodeExecutorProvider> = L
   CodeExecutorProvider,
   () => {
     const { sandboxTimeoutMs } = loadConfig();
-    return makeQuickJsExecutor(
-      sandboxTimeoutMs === undefined ? {} : { timeoutMs: sandboxTimeoutMs },
-    );
+    return makeQuickJsExecutor({
+      ...(sandboxTimeoutMs === undefined ? {} : { timeoutMs: sandboxTimeoutMs }),
+      worker: true,
+    });
   },
 );
 

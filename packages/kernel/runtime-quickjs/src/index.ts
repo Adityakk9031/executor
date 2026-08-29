@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import {
   recoverExecutionBody,
   stripTypeScript,
@@ -7,6 +10,7 @@ import {
   type SandboxToolInvoker,
 } from "@executor-js/codemode-core";
 import * as Data from "effect/Data";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import {
   executeSealedBundle as runSealedBundleWith,
@@ -26,6 +30,7 @@ export type QuickJsExecutorOptions = {
   timeoutMs?: number;
   memoryLimitBytes?: number;
   maxStackSizeBytes?: number;
+  worker?: boolean;
 };
 
 // Allow pre-loading a QuickJS module (e.g. with custom WASM bytes for compiled binaries)
@@ -434,7 +439,7 @@ const drainAsync = async (
   drainJobs(context, runtime, deadline, timeoutMs);
 };
 
-const evaluateInQuickJs = async (
+export const evaluateInQuickJs = async (
   options: QuickJsExecutorOptions,
   code: string,
   toolInvoker: SandboxToolInvoker,
@@ -565,9 +570,136 @@ const runInQuickJs = (
     }),
   );
 
+export const resolveWorkerScriptPath = (): URL => {
+  const currentUrl = new URL(import.meta.url);
+  const devDistWorker = new URL("../dist/worker.js", currentUrl);
+  if (existsSync(fileURLToPath(devDistWorker))) {
+    return devDistWorker;
+  }
+  return new URL("./worker.js", currentUrl);
+};
+
+type NodeWorkerInstance = {
+  on(event: "message", listener: (value: unknown) => void): void;
+  on(event: "error", listener: (err: Error) => void): void;
+  on(event: "exit", listener: (exitCode: number) => void): void;
+  postMessage(value: unknown): void;
+  terminate(): Promise<number> | void;
+};
+
+const runInQuickJsWorker = (
+  options: QuickJsExecutorOptions,
+  code: string,
+  toolInvoker: SandboxToolInvoker,
+): Effect.Effect<ExecuteResult, QuickJsExecutionError> =>
+  Effect.gen(function* () {
+    const workerModule = yield* Effect.tryPromise({
+      try: () => import("node:worker_threads"),
+      catch: (err) =>
+        new QuickJsExecutionError({
+          message: `worker_threads module is not available in this runtime: ${String(err)}`,
+        }),
+    });
+
+    const context = yield* Effect.context<never>();
+    const runPromise = Effect.runPromiseWith(context);
+    const resultDeferred = yield* Deferred.make<ExecuteResult, QuickJsExecutionError>();
+
+    const scriptPath = resolveWorkerScriptPath();
+    const worker: NodeWorkerInstance = yield* Effect.try({
+      try: () =>
+        // oxlint-disable-next-line executor/no-double-cast -- boundary: dynamic worker_threads Worker instance bridged across heterogeneous runtime type environments
+        new workerModule.Worker(scriptPath, {
+          workerData: { code, options },
+        }) as unknown as NodeWorkerInstance,
+      catch: (cause) => new QuickJsExecutionError({ message: String(cause) }),
+    });
+
+    worker.on("message", (msg: unknown) => {
+      if (!msg || typeof msg !== "object") return;
+      const payload = msg as {
+        type?: string;
+        id?: number;
+        path?: string;
+        args?: Record<string, unknown>;
+        result?: ExecuteResult;
+        error?: string;
+      };
+      if (
+        payload.type === "tool_call" &&
+        typeof payload.id === "number" &&
+        typeof payload.path === "string"
+      ) {
+        void runPromise(toolInvoker.invoke({ path: payload.path, args: payload.args ?? {} })).then(
+          (value) => {
+            worker.postMessage({ type: "tool_result", id: payload.id, ok: true, value });
+          },
+          (cause) => {
+            worker.postMessage({
+              type: "tool_result",
+              id: payload.id,
+              ok: false,
+              error: cause instanceof Error ? cause.message : String(cause),
+            });
+          },
+        );
+      } else if (payload.type === "done" && payload.result) {
+        Effect.runSync(Deferred.complete(resultDeferred, Effect.succeed(payload.result)));
+        void worker.terminate();
+      } else if (payload.type === "error" && typeof payload.error === "string") {
+        Effect.runSync(
+          Deferred.complete(
+            resultDeferred,
+            Effect.fail(new QuickJsExecutionError({ message: payload.error })),
+          ),
+        );
+        void worker.terminate();
+      }
+    });
+
+    worker.on("error", (err: Error) => {
+      Effect.runSync(
+        Deferred.complete(
+          resultDeferred,
+          Effect.fail(new QuickJsExecutionError({ message: err.message })),
+        ),
+      );
+      void worker.terminate();
+    });
+
+    worker.on("exit", (exitCode: number) => {
+      if (exitCode !== 0) {
+        Effect.runSync(
+          Deferred.complete(
+            resultDeferred,
+            Effect.fail(
+              new QuickJsExecutionError({
+                message: `QuickJS worker thread exited unexpectedly with code ${exitCode}`,
+              }),
+            ),
+          ),
+        );
+      }
+    });
+
+    return yield* Deferred.await(resultDeferred).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          void worker.terminate();
+        }),
+      ),
+    );
+  }).pipe(
+    Effect.withSpan("executor.code.exec.quickjs_worker", {
+      attributes: { "executor.runtime": "quickjs-worker" },
+    }),
+  );
+
 export const makeQuickJsExecutor = (
   options: QuickJsExecutorOptions = {},
 ): CodeExecutor<QuickJsExecutionError> => ({
   execute: (code: string, toolInvoker: SandboxToolInvoker) =>
-    runInQuickJs(options, code, toolInvoker),
+    options.worker
+      ? runInQuickJsWorker(options, code, toolInvoker)
+      : runInQuickJs(options, code, toolInvoker),
 });
