@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAtomValue, useAtomSet } from "@effect/atom-react";
+import { useAtomValue, useAtomRefresh, useAtomSet } from "@effect/atom-react";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Exit from "effect/Exit";
 import {
@@ -29,9 +29,11 @@ import type { AuthMethod } from "../lib/auth-placements";
 import {
   connectionNeedsReconsent,
   oauthReconnectPayload,
+  reconnectClientsView,
   reconnectMode,
   reconnectRoute,
   reconsentRequiredScopes,
+  retryReconnectClientsOnMenuOpen,
 } from "../plugins/oauth-reconnect";
 import { useOAuthPopupFlow } from "../plugins/oauth-sign-in";
 import { AddAccountModal, hasDcr } from "./add-account-modal";
@@ -125,9 +127,17 @@ function AccountRow(props: {
   readonly onEdit: () => void;
   readonly onReconnect: () => void;
   /** Reconnect routing needs the stored client binding; while the client
-   *  summaries are still loading the route is unknown, so the action is
+   *  summaries carry no data the route is unknown, so the action is
    *  disabled rather than guessed (same idiom as "Check now" above). */
   readonly reconnectDisabled: boolean;
+  /** The summaries query failed with NO data to route by: the Reconnect item
+   *  stays disabled but says so (never a silently dead action). Opening the
+   *  menu retries the query via `onMenuOpenChange`, so the hint reflects a
+   *  retry that just failed, not a permanently stuck state. */
+  readonly reconnectFailed: boolean;
+  /** Forwarded to the row menu; the owner uses the OPEN transition to retry
+   *  a failed client-summaries query. */
+  readonly onMenuOpenChange: (open: boolean) => void;
   readonly onRemove: () => void;
 }) {
   const { connection, needsReconsent } = props;
@@ -256,7 +266,7 @@ function AccountRow(props: {
         {props.showOwnerLabel ? (
           <Badge variant="outline">{ownerLabel(connection.owner)}</Badge>
         ) : null}
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={props.onMenuOpenChange}>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
@@ -287,6 +297,11 @@ function AccountRow(props: {
               onClick={props.onReconnect}
             >
               Reconnect
+              {props.reconnectFailed ? (
+                // Same failed-query voice as the modal's picker errors; the
+                // trailing placement mirrors DropdownMenuShortcut.
+                <span className="ml-auto text-xs text-destructive">Failed to load</span>
+              ) : null}
             </DropdownMenuItem>
             <DropdownMenuItem variant="destructive" className="text-sm" onClick={props.onRemove}>
               Remove
@@ -320,8 +335,13 @@ function OwnerAccounts(props: {
   const connections = useAtomValue(connectionsForIntegrationAtom({ integration, owner }));
   // Registered-app summaries: the Reconnect routing below inspects the STORED
   // client binding (its origin kind and resource), not just the method's
-  // capability, before sending a connection into the automatic flow.
+  // capability, before sending a connection into the automatic flow. The view
+  // keeps STALE summaries from a failed refresh usable for routing, and only a
+  // data-less failure marks the action failed (recoverable — opening the row
+  // menu retries the query).
   const allClients = useAtomValue(oauthClientsOptimisticAtom);
+  const refreshClients = useAtomRefresh(oauthClientsOptimisticAtom);
+  const clientsView = reconnectClientsView(allClients);
   // Removal confirms in a dialog. State lives here (not in the row) because the
   // Remove menu item closes its dropdown on click, which would unmount a dialog
   // nested inside it — so the row only nominates the connection to remove.
@@ -359,11 +379,13 @@ function OwnerAccounts(props: {
       // static/BYO or first-party binding takes the direct path below even on
       // a discovery-capable integration — re-registering would silently
       // rebind the connection to an automatic client. While the client list
-      // is still loading the binding is UNKNOWN and no route may be chosen:
-      // the menu item is disabled until then, and this guard backstops a
-      // race — a permanent wrong choice on a guess is never acceptable.
+      // has no data (loading or a data-less failure) the binding is UNKNOWN
+      // and no route may be chosen: the menu item is disabled until then, and
+      // this guard backstops a race — a permanent wrong choice on a guess is
+      // never acceptable. Stale summaries retained by a FAILED refresh do
+      // route: worst case the decision matches the last known binding.
       const route = reconnectRoute(
-        AsyncResult.isSuccess(allClients) ? allClients.value : undefined,
+        clientsView.kind === "ready" ? clientsView.clients : undefined,
         connection,
         hasDcr(method),
       );
@@ -489,11 +511,19 @@ function OwnerAccounts(props: {
             showOwnerLabel={props.showOwnerLabels}
             onEdit={() => props.onEdit(connection)}
             onReconnect={() => void handleReconnect(connection)}
-            // An OAuth Reconnect routes by the stored client binding; until
-            // the summaries load the route is unknown, so the action waits.
-            // Static-credential rows refresh without the binding.
+            // An OAuth Reconnect routes by the stored client binding; with no
+            // data (loading, or a failure that never loaded) the route is
+            // unknown, so the action waits — stale summaries on a failed
+            // refresh still count as data. Static-credential rows refresh
+            // without the binding.
             reconnectDisabled={
-              reconnectMode(connection) === "oauth" && !AsyncResult.isSuccess(allClients)
+              reconnectMode(connection) === "oauth" && clientsView.kind !== "ready"
+            }
+            // The data-less failure is surfaced on the item (not silently
+            // disabled) and recovers on menu open, which retries the query.
+            reconnectFailed={reconnectMode(connection) === "oauth" && clientsView.kind === "failed"}
+            onMenuOpenChange={(open: boolean) =>
+              retryReconnectClientsOnMenuOpen(open, clientsView, refreshClients)
             }
             onRemove={() => setRemovingConnection(connection)}
           />

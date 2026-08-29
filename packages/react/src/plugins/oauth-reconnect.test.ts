@@ -1,4 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import * as Option from "effect/Option";
 import {
   AuthTemplateSlug,
   ConnectionAddress,
@@ -13,10 +15,12 @@ import {
 import {
   missingScopes,
   oauthReconnectPayload,
+  reconnectClientsView,
   reconnectMode,
   reconnectRoute,
   reconnectStoredClient,
   reconsentRequiredScopes,
+  retryReconnectClientsOnMenuOpen,
 } from "./oauth-reconnect";
 
 const connection = (overrides: Partial<Connection> = {}): Connection => ({
@@ -170,6 +174,72 @@ describe("reconnectRoute (where an OAuth Reconnect goes)", () => {
       stored: undefined,
     });
     expect(reconnectRoute([], connection(), false)).toEqual({ kind: "direct" });
+  });
+});
+
+describe("reconnectClientsView (Reconnect availability from the summaries query)", () => {
+  const dcrBinding = clientSummary({
+    origin: { kind: "dynamic_client_registration", integration: null },
+  });
+  const loaded = AsyncResult.success<readonly OAuthClientSummary[], string>([dcrBinding]);
+
+  it("is ready with the loaded summaries on success", () => {
+    expect(reconnectClientsView(loaded)).toEqual({ kind: "ready", clients: [dcrBinding] });
+  });
+
+  // The unrecoverable-state bug: a transient listClients failure used to
+  // discard previously loaded summaries and disable Reconnect for the mounted
+  // lifetime. Stale summaries are SAFE for routing — worst case the route
+  // matches the last known binding — so a failure carrying previousSuccess
+  // stays ready and routes from that previous value.
+  it("routes from the PREVIOUS successful data when a refresh fails", () => {
+    const failedRefresh = AsyncResult.fail("listClients failed", {
+      previousSuccess: Option.some(loaded),
+    });
+    const view = reconnectClientsView(failedRefresh);
+    expect(view).toEqual({ kind: "ready", clients: [dcrBinding] });
+    // The stale summaries drive the same route the last successful load chose.
+    expect(
+      reconnectRoute(view.kind === "ready" ? view.clients : undefined, connection(), false),
+    ).toEqual({ kind: "automatic", stored: dcrBinding });
+  });
+
+  it("is loading while the first load is in flight", () => {
+    expect(reconnectClientsView(AsyncResult.initial())).toEqual({ kind: "loading" });
+    expect(reconnectClientsView(AsyncResult.initial(true))).toEqual({ kind: "loading" });
+  });
+
+  it("is failed only for a failure that never produced data", () => {
+    expect(reconnectClientsView(AsyncResult.fail("listClients failed"))).toEqual({
+      kind: "failed",
+    });
+  });
+
+  it("reads a data-less failure that is retrying as loading, not failed", () => {
+    expect(reconnectClientsView(AsyncResult.fail("listClients failed", { waiting: true }))).toEqual(
+      { kind: "loading" },
+    );
+  });
+});
+
+describe("retryReconnectClientsOnMenuOpen (recovery for the data-less failure)", () => {
+  const counter = () => {
+    let calls = 0;
+    return { retry: () => calls++, calls: () => calls };
+  };
+
+  it("refetches when the menu OPENS on a failed view", () => {
+    const spy = counter();
+    retryReconnectClientsOnMenuOpen(true, { kind: "failed" }, spy.retry);
+    expect(spy.calls()).toBe(1);
+  });
+
+  it("does not refetch on close, while loading, or with data", () => {
+    const spy = counter();
+    retryReconnectClientsOnMenuOpen(false, { kind: "failed" }, spy.retry);
+    retryReconnectClientsOnMenuOpen(true, { kind: "loading" }, spy.retry);
+    retryReconnectClientsOnMenuOpen(true, { kind: "ready", clients: [] }, spy.retry);
+    expect(spy.calls()).toBe(0);
   });
 });
 

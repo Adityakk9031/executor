@@ -1,3 +1,5 @@
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import * as Option from "effect/Option";
 import type { Connection, OAuthClientSummary } from "@executor-js/sdk/shared";
 
 import type { OAuthStartPayload } from "./oauth-sign-in";
@@ -104,6 +106,46 @@ export function reconnectRoute(
       : { kind: "direct" };
   }
   return methodSupportsAutomatic ? { kind: "automatic", stored: undefined } : { kind: "direct" };
+}
+
+/** Reconnect's view of the client-summaries query:
+ *  - `"ready"` — summaries to route by. STALE data counts: a failed refresh
+ *    that still carries the previously loaded summaries routes by those (worst
+ *    case the decision matches the last known binding, which is safe), instead
+ *    of discarding good data and dead-ending the action.
+ *  - `"loading"` — no data yet (first load, or a data-less retry in flight);
+ *    the action waits, exactly as before.
+ *  - `"failed"` — the query failed and NEVER produced data. The menu item
+ *    surfaces this instead of sitting silently disabled, and opening the menu
+ *    retries the query (see `retryReconnectClientsOnMenuOpen`). */
+export type ReconnectClientsView =
+  | { readonly kind: "ready"; readonly clients: readonly OAuthClientSummary[] }
+  | { readonly kind: "loading" }
+  | { readonly kind: "failed" };
+
+/** Fold the summaries query into Reconnect's availability. `AsyncResult.value`
+ *  reads a Success value AND a Failure's retained `previousSuccess`, so stale
+ *  data survives a transient listClients error. A data-less failure that is
+ *  `waiting` is a retry in flight, so it reads as loading, not failed. */
+export function reconnectClientsView(
+  result: AsyncResult.AsyncResult<readonly OAuthClientSummary[], unknown>,
+): ReconnectClientsView {
+  const clients = Option.getOrUndefined(AsyncResult.value(result));
+  if (clients !== undefined) return { kind: "ready", clients };
+  if (AsyncResult.isFailure(result) && !result.waiting) return { kind: "failed" };
+  return { kind: "loading" };
+}
+
+/** Recovery for the data-less failure: OPENING the row menu retries the query,
+ *  so a transient listClients error never leaves Reconnect dead for the
+ *  mounted lifetime. Only the failed view refetches — ready and loading views
+ *  must not restart a request that already has data or is already running. */
+export function retryReconnectClientsOnMenuOpen(
+  open: boolean,
+  view: ReconnectClientsView,
+  retry: () => void,
+): void {
+  if (open && view.kind === "failed") retry();
 }
 
 // ---------------------------------------------------------------------------
