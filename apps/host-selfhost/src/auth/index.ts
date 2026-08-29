@@ -10,6 +10,7 @@ import {
   withClientName,
 } from "@executor-js/api/server";
 
+import type { SelfHostDbHandle } from "../db/self-host-db";
 import { loadConfig } from "../config";
 import { buildBetterAuth, type BetterAuthHandle } from "./better-auth";
 
@@ -22,8 +23,10 @@ export interface ResolvedAuthProviders {
   readonly betterAuth: BetterAuthHandle;
 }
 
-export const resolveAuthProviders = async (client: any): Promise<ResolvedAuthProviders> => {
-  const betterAuth = await buildBetterAuth(client);
+export const resolveAuthProviders = async (
+  dbHandle: SelfHostDbHandle,
+): Promise<ResolvedAuthProviders> => {
+  const betterAuth = await buildBetterAuth(dbHandle.client);
   const betterAuthLayer = Layer.succeed(SharedBetterAuth)(betterAuth);
 
   const lookupClientName = async (clientId: string): Promise<string | null> => {

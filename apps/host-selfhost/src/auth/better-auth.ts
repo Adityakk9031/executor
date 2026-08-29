@@ -41,7 +41,11 @@ export const buildBetterAuth = async (client: Client): Promise<BetterAuthHandle>
 
   const sharedOptions = makeBetterAuthSharedOptions(
     () => orgRef.id,
-    { authSecret: config.authSecret, webBaseUrl: config.webBaseUrl },
+    {
+      authSecret: config.authSecret,
+      webBaseUrl: config.webBaseUrl,
+      trustedOrigins: config.trustedOrigins,
+    },
     gate,
   );
 

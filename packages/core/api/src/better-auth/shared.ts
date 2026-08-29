@@ -62,15 +62,43 @@ const orgHasNoMembers = async (gate: SignupGate): Promise<boolean> => {
   return (await countOrgMembers(auth, gate.organizationId)) === 0;
 };
 
+let warnedInsecureTrustedOrigin = false;
+
 export const makeBetterAuthSharedOptions = (
   getOrganizationId: () => string,
-  config: { authSecret: string; webBaseUrl: string },
+  config: {
+    authSecret: string;
+    webBaseUrl: string;
+    trustedOrigins?: readonly string[];
+  },
   gate?: SignupGate,
 ) => {
+  const origins =
+    config.trustedOrigins && config.trustedOrigins.length > 0
+      ? [...config.trustedOrigins]
+      : [config.webBaseUrl];
+
+  const hasInsecureTrustedOrigin = origins.some((origin) => origin.startsWith("http://"));
+  const downgradesCanonicalCookies =
+    hasInsecureTrustedOrigin && config.webBaseUrl.startsWith("https://");
+  if (downgradesCanonicalCookies && !warnedInsecureTrustedOrigin) {
+    warnedInsecureTrustedOrigin = true;
+    console.warn(
+      "[executor] EXECUTOR_TRUSTED_ORIGINS contains an http:// origin, so session cookies drop the Secure attribute for every origin — including the https:// canonical URL. Use https:// aliases to keep session cookies transport-secure.",
+    );
+  }
+
+  const secret = config.authSecret;
+  if (secret.length < 32) {
+    // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: a multi-user auth server must not boot with a weak session secret
+    throw new Error("BETTER_AUTH_SECRET (or AUTH_SECRET), if set, must be at least 32 characters");
+  }
+
   return {
-    secret: config.authSecret,
+    secret,
     baseURL: config.webBaseUrl,
-    trustedOrigins: [config.webBaseUrl],
+    trustedOrigins: origins,
+    advanced: { useSecureCookies: !hasInsecureTrustedOrigin },
     emailAndPassword: { enabled: true },
     plugins: getSharedPlugins(),
     databaseHooks: {
