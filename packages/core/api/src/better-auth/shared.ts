@@ -68,7 +68,7 @@ export const makeBetterAuthSharedOptions = (
   getOrganizationId: () => string,
   config: {
     authSecret: string;
-    webBaseUrl: string;
+    webBaseUrl?: string;
     trustedOrigins?: readonly string[];
   },
   gate?: SignupGate,
@@ -76,11 +76,13 @@ export const makeBetterAuthSharedOptions = (
   const origins =
     config.trustedOrigins && config.trustedOrigins.length > 0
       ? [...config.trustedOrigins]
-      : [config.webBaseUrl];
+      : config.webBaseUrl
+        ? [config.webBaseUrl]
+        : [];
 
-  const hasInsecureTrustedOrigin = origins.some((origin) => origin.startsWith("http://"));
+  const hasInsecureTrustedOrigin = origins.some((origin) => origin && origin.startsWith("http://"));
   const downgradesCanonicalCookies =
-    hasInsecureTrustedOrigin && config.webBaseUrl.startsWith("https://");
+    hasInsecureTrustedOrigin && !!config.webBaseUrl && config.webBaseUrl.startsWith("https://");
   if (downgradesCanonicalCookies && !warnedInsecureTrustedOrigin) {
     warnedInsecureTrustedOrigin = true;
     console.warn(
@@ -96,8 +98,8 @@ export const makeBetterAuthSharedOptions = (
 
   return {
     secret,
-    baseURL: config.webBaseUrl,
-    trustedOrigins: origins,
+    ...(config.webBaseUrl ? { baseURL: config.webBaseUrl } : {}),
+    ...(origins.length > 0 ? { trustedOrigins: origins } : {}),
     advanced: { useSecureCookies: !hasInsecureTrustedOrigin },
     emailAndPassword: { enabled: true },
     plugins: getSharedPlugins(),
