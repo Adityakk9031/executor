@@ -347,7 +347,8 @@ export function ApiKeysPage(props: { readonly orgKeysSection?: ReactNode }) {
           if (!open) setConfirmRevoke(null);
         }}
       >
-        <DialogContent className="sm:max-w-[480px]">
+        {/* A confirmation with nothing to lose: clicking away cancels it. */}
+        <DialogContent dismissOnOutsideClick className="sm:max-w-[480px]">
           <DialogHeader>
             <DialogTitle className="font-display text-xl">Revoke API key</DialogTitle>
             <DialogDescription className="text-sm leading-relaxed">
