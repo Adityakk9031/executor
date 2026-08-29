@@ -14,8 +14,8 @@ export type DesktopAppAuth = typeof DesktopAppAuth.Type;
 export const ServiceAccountAuth = Schema.Struct({
   kind: Schema.Literal("service-account"),
   /** The service account token. Persisted in the plugin's owner-partitioned
-   *  config blob — never surfaced to agents (`getConfig` redacts it). v1 stored
-   *  this behind a separate secret id; v2 has no secrets table, so the
+   *  config blob — never surfaced to agents (`getConfig` / `listConfigs` redacts it).
+   *  v1 stored this behind a separate secret id; v2 has no secrets table, so the
    *  plugin-owned config row carries it directly. */
   token: Schema.String,
 });
@@ -35,46 +35,93 @@ export const Vault = Schema.Struct({
 export type Vault = typeof Vault.Type;
 
 // ---------------------------------------------------------------------------
-// Stored config — persisted via KV
+// Named Stored config — persisted via KV
 // ---------------------------------------------------------------------------
 
 export const OnePasswordConfig = Schema.Struct({
-  auth: OnePasswordAuth,
-  /** Vaults to scope operations to. Order is presentational only: refs are
-   *  vault-qualified, and a bare ref that matches in more than one vault is an
-   *  explicit ambiguity failure, never a precedence pick. */
-  vaults: Schema.NonEmptyArray(Vault),
-  /** Human label for the whole connection */
+  /** Stable identifier for this named configuration (e.g. "default", "personal", "work") */
+  id: Schema.String,
+  /** Human display label for this named configuration */
   name: Schema.String,
+  auth: OnePasswordAuth,
+  /** Selected 1Password vault ID */
+  vaultId: Schema.String,
+  /** Human label for the selected vault */
+  vaultName: Schema.optional(Schema.String),
 });
 export type OnePasswordConfig = typeof OnePasswordConfig.Type;
 
-/** Pre-multi-vault stored shape: a single vault id whose display name doubled
- *  as the connection label. Still accepted on read; every save writes the
- *  current shape, so a config row upgrades the first time it is re-saved. */
-export const LegacyOnePasswordConfig = Schema.Struct({
+/** Legacy multi-vault stored shape: `{ auth, vaults, name }`. */
+export const LegacyMultiVaultConfig = Schema.Struct({
+  auth: OnePasswordAuth,
+  vaults: Schema.NonEmptyArray(Vault),
+  name: Schema.String,
+});
+export type LegacyMultiVaultConfig = typeof LegacyMultiVaultConfig.Type;
+
+/** Pre-multi-vault stored shape: `{ auth, vaultId, name }`. */
+export const LegacySingleVaultConfig = Schema.Struct({
   auth: OnePasswordAuth,
   vaultId: Schema.String,
   name: Schema.String,
 });
-export type LegacyOnePasswordConfig = typeof LegacyOnePasswordConfig.Type;
+export type LegacySingleVaultConfig = typeof LegacySingleVaultConfig.Type;
 
-export const StoredOnePasswordConfig = Schema.Union([OnePasswordConfig, LegacyOnePasswordConfig]);
+export const StoredConfigsWrapper = Schema.Struct({
+  configs: Schema.Array(OnePasswordConfig),
+});
+export type StoredConfigsWrapper = typeof StoredConfigsWrapper.Type;
+
+export const StoredOnePasswordConfig = Schema.Union([
+  StoredConfigsWrapper,
+  Schema.Array(OnePasswordConfig),
+  LegacyMultiVaultConfig,
+  LegacySingleVaultConfig,
+  OnePasswordConfig,
+]);
 export type StoredOnePasswordConfig = typeof StoredOnePasswordConfig.Type;
 
-export const normalizeStoredConfig = (stored: StoredOnePasswordConfig): OnePasswordConfig =>
-  "vaultId" in stored
-    ? {
-        auth: stored.auth,
-        vaults: [{ id: stored.vaultId, name: stored.name }],
+export const normalizeStoredConfigs = (
+  stored: StoredOnePasswordConfig,
+): readonly OnePasswordConfig[] => {
+  if ("configs" in stored && Array.isArray(stored.configs)) {
+    return stored.configs;
+  }
+  if (Array.isArray(stored)) {
+    return stored;
+  }
+  if ("vaults" in stored && Array.isArray(stored.vaults)) {
+    return stored.vaults.map((vault, index) => ({
+      id: index === 0 ? "default" : vault.id,
+      name: index === 0 ? stored.name : vault.name,
+      auth: stored.auth,
+      vaultId: vault.id,
+      vaultName: vault.name,
+    }));
+  }
+  if ("vaultId" in stored) {
+    if ("id" in stored && typeof stored.id === "string") {
+      return [stored as OnePasswordConfig];
+    }
+    return [
+      {
+        id: "default",
         name: stored.name,
-      }
-    : stored;
+        auth: stored.auth,
+        vaultId: stored.vaultId,
+        vaultName: stored.name,
+      },
+    ];
+  }
+  return [];
+};
+
+export const normalizeStoredConfig = normalizeStoredConfigs;
 
 // ---------------------------------------------------------------------------
-// Redacted config — what `getConfig` returns to agents / the UI. The
-// service-account token is stripped; only the auth kind + account metadata is
-// surfaced.
+// Redacted config — what `getConfig` / `listConfigs` returns to agents / the UI.
+// The service-account token is stripped; only the auth kind + account metadata
+// is surfaced.
 // ---------------------------------------------------------------------------
 
 export const RedactedDesktopAppAuth = DesktopAppAuth;
@@ -89,29 +136,43 @@ export const RedactedOnePasswordAuth = Schema.Union([
 ]);
 
 export const RedactedOnePasswordConfig = Schema.Struct({
-  auth: RedactedOnePasswordAuth,
-  vaults: Schema.NonEmptyArray(Vault),
+  id: Schema.String,
   name: Schema.String,
+  auth: RedactedOnePasswordAuth,
+  vaultId: Schema.String,
+  vaultName: Schema.optional(Schema.String),
 });
 export type RedactedOnePasswordConfig = typeof RedactedOnePasswordConfig.Type;
 
 /** Strip the service-account token from a stored config for external exposure. */
 export const redactConfig = (config: OnePasswordConfig): RedactedOnePasswordConfig => ({
+  id: config.id,
+  name: config.name,
   auth:
     config.auth.kind === "desktop-app"
       ? { kind: "desktop-app", accountName: config.auth.accountName }
       : { kind: "service-account" },
-  vaults: config.vaults,
-  name: config.name,
+  vaultId: config.vaultId,
+  ...(config.vaultName !== undefined ? { vaultName: config.vaultName } : {}),
 });
 
 // ---------------------------------------------------------------------------
 // Connection status
 // ---------------------------------------------------------------------------
 
+export const VaultStatus = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  vaultId: Schema.String,
+  vaultName: Schema.optional(Schema.String),
+  connected: Schema.Boolean,
+  error: Schema.optional(Schema.String),
+});
+export type VaultStatus = typeof VaultStatus.Type;
+
 export const ConnectionStatus = Schema.Struct({
   connected: Schema.Boolean,
-  vaultNames: Schema.optional(Schema.Array(Schema.String)),
+  vaults: Schema.optional(Schema.Array(VaultStatus)),
   error: Schema.optional(Schema.String),
 });
 export type ConnectionStatus = typeof ConnectionStatus.Type;

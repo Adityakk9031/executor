@@ -10,13 +10,16 @@ export {
 } from "./plugin";
 export {
   OnePasswordConfig,
-  LegacyOnePasswordConfig,
+  LegacySingleVaultConfig,
+  LegacyMultiVaultConfig,
   StoredOnePasswordConfig,
+  normalizeStoredConfigs,
   normalizeStoredConfig,
   RedactedOnePasswordConfig,
   RedactedOnePasswordAuth,
   redactConfig,
   Vault,
+  VaultStatus,
   ConnectionStatus,
   OnePasswordAuth,
   DesktopAppAuth,

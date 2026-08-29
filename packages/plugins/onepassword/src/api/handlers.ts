@@ -42,11 +42,20 @@ export const OnePasswordHandlers = HttpApiBuilder.group(
   "onepassword",
   (handlers) =>
     handlers
-      .handle("getConfig", () =>
+      .handle("listConfigs", () =>
         capture(
           Effect.gen(function* () {
             const ext = yield* OnePasswordExtensionService;
-            return yield* ext.getConfig();
+            const configs = yield* ext.listConfigs();
+            return { configs: [...configs] };
+          }),
+        ),
+      )
+      .handle("getConfig", ({ query }) =>
+        capture(
+          Effect.gen(function* () {
+            const ext = yield* OnePasswordExtensionService;
+            return yield* ext.getConfig(query.id);
           }),
         ),
       )
@@ -58,19 +67,19 @@ export const OnePasswordHandlers = HttpApiBuilder.group(
           }),
         ),
       )
-      .handle("removeConfig", () =>
+      .handle("removeConfig", ({ query }) =>
         capture(
           Effect.gen(function* () {
             const ext = yield* OnePasswordExtensionService;
-            yield* ext.removeConfig();
+            yield* ext.removeConfig(query.id);
           }),
         ),
       )
-      .handle("status", () =>
+      .handle("status", ({ query }) =>
         capture(
           Effect.gen(function* () {
             const ext = yield* OnePasswordExtensionService;
-            return yield* ext.status();
+            return yield* ext.status(query.id);
           }),
         ),
       )

@@ -52,7 +52,14 @@ const GetConfigResponse = Schema.NullOr(RedactedOnePasswordConfig);
 
 export const OnePasswordGroup = HttpApiGroup.make("onepassword")
   .add(
+    HttpApiEndpoint.get("listConfigs", "/onepassword/configs", {
+      success: Schema.Struct({ configs: Schema.Array(RedactedOnePasswordConfig) }),
+      error: [InternalError, OnePasswordError],
+    }),
+  )
+  .add(
     HttpApiEndpoint.get("getConfig", "/onepassword/config", {
+      query: Schema.Struct({ id: Schema.optional(Schema.String) }),
       success: GetConfigResponse,
       error: [InternalError, OnePasswordError],
     }),
@@ -66,12 +73,14 @@ export const OnePasswordGroup = HttpApiGroup.make("onepassword")
   )
   .add(
     HttpApiEndpoint.delete("removeConfig", "/onepassword/config", {
+      query: Schema.Struct({ id: Schema.optional(Schema.String) }),
       success: Schema.Void,
       error: [InternalError, OnePasswordError],
     }),
   )
   .add(
     HttpApiEndpoint.get("status", "/onepassword/status", {
+      query: Schema.Struct({ id: Schema.optional(Schema.String) }),
       success: ConnectionStatus,
       error: [InternalError, OnePasswordError],
     }),

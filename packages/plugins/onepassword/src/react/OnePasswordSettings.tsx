@@ -3,7 +3,6 @@ import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import * as Exit from "effect/Exit";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import { Button } from "@executor-js/react/components/button";
-import { Checkbox } from "@executor-js/react/components/checkbox";
 import { Input } from "@executor-js/react/components/input";
 import { Label } from "@executor-js/react/components/label";
 import {
@@ -30,7 +29,7 @@ import {
 } from "@executor-js/react/components/card-stack";
 
 import {
-  onepasswordConfigAtom,
+  onepasswordConfigsAtom,
   onepasswordVaultsAtom,
   configureOnePassword,
   removeOnePasswordConfig,
@@ -39,7 +38,7 @@ import {
 import type { RedactedOnePasswordConfig, Vault } from "../sdk/types";
 
 // ---------------------------------------------------------------------------
-// Vault picker — multi-select
+// Vault picker — single select
 // ---------------------------------------------------------------------------
 
 const VAULT_LIST_ERROR_FALLBACK = "Failed to list vaults";
@@ -53,19 +52,14 @@ const formatVaultListError = (error: Error): string => {
 function VaultPicker(props: {
   authKind: "desktop-app" | "service-account";
   accountName: string;
-  selected: ReadonlyArray<Vault>;
-  onSelectedChange: (vaults: ReadonlyArray<Vault>) => void;
+  selectedVault: Vault | null;
+  onSelectedChange: (vault: Vault | null) => void;
 }) {
   const account = props.accountName.trim();
   const vaultsAtom = onepasswordVaultsAtom(props.authKind, account);
   const vaultsResult = useAtomValue(vaultsAtom);
   const refreshVaults = useAtomRefresh(vaultsAtom);
 
-  // Stale-while-revalidate: with a retained value the vault list renders
-  // instantly and one background refresh per atom key picks up changes
-  // (refreshing keeps the previous value, so nothing flashes). A cold key is
-  // already fetching — refreshing it would only restart the request. The ref
-  // carries the latest cached-ness into the effect without re-running it.
   const isCachedRef = useRef(false);
   isCachedRef.current = AsyncResult.isSuccess(vaultsResult);
   useEffect(() => {
@@ -96,8 +90,8 @@ function VaultPicker(props: {
       onSuccess: ({ value }) => {
         const v = value.vaults;
         const onlyVault = v.length === 1 ? v[0] : undefined;
-        if (onlyVault && props.selected.length === 0) {
-          queueMicrotask(() => props.onSelectedChange([onlyVault]));
+        if (onlyVault && !props.selectedVault) {
+          queueMicrotask(() => props.onSelectedChange(onlyVault));
         }
         return { vaults: [...v], isLoading: false, error: null };
       },
@@ -112,21 +106,10 @@ function VaultPicker(props: {
     );
   }
 
-  // Selected vaults missing from the loaded list (renamed, revoked, or the
-  // list failed to load while editing) stay visible so they can be unchecked.
   const loadedIds = new Set(vaults.map((v) => v.id));
-  const stale = props.selected.filter((v) => !loadedIds.has(v.id));
+  const stale =
+    props.selectedVault && !loadedIds.has(props.selectedVault.id) ? [props.selectedVault] : [];
   const rows = [...vaults, ...stale];
-
-  const toggle = (vault: Vault, checked: boolean) => {
-    if (checked) {
-      if (!props.selected.some((v) => v.id === vault.id)) {
-        props.onSelectedChange([...props.selected, vault]);
-      }
-      return;
-    }
-    props.onSelectedChange(props.selected.filter((v) => v.id !== vault.id));
-  };
 
   return (
     <div className="grid gap-2">
@@ -137,23 +120,30 @@ function VaultPicker(props: {
       ) : (
         <div className="grid max-h-44 gap-0.5 overflow-y-auto rounded-md border border-input p-1">
           {rows.map((vault) => {
-            const checked = props.selected.some((v) => v.id === vault.id);
+            const isSelected = props.selectedVault?.id === vault.id;
             return (
-              <Label
+              <div
                 key={vault.id}
-                className="flex cursor-pointer items-center gap-2.5 rounded-sm px-2 py-1.5 font-normal hover:bg-muted/40"
+                role="button"
+                tabIndex={0}
+                onClick={() => props.onSelectedChange(vault)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    props.onSelectedChange(vault);
+                  }
+                }}
+                className={`flex cursor-pointer items-center justify-between rounded-sm px-2.5 py-1.5 text-[13px] transition-colors ${
+                  isSelected
+                    ? "bg-primary text-primary-foreground font-medium"
+                    : "hover:bg-muted/50 text-foreground"
+                }`}
               >
-                <Checkbox
-                  checked={checked}
-                  onCheckedChange={(value) => toggle(vault, value === true)}
-                />
-                <span className="truncate text-[13px] text-foreground">{vault.name}</span>
+                <span className="truncate">{vault.name}</span>
                 {!loadedIds.has(vault.id) && (
-                  <span className="ml-auto shrink-0 text-[11px] text-muted-foreground/50">
-                    not found
-                  </span>
+                  <span className="ml-auto shrink-0 text-[11px] opacity-60">not found</span>
                 )}
-              </Label>
+              </div>
             );
           })}
         </div>
@@ -177,9 +167,11 @@ function ConfigDialog(props: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   initial?: {
+    id: string;
     authKind: string;
     accountName: string;
-    vaults: ReadonlyArray<Vault>;
+    vaultId: string;
+    vaultName?: string;
     name: string;
   };
 }) {
@@ -188,8 +180,10 @@ function ConfigDialog(props: {
     (props.initial?.authKind as "desktop-app" | "service-account") ?? "desktop-app",
   );
   const [accountName, setAccountName] = useState(props.initial?.accountName ?? "my.1password.com");
-  const [selectedVaults, setSelectedVaults] = useState<ReadonlyArray<Vault>>(
-    props.initial?.vaults ?? [],
+  const [selectedVault, setSelectedVault] = useState<Vault | null>(
+    props.initial?.vaultId
+      ? { id: props.initial.vaultId, name: props.initial.vaultName ?? props.initial.vaultId }
+      : null,
   );
   const [displayName, setDisplayName] = useState(props.initial?.name ?? "");
   const [saving, setSaving] = useState(false);
@@ -201,7 +195,7 @@ function ConfigDialog(props: {
     if (!isEdit) {
       setAuthKind("desktop-app");
       setAccountName("my.1password.com");
-      setSelectedVaults([]);
+      setSelectedVault(null);
       setDisplayName("");
     }
     setError(null);
@@ -209,8 +203,7 @@ function ConfigDialog(props: {
   };
 
   const handleSave = async () => {
-    const [firstVault, ...restVaults] = selectedVaults;
-    if (!accountName.trim() || firstVault === undefined) return;
+    if (!accountName.trim() || !selectedVault) return;
     setSaving(true);
     setError(null);
 
@@ -219,11 +212,22 @@ function ConfigDialog(props: {
         ? { kind: "desktop-app" as const, accountName: accountName.trim() }
         : { kind: "service-account" as const, token: accountName.trim() };
 
+    const name = displayName.trim() || selectedVault.name || "1Password";
+    const id =
+      props.initial?.id ||
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") ||
+      `vault-${Date.now()}`;
+
     const exit = await doConfigure({
       payload: {
+        id,
+        name,
         auth,
-        vaults: [firstVault, ...restVaults],
-        name: displayName.trim() || "1Password",
+        vaultId: selectedVault.id,
+        vaultName: selectedVault.name,
       },
       reactivityKeys: onepasswordWriteKeys,
     });
@@ -248,11 +252,10 @@ function ConfigDialog(props: {
       <DialogContent className="sm:max-w-[420px]">
         <DialogHeader>
           <DialogTitle className="font-display text-xl">
-            {isEdit ? "Edit 1Password" : "Connect 1Password"}
+            {isEdit ? "Edit 1Password vault" : "Connect 1Password vault"}
           </DialogTitle>
           <DialogDescription className="text-[13px] leading-relaxed">
-            Link one or more vaults to resolve secrets via the 1Password desktop app or a service
-            account.
+            Link a 1Password vault to resolve secrets via the desktop app or a service account.
           </DialogDescription>
         </DialogHeader>
 
@@ -294,16 +297,16 @@ function ConfigDialog(props: {
             </p>
           </div>
 
-          {/* Vaults */}
+          {/* Vault */}
           <div className="grid gap-1.5">
             <Label className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-              Vaults
+              Vault
             </Label>
             <VaultPicker
               authKind={authKind}
               accountName={accountName}
-              selected={selectedVaults}
-              onSelectedChange={setSelectedVaults}
+              selectedVault={selectedVault}
+              onSelectedChange={setSelectedVault}
             />
           </div>
 
@@ -336,7 +339,7 @@ function ConfigDialog(props: {
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={!accountName.trim() || selectedVaults.length === 0 || saving}
+            disabled={!accountName.trim() || !selectedVault || saving}
           >
             {saving ? "Saving…" : isEdit ? "Update" : "Connect"}
           </Button>
@@ -351,24 +354,44 @@ function ConfigDialog(props: {
 // ---------------------------------------------------------------------------
 
 export default function OnePasswordSettings() {
-  const [configOpen, setConfigOpen] = useState(false);
-  const configResult = useAtomValue(onepasswordConfigAtom);
+  const [dialogState, setDialogState] = useState<{
+    open: boolean;
+    initial?: {
+      id: string;
+      authKind: string;
+      accountName: string;
+      vaultId: string;
+      vaultName?: string;
+      name: string;
+    };
+  }>({ open: false });
+
+  const configsResult = useAtomValue(onepasswordConfigsAtom);
   const doRemove = useAtomSet(removeOnePasswordConfig, { mode: "promiseExit" });
 
-  const handleRemove = async () => {
-    await doRemove({ reactivityKeys: onepasswordWriteKeys });
+  const handleRemove = async (id: string) => {
+    await doRemove({
+      query: { id },
+      reactivityKeys: onepasswordWriteKeys,
+    });
   };
 
-  const config: RedactedOnePasswordConfig | null = AsyncResult.match(
-    configResult as AsyncResult.AsyncResult<RedactedOnePasswordConfig | null, unknown>,
+  const configs: readonly RedactedOnePasswordConfig[] = AsyncResult.match(
+    configsResult as AsyncResult.AsyncResult<
+      { configs: readonly RedactedOnePasswordConfig[] },
+      unknown
+    >,
     {
-      onInitial: () => null,
-      onFailure: () => null,
-      onSuccess: ({ value }) => value,
+      onInitial: () => [],
+      onFailure: () => [],
+      onSuccess: ({ value }) => value.configs,
     },
   );
   const isLoading = AsyncResult.match(
-    configResult as AsyncResult.AsyncResult<RedactedOnePasswordConfig | null, unknown>,
+    configsResult as AsyncResult.AsyncResult<
+      { configs: readonly RedactedOnePasswordConfig[] },
+      unknown
+    >,
     {
       onInitial: () => true,
       onFailure: () => false,
@@ -376,7 +399,10 @@ export default function OnePasswordSettings() {
     },
   );
   const isError = AsyncResult.match(
-    configResult as AsyncResult.AsyncResult<RedactedOnePasswordConfig | null, unknown>,
+    configsResult as AsyncResult.AsyncResult<
+      { configs: readonly RedactedOnePasswordConfig[] },
+      unknown
+    >,
     {
       onInitial: () => false,
       onFailure: () => true,
@@ -386,87 +412,109 @@ export default function OnePasswordSettings() {
 
   return (
     <>
-      <CardStackEntry>
-        <CardStackEntryContent>
-          {isLoading ? (
+      {isLoading ? (
+        <CardStackEntry>
+          <CardStackEntryContent>
             <CardStackEntryDescription>Loading…</CardStackEntryDescription>
-          ) : isError ? (
+          </CardStackEntryContent>
+        </CardStackEntry>
+      ) : isError ? (
+        <CardStackEntry>
+          <CardStackEntryContent>
             <CardStackEntryDescription className="text-destructive">
               Failed to load configuration
             </CardStackEntryDescription>
-          ) : config ? (
-            <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-[12px]">
-              <span className="text-muted-foreground/60">Auth</span>
-              <span className="font-mono text-foreground/80 truncate">
-                {config.auth.kind === "desktop-app" ? config.auth.accountName : "service-account"}
-              </span>
-              <span className="text-muted-foreground/60">
-                {config.vaults.length === 1 ? "Vault" : "Vaults"}
-              </span>
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="text-foreground/80 truncate">
-                  {config.vaults.map((vault) => vault.name).join(", ")}
-                </span>
-              </div>
-            </div>
-          ) : (
+          </CardStackEntryContent>
+        </CardStackEntry>
+      ) : configs.length === 0 ? (
+        <CardStackEntry>
+          <CardStackEntryContent>
             <CardStackEntryDescription>
               Resolve secrets from your 1Password vaults.
             </CardStackEntryDescription>
-          )}
-        </CardStackEntryContent>
-        <CardStackEntryActions>
-          {config ? (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2.5 text-[12px]"
-                onClick={() => setConfigOpen(true)}
-              >
-                Edit
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2.5 text-[12px] text-destructive/70 hover:text-destructive"
-                onClick={handleRemove}
-              >
-                Disconnect
-              </Button>
-            </>
-          ) : (
-            !isLoading &&
-            !isError && (
-              <Button
-                variant="link"
-                size="sm"
-                className="h-7 px-0 text-[12px] shrink-0"
-                onClick={() => setConfigOpen(true)}
-              >
-                Add 1Password
-              </Button>
-            )
-          )}
-        </CardStackEntryActions>
-      </CardStackEntry>
+          </CardStackEntryContent>
+          <CardStackEntryActions>
+            <Button
+              variant="link"
+              size="sm"
+              className="h-7 px-0 text-[12px] shrink-0"
+              onClick={() => setDialogState({ open: true })}
+            >
+              Add 1Password vault
+            </Button>
+          </CardStackEntryActions>
+        </CardStackEntry>
+      ) : (
+        <>
+          {configs.map((config) => (
+            <CardStackEntry key={config.id}>
+              <CardStackEntryContent>
+                <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-[12px]">
+                  <span className="text-muted-foreground/60">Name</span>
+                  <span className="font-medium text-foreground truncate">{config.name}</span>
+                  <span className="text-muted-foreground/60">Auth</span>
+                  <span className="font-mono text-foreground/80 truncate">
+                    {config.auth.kind === "desktop-app"
+                      ? config.auth.accountName
+                      : "service-account"}
+                  </span>
+                  <span className="text-muted-foreground/60">Vault</span>
+                  <span className="text-foreground/80 truncate">
+                    {config.vaultName ?? config.vaultId}
+                  </span>
+                </div>
+              </CardStackEntryContent>
+              <CardStackEntryActions>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2.5 text-[12px]"
+                  onClick={() =>
+                    setDialogState({
+                      open: true,
+                      initial: {
+                        id: config.id,
+                        authKind: config.auth.kind,
+                        accountName:
+                          config.auth.kind === "desktop-app" ? config.auth.accountName : "",
+                        vaultId: config.vaultId,
+                        vaultName: config.vaultName,
+                        name: config.name,
+                      },
+                    })
+                  }
+                >
+                  Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2.5 text-[12px] text-destructive/70 hover:text-destructive"
+                  onClick={() => handleRemove(config.id)}
+                >
+                  Disconnect
+                </Button>
+              </CardStackEntryActions>
+            </CardStackEntry>
+          ))}
+          <div className="flex justify-start px-4 py-2 border-t border-border/40">
+            <Button
+              variant="link"
+              size="sm"
+              className="h-7 px-0 text-[12px] shrink-0"
+              onClick={() => setDialogState({ open: true })}
+            >
+              + Add 1Password vault
+            </Button>
+          </div>
+        </>
+      )}
 
-      {configOpen && (
+      {dialogState.open && (
         <ConfigDialog
-          open={configOpen}
-          onOpenChange={setConfigOpen}
-          initial={
-            config
-              ? {
-                  authKind: config.auth.kind,
-                  // Service-account tokens are never surfaced (redacted); the
-                  // user re-enters the token when editing that auth method.
-                  accountName: config.auth.kind === "desktop-app" ? config.auth.accountName : "",
-                  vaults: config.vaults,
-                  name: config.name,
-                }
-              : undefined
-          }
+          open={dialogState.open}
+          onOpenChange={(open) => setDialogState((prev) => ({ ...prev, open }))}
+          initial={dialogState.initial}
         />
       )}
     </>

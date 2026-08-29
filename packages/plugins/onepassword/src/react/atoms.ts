@@ -7,21 +7,26 @@ export const onepasswordWriteKeys = [ReactivityKey.providers] as const;
 
 // ---------------------------------------------------------------------------
 // Query atoms
-//
-// v2: the 1Password config is a single owner-partitioned binding the server
-// derives from the executor's owner — there are no owner path params here; the
-// server reads the acting owner from the executor binding.
 // ---------------------------------------------------------------------------
 
-export const onepasswordConfigAtom = OnePasswordClient.query("onepassword", "getConfig", {
+export const onepasswordConfigsAtom = OnePasswordClient.query("onepassword", "listConfigs", {
   timeToLive: "30 seconds",
   reactivityKeys: [ReactivityKey.providers],
 });
 
-export const onepasswordStatusAtom = OnePasswordClient.query("onepassword", "status", {
-  timeToLive: "15 seconds",
-  reactivityKeys: [ReactivityKey.providers],
-});
+export const onepasswordConfigAtom = (id?: string) =>
+  OnePasswordClient.query("onepassword", "getConfig", {
+    query: { id },
+    timeToLive: "30 seconds",
+    reactivityKeys: [ReactivityKey.providers],
+  });
+
+export const onepasswordStatusAtom = (id?: string) =>
+  OnePasswordClient.query("onepassword", "status", {
+    query: { id },
+    timeToLive: "15 seconds",
+    reactivityKeys: [ReactivityKey.providers],
+  });
 
 // ---------------------------------------------------------------------------
 // Query atoms — vaults

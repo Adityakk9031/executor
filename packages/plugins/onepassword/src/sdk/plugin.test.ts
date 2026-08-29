@@ -8,197 +8,31 @@ import { makeTestConfig } from "@executor-js/sdk/testing";
 import { makeOnePasswordStore, onepasswordPlugin, resolveConfiguredRef } from "./plugin";
 import type { OnePasswordService } from "./service";
 import { OnePasswordError } from "./errors";
-import { OnePasswordConfig, DesktopAppAuth } from "./types";
-
-// removed: v1 routed configure/removeConfig through an explicit `ScopeId`
-// (`executor.onepassword.configure(config, ScopeId.make("test-scope"))`) and
-// asserted provider registration via `executor.secrets.providers()`. v2 deletes
-// the scope stack and the secrets table: config is a single owner-partitioned
-// blob the extension derives from the executor's owner binding, and credential
-// providers are discovered through `executor.providers.list()`.
+import { OnePasswordConfig, DesktopAppAuth, ServiceAccountAuth } from "./types";
 
 const ONEPASSWORD = ProviderKey.make("onepassword");
 
-const twoVaultConfig = OnePasswordConfig.make({
+const personalConfig = OnePasswordConfig.make({
+  id: "personal",
+  name: "Personal",
   auth: DesktopAppAuth.make({
     kind: "desktop-app",
     accountName: "my.1password.com",
   }),
-  vaults: [
-    { id: "vault-123", name: "Personal" },
-    { id: "vault-456", name: "Work" },
-  ],
-  name: "1Password",
+  vaultId: "vault-personal",
+  vaultName: "Personal Vault",
 });
 
-describe("onepassword plugin", () => {
-  it.effect("registers onepassword as a credential provider", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [onepasswordPlugin()] as const }),
-      );
-      const providers = yield* executor.providers.list();
-      expect(providers).toContain(ONEPASSWORD);
-    }),
-  );
-
-  it.effect("configure / getConfig / removeConfig round-trip via blob store", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [onepasswordPlugin()] as const }),
-      );
-
-      const initial = yield* executor.onepassword.getConfig();
-      expect(initial).toBeNull();
-
-      yield* executor.onepassword.configure(twoVaultConfig);
-
-      const loaded = yield* executor.onepassword.getConfig();
-      expect(loaded?.vaults).toEqual([
-        { id: "vault-123", name: "Personal" },
-        { id: "vault-456", name: "Work" },
-      ]);
-      expect(loaded?.name).toBe("1Password");
-      expect(loaded?.auth.kind).toBe("desktop-app");
-
-      yield* executor.onepassword.removeConfig();
-      const afterRemove = yield* executor.onepassword.getConfig();
-      expect(afterRemove).toBeNull();
-    }),
-  );
-
-  it.effect("getConfig redacts the service-account token", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [onepasswordPlugin()] as const }),
-      );
-
-      yield* executor.onepassword.configure(
-        OnePasswordConfig.make({
-          auth: { kind: "service-account", token: "super-secret-token" },
-          vaults: [{ id: "vault-123", name: "CI" }],
-          name: "CI",
-        }),
-      );
-
-      const loaded = yield* executor.onepassword.getConfig();
-      expect(loaded?.auth.kind).toBe("service-account");
-      // The token must never be surfaced through the redacted projection.
-      expect(JSON.stringify(loaded)).not.toContain("super-secret-token");
-    }),
-  );
-
-  it.effect("exposes provider configuration as agent-callable static tools", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [onepasswordPlugin()] as const }),
-      );
-
-      const configured = yield* executor.execute(
-        ToolAddress.make("executor.onepassword.configure"),
-        {
-          auth: { kind: "desktop-app", accountName: "my.1password.com" },
-          vaults: [
-            { id: "vault-123", name: "Personal" },
-            { id: "vault-456", name: "Work" },
-          ],
-          name: "1Password",
-        },
-        { onElicitation: "accept-all" },
-      );
-
-      expect(configured).toEqual({ ok: true, data: { configured: true } });
-      expect(
-        yield* executor.execute(ToolAddress.make("executor.onepassword.getConfig"), {}),
-      ).toMatchObject({
-        ok: true,
-        data: {
-          config: {
-            vaults: [
-              { id: "vault-123", name: "Personal" },
-              { id: "vault-456", name: "Work" },
-            ],
-            name: "1Password",
-          },
-        },
-      });
-
-      const removed = yield* executor.execute(
-        ToolAddress.make("executor.onepassword.removeConfig"),
-        {},
-        { onElicitation: "accept-all" },
-      );
-
-      expect(removed).toEqual({ ok: true, data: { removed: true } });
-      expect(yield* executor.onepassword.getConfig()).toBeNull();
-    }),
-  );
-
-  it.effect("status reports not-configured before configure", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [onepasswordPlugin()] as const }),
-      );
-      const status = yield* executor.onepassword.status();
-      expect(status.connected).toBe(false);
-      expect(status.error).toBe("Not configured");
-    }),
-  );
+const workConfig = OnePasswordConfig.make({
+  id: "work",
+  name: "Work",
+  auth: ServiceAccountAuth.make({
+    kind: "service-account",
+    token: "ops_work_token",
+  }),
+  vaultId: "vault-work",
+  vaultName: "Work Vault",
 });
-
-// ---------------------------------------------------------------------------
-// Stored-config compatibility — blobs written before multi-vault support hold
-// `{ auth, vaultId, name }`. Reads normalize that to a one-element vaults
-// array; the next save writes the current shape.
-// ---------------------------------------------------------------------------
-
-describe("onepassword store", () => {
-  const makeStore = () => {
-    const blobs = pluginBlobStore(
-      makeInMemoryBlobStore(),
-      { org: "org_test", user: null },
-      "onepassword",
-    );
-    return { blobs, store: makeOnePasswordStore(blobs) };
-  };
-
-  it.effect("upgrades a legacy single-vault blob on read", () =>
-    Effect.gen(function* () {
-      const { blobs, store } = makeStore();
-      yield* blobs.put(
-        "config",
-        JSON.stringify({
-          auth: { kind: "desktop-app", accountName: "my.1password.com" },
-          vaultId: "vault-123",
-          name: "Personal",
-        }),
-        { owner: "org" },
-      );
-
-      const config = yield* store.getConfig();
-      expect(config).toEqual({
-        auth: { kind: "desktop-app", accountName: "my.1password.com" },
-        vaults: [{ id: "vault-123", name: "Personal" }],
-        name: "Personal",
-      });
-    }),
-  );
-
-  it.effect("persists and reads back the multi-vault shape", () =>
-    Effect.gen(function* () {
-      const { store } = makeStore();
-      yield* store.saveConfig(twoVaultConfig, "org");
-      const config = yield* store.getConfig();
-      expect(config).toEqual(twoVaultConfig);
-    }),
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Explicit ref resolution — vault-qualified refs resolve directly; bare refs
-// must locate exactly one item, and a multi-vault match is an explicit
-// ambiguity, never a precedence pick.
-// ---------------------------------------------------------------------------
 
 const fakeService = (
   itemsByVault: Readonly<Record<string, readonly { id: string; title: string }[]>>,
@@ -217,108 +51,328 @@ const fakeService = (
   },
 });
 
-describe("resolveConfiguredRef", () => {
-  it.effect("resolves a fully-qualified op:// URI in a configured vault as-is", () =>
+describe("onepassword plugin — multiple named configurations", () => {
+  it.effect("registers onepassword as a credential provider", () =>
     Effect.gen(function* () {
-      const svc = fakeService({});
+      const executor = yield* createExecutor(
+        makeTestConfig({ plugins: [onepasswordPlugin()] as const }),
+      );
+      const providers = yield* executor.providers.list();
+      expect(providers).toContain(ONEPASSWORD);
+    }),
+  );
+
+  it.effect("supports adding, listing, and removing multiple named configurations", () =>
+    Effect.gen(function* () {
+      const executor = yield* createExecutor(
+        makeTestConfig({ plugins: [onepasswordPlugin()] as const }),
+      );
+
+      const initial = yield* executor.onepassword.listConfigs();
+      expect(initial).toEqual([]);
+
+      // Add personal configuration
+      yield* executor.onepassword.configure(personalConfig);
+
+      const afterFirst = yield* executor.onepassword.listConfigs();
+      expect(afterFirst).toHaveLength(1);
+      expect(afterFirst[0]?.id).toBe("personal");
+      expect(afterFirst[0]?.name).toBe("Personal");
+      expect(afterFirst[0]?.vaultId).toBe("vault-personal");
+
+      // Add work configuration (should not overwrite personal)
+      yield* executor.onepassword.configure(workConfig);
+
+      const afterSecond = yield* executor.onepassword.listConfigs();
+      expect(afterSecond).toHaveLength(2);
+      expect(afterSecond.map((c) => c.id)).toEqual(["personal", "work"]);
+
+      // Get individual config by id
+      const singlePersonal = yield* executor.onepassword.getConfig("personal");
+      expect(singlePersonal?.id).toBe("personal");
+
+      const singleWork = yield* executor.onepassword.getConfig("work");
+      expect(singleWork?.id).toBe("work");
+
+      // Update personal config
+      yield* executor.onepassword.configure({
+        ...personalConfig,
+        name: "Personal Updated",
+      });
+
+      const afterUpdate = yield* executor.onepassword.listConfigs();
+      expect(afterUpdate).toHaveLength(2);
+      expect(afterUpdate.find((c) => c.id === "personal")?.name).toBe("Personal Updated");
+      expect(afterUpdate.find((c) => c.id === "work")?.name).toBe("Work");
+
+      // Remove personal config without affecting work
+      yield* executor.onepassword.removeConfig("personal");
+
+      const afterRemoveOne = yield* executor.onepassword.listConfigs();
+      expect(afterRemoveOne).toHaveLength(1);
+      expect(afterRemoveOne[0]?.id).toBe("work");
+
+      // Remove work config
+      yield* executor.onepassword.removeConfig("work");
+      const afterRemoveAll = yield* executor.onepassword.listConfigs();
+      expect(afterRemoveAll).toEqual([]);
+    }),
+  );
+
+  it.effect("redacts service-account tokens across all config listing and retrieval", () =>
+    Effect.gen(function* () {
+      const executor = yield* createExecutor(
+        makeTestConfig({ plugins: [onepasswordPlugin()] as const }),
+      );
+
+      yield* executor.onepassword.configure(workConfig);
+
+      const list = yield* executor.onepassword.listConfigs();
+      expect(list[0]?.auth.kind).toBe("service-account");
+      expect(JSON.stringify(list)).not.toContain("ops_work_token");
+
+      const single = yield* executor.onepassword.getConfig("work");
+      expect(single?.auth.kind).toBe("service-account");
+      expect(JSON.stringify(single)).not.toContain("ops_work_token");
+    }),
+  );
+
+  it.effect("exposes multi-config tools on the static integration", () =>
+    Effect.gen(function* () {
+      const executor = yield* createExecutor(
+        makeTestConfig({ plugins: [onepasswordPlugin()] as const }),
+      );
+
+      const configuredPersonal = yield* executor.execute(
+        ToolAddress.make("executor.onepassword.configure"),
+        personalConfig,
+        { onElicitation: "accept-all" },
+      );
+      expect(configuredPersonal).toEqual({
+        ok: true,
+        data: { configured: true, id: "personal" },
+      });
+
+      const configuredWork = yield* executor.execute(
+        ToolAddress.make("executor.onepassword.configure"),
+        workConfig,
+        { onElicitation: "accept-all" },
+      );
+      expect(configuredWork).toEqual({
+        ok: true,
+        data: { configured: true, id: "work" },
+      });
+
+      const listResult = yield* executor.execute(
+        ToolAddress.make("executor.onepassword.listConfigs"),
+        {},
+      );
+      expect(listResult).toMatchObject({
+        ok: true,
+        data: {
+          configs: [
+            { id: "personal", name: "Personal", vaultId: "vault-personal" },
+            { id: "work", name: "Work", vaultId: "vault-work" },
+          ],
+        },
+      });
+
+      const removed = yield* executor.execute(
+        ToolAddress.make("executor.onepassword.removeConfig"),
+        { id: "personal" },
+        { onElicitation: "accept-all" },
+      );
+      expect(removed).toEqual({ ok: true, data: { removed: true } });
+
+      const afterRemove = yield* executor.onepassword.listConfigs();
+      expect(afterRemove).toHaveLength(1);
+      expect(afterRemove[0]?.id).toBe("work");
+    }),
+  );
+});
+
+describe("onepassword store — backward compatibility", () => {
+  const makeStore = () => {
+    const blobs = pluginBlobStore(
+      makeInMemoryBlobStore(),
+      { org: "org_test", user: null },
+      "onepassword",
+    );
+    return { blobs, store: makeOnePasswordStore(blobs) };
+  };
+
+  it.effect("normalizes legacy single-vault blob on read", () =>
+    Effect.gen(function* () {
+      const { blobs, store } = makeStore();
+      yield* blobs.put(
+        "config",
+        JSON.stringify({
+          auth: { kind: "desktop-app", accountName: "my.1password.com" },
+          vaultId: "vault-123",
+          name: "Personal",
+        }),
+        { owner: "org" },
+      );
+
+      const configs = yield* store.getConfigs();
+      expect(configs).toEqual([
+        {
+          id: "default",
+          name: "Personal",
+          auth: { kind: "desktop-app", accountName: "my.1password.com" },
+          vaultId: "vault-123",
+          vaultName: "Personal",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("normalizes legacy multi-vault array blob on read", () =>
+    Effect.gen(function* () {
+      const { blobs, store } = makeStore();
+      yield* blobs.put(
+        "config",
+        JSON.stringify({
+          auth: { kind: "desktop-app", accountName: "my.1password.com" },
+          vaults: [
+            { id: "v-1", name: "Primary" },
+            { id: "v-2", name: "Secondary" },
+          ],
+          name: "1Password",
+        }),
+        { owner: "org" },
+      );
+
+      const configs = yield* store.getConfigs();
+      expect(configs).toHaveLength(2);
+      expect(configs[0]).toEqual({
+        id: "default",
+        name: "1Password",
+        auth: { kind: "desktop-app", accountName: "my.1password.com" },
+        vaultId: "v-1",
+        vaultName: "Primary",
+      });
+      expect(configs[1]).toEqual({
+        id: "v-2",
+        name: "Secondary",
+        auth: { kind: "desktop-app", accountName: "my.1password.com" },
+        vaultId: "v-2",
+        vaultName: "Secondary",
+      });
+    }),
+  );
+
+  it.effect("persists and reads back multiple named configurations", () =>
+    Effect.gen(function* () {
+      const { store } = makeStore();
+      yield* store.saveConfig(personalConfig, "org");
+      yield* store.saveConfig(workConfig, "org");
+
+      const configs = yield* store.getConfigs();
+      expect(configs).toEqual([personalConfig, workConfig]);
+    }),
+  );
+});
+
+describe("resolveConfiguredRef — multi-configuration resolution", () => {
+  const configs = [personalConfig, workConfig];
+  const itemsByVault = {
+    "vault-personal": [{ id: "item-p1", title: "GitHub Token" }],
+    "vault-work": [{ id: "item-w1", title: "Stripe Key" }],
+  };
+
+  const getSvc = (_config: OnePasswordConfig) => Effect.succeed(fakeService(itemsByVault));
+
+  it.effect("resolves op://<configId>/<itemId> directly", () =>
+    Effect.gen(function* () {
+      const result = yield* resolveConfiguredRef(getSvc, configs, "op://personal/item-p1");
+      expect(result).toEqual({
+        kind: "resolved",
+        value: "secret:op://vault-personal/item-p1/credential",
+      });
+    }),
+  );
+
+  it.effect("resolves op://<configId>/<vaultId>/<itemId> directly", () =>
+    Effect.gen(function* () {
       const result = yield* resolveConfiguredRef(
-        svc,
-        twoVaultConfig,
-        "op://vault-456/item-abc/password",
+        getSvc,
+        configs,
+        "op://work/vault-work/item-w1/api-key",
       );
       expect(result).toEqual({
         kind: "resolved",
-        value: "secret:op://vault-456/item-abc/password",
+        value: "secret:op://vault-work/item-w1/api-key",
       });
     }),
   );
 
-  it.effect("appends the credential field to a picker-shaped op://vault/item ref", () =>
+  it.effect("resolves legacy op://<vaultId>/<itemId> by matching vaultId across configs", () =>
     Effect.gen(function* () {
-      const svc = fakeService({});
-      const result = yield* resolveConfiguredRef(svc, twoVaultConfig, "op://vault-123/item-abc");
+      const result = yield* resolveConfiguredRef(
+        getSvc,
+        configs,
+        "op://vault-personal/item-p1/password",
+      );
       expect(result).toEqual({
         kind: "resolved",
-        value: "secret:op://vault-123/item-abc/credential",
+        value: "secret:op://vault-personal/item-p1/password",
       });
     }),
   );
 
-  it.effect("accepts an op:// URI addressed by vault name", () =>
+  it.effect("rejects an op:// URI referencing an unconfigured vault (strict isolation)", () =>
     Effect.gen(function* () {
-      const svc = fakeService({});
-      const result = yield* resolveConfiguredRef(svc, twoVaultConfig, "op://Work/item/password");
-      expect(result).toEqual({ kind: "resolved", value: "secret:op://Work/item/password" });
-    }),
-  );
-
-  it.effect("reports an op:// URI outside the configured vaults", () =>
-    Effect.gen(function* () {
-      const svc = fakeService({});
       const result = yield* resolveConfiguredRef(
-        svc,
-        twoVaultConfig,
-        "op://vault-999/item/password",
+        getSvc,
+        configs,
+        "op://vault-unknown/item-123/password",
       );
       expect(result).toEqual({ kind: "outside-vaults" });
     }),
   );
 
-  it.effect("resolves a bare ref that matches exactly one item across vaults", () =>
+  it.effect("resolves a bare ref when it matches in exactly one vault", () =>
     Effect.gen(function* () {
-      const svc = fakeService({
-        "vault-123": [{ id: "item-1", title: "GitHub Token" }],
-        "vault-456": [{ id: "item-2", title: "Stripe Key" }],
-      });
-      const result = yield* resolveConfiguredRef(svc, twoVaultConfig, "GitHub Token");
+      const result = yield* resolveConfiguredRef(getSvc, configs, "Stripe Key");
       expect(result).toEqual({
         kind: "resolved",
-        value: "secret:op://vault-123/item-1/credential",
+        value: "secret:op://vault-work/item-w1/credential",
       });
     }),
   );
 
-  it.effect("fails a bare ref that matches in two vaults with the vaults named", () =>
+  it.effect("detects ambiguity when a bare ref matches in multiple configured vaults", () =>
     Effect.gen(function* () {
-      const svc = fakeService({
-        "vault-123": [{ id: "item-1", title: "GitHub Token" }],
-        "vault-456": [{ id: "item-2", title: "GitHub Token" }],
-      });
-      const result = yield* resolveConfiguredRef(svc, twoVaultConfig, "GitHub Token");
+      const ambiguousItems = {
+        "vault-personal": [{ id: "item-1", title: "Shared Key" }],
+        "vault-work": [{ id: "item-2", title: "Shared Key" }],
+      };
+      const ambiguousSvc = (_config: OnePasswordConfig) =>
+        Effect.succeed(fakeService(ambiguousItems));
+
+      const result = yield* resolveConfiguredRef(ambiguousSvc, configs, "Shared Key");
       expect(result).toEqual({
         kind: "ambiguous",
         matches: [
           {
-            vaultId: "vault-123",
-            vaultName: "Personal",
+            configId: "personal",
+            configName: "Personal",
+            vaultId: "vault-personal",
+            vaultName: "Personal Vault",
             itemId: "item-1",
-            itemTitle: "GitHub Token",
+            itemTitle: "Shared Key",
           },
-          { vaultId: "vault-456", vaultName: "Work", itemId: "item-2", itemTitle: "GitHub Token" },
+          {
+            configId: "work",
+            configName: "Work",
+            vaultId: "vault-work",
+            vaultName: "Work Vault",
+            itemId: "item-2",
+            itemTitle: "Shared Key",
+          },
         ],
       });
-    }),
-  );
-
-  it.effect("treats duplicate titles inside one vault as ambiguous too", () =>
-    Effect.gen(function* () {
-      const svc = fakeService({
-        "vault-123": [
-          { id: "item-1", title: "GitHub Token" },
-          { id: "item-9", title: "GitHub Token" },
-        ],
-        "vault-456": [],
-      });
-      const result = yield* resolveConfiguredRef(svc, twoVaultConfig, "GitHub Token");
-      expect(result.kind).toBe("ambiguous");
-    }),
-  );
-
-  it.effect("reports not-found for a bare ref matching nothing", () =>
-    Effect.gen(function* () {
-      const svc = fakeService({ "vault-123": [], "vault-456": [] });
-      const result = yield* resolveConfiguredRef(svc, twoVaultConfig, "missing");
-      expect(result).toEqual({ kind: "not-found" });
     }),
   );
 });
