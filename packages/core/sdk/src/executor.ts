@@ -134,6 +134,7 @@ import {
 import { isFirstPartyOAuthClientSlug, type OAuthService } from "./oauth-client";
 import type { FirstPartyOAuthClientConfig } from "./oauth-client";
 import {
+  combineEffectivePolicies,
   comparePolicyRow,
   isValidPattern,
   matchPattern,
@@ -4801,6 +4802,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           readonly kind: "provider";
           readonly provider: ToolPolicyProvider;
           readonly rules: readonly ToolPolicyProviderRule[] | null;
+          readonly globalRows: readonly ToolPolicyRow[];
         }
       | {
           readonly kind: "prepared";
@@ -4808,6 +4810,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             readonly toolId: string;
             readonly defaultRequiresApproval?: boolean;
           }) => EffectivePolicy;
+          readonly globalRows: readonly ToolPolicyRow[];
         };
 
     const compareProviderPolicyRule = (
@@ -4842,50 +4845,60 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
     };
 
     const listActivePolicyRuleSet = (): Effect.Effect<ActivePolicyRuleSet, StorageFailure> =>
-      activeToolPolicyProvider
-        ? // Batched per-operation resolver: fetch all policy + connection state
-          // once, then resolve every tool in this operation against that
-          // snapshot. Avoids the per-tool resolve N+1 on the list surface.
-          activeToolPolicyProvider.prepare
-          ? activeToolPolicyProvider
-              .prepare()
-              .pipe(Effect.map((resolve) => ({ kind: "prepared" as const, resolve })))
-          : activeToolPolicyProvider.resolve
-            ? Effect.succeed({
-                kind: "provider" as const,
-                provider: activeToolPolicyProvider,
-                rules: null,
-              })
-            : activeToolPolicyProvider.list().pipe(
-                Effect.map((rules) => ({
-                  kind: "provider" as const,
-                  provider: activeToolPolicyProvider!,
-                  rules,
-                })),
-              )
-        : core
-            .findMany("tool_policy", {})
-            .pipe(Effect.map((rows) => ({ kind: "global" as const, rows })));
+      Effect.gen(function* () {
+        const globalRows = yield* core.findMany("tool_policy", {});
+        if (!activeToolPolicyProvider) {
+          return { kind: "global" as const, rows: globalRows };
+        }
+        if (activeToolPolicyProvider.prepare) {
+          const resolve = yield* activeToolPolicyProvider.prepare();
+          return { kind: "prepared" as const, resolve, globalRows };
+        }
+        if (activeToolPolicyProvider.resolve) {
+          return {
+            kind: "provider" as const,
+            provider: activeToolPolicyProvider,
+            rules: null,
+            globalRows,
+          };
+        }
+        const rules = yield* activeToolPolicyProvider.list();
+        return {
+          kind: "provider" as const,
+          provider: activeToolPolicyProvider,
+          rules,
+          globalRows,
+        };
+      });
 
     const resolvePolicyFromRuleSet = (
       toolId: string,
       ruleSet: ActivePolicyRuleSet,
       defaultRequiresApproval?: boolean,
     ): Effect.Effect<EffectivePolicy, StorageFailure> =>
-      ruleSet.kind === "prepared"
-        ? Effect.succeed(ruleSet.resolve({ toolId, defaultRequiresApproval }))
-        : ruleSet.kind === "provider"
-          ? ruleSet.provider.resolve
-            ? ruleSet.provider.resolve({ toolId, defaultRequiresApproval })
-            : Effect.succeed(resolveProviderPolicyFromRules(toolId, ruleSet.rules ?? []))
-          : Effect.succeed(
-              resolveEffectivePolicy(
-                toolId,
-                ruleSet.rows,
-                ownerRankForRow,
-                defaultRequiresApproval,
-              ),
-            );
+      Effect.gen(function* () {
+        if (ruleSet.kind === "global") {
+          return resolveEffectivePolicy(
+            toolId,
+            ruleSet.rows,
+            ownerRankForRow,
+            defaultRequiresApproval,
+          );
+        }
+        const globalPolicy = resolveEffectivePolicy(
+          toolId,
+          ruleSet.globalRows,
+          ownerRankForRow,
+          defaultRequiresApproval,
+        );
+        const providerPolicy =
+          ruleSet.kind === "prepared"
+            ? ruleSet.resolve({ toolId, defaultRequiresApproval })
+            : ruleSet.provider.resolve
+              ? yield* ruleSet.provider.resolve({ toolId, defaultRequiresApproval })
+              : resolveProviderPolicyFromRules(toolId, ruleSet.rules ?? []);
+        return combineEffectivePolicies(providerPolicy, globalPolicy);
+      });
 
     // ------------------------------------------------------------------
     // Tools (read surface)
@@ -5437,7 +5450,6 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
     ): Effect.Effect<EffectivePolicy, StorageFailure> =>
       Effect.gen(function* () {
         const parsed = parseToolAddress(String(address));
-        const policyRows = yield* core.findMany("tool_policy", {});
         const toolId = parsed
           ? `${parsed.integration}.${parsed.owner}.${parsed.connection}.${parsed.tool}`
           : String(address);
@@ -5458,7 +5470,8 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             requiresApproval = annotations?.requiresApproval;
           }
         }
-        return resolveEffectivePolicy(toolId, policyRows, ownerRankForRow, requiresApproval);
+        const policyRules = yield* listActivePolicyRuleSet();
+        return yield* resolvePolicyFromRuleSet(toolId, policyRules, requiresApproval);
       });
 
     // ------------------------------------------------------------------

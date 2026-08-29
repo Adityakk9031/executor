@@ -192,6 +192,8 @@ export {
   matchPattern,
   isValidPattern,
   effectivePolicyFromSorted,
+  combineEffectivePolicies,
+  moreRestrictivePolicy,
   ToolPolicyActionSchema,
   type ToolPolicy,
   type CreateToolPolicyInput,

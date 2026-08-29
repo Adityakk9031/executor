@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Predicate, Result } from "effect";
-import { makeTestExecutor } from "@executor-js/sdk/testing";
+import { Effect, Predicate, Result, Schema } from "effect";
+import { createExecutor, definePlugin, tool, ToolAddress } from "@executor-js/sdk";
+import { makeTestExecutor, makeTestWorkspaceHarness } from "@executor-js/sdk/testing";
 
 import { toolkitsPlugin } from "./server";
 
@@ -197,6 +198,144 @@ describe("toolkitsPlugin", () => {
         rules.map((rule) => `${rule.pattern} ${rule.action}`),
         "policy listing agrees with toolkit enforcement",
       ).toContain("google_docs.org.* approve");
+    }),
+  );
+
+  it.effect("enforces workspace policies when running under an active toolkit", () =>
+    Effect.gen(function* () {
+      const samplePlugin = definePlugin(() => ({
+        id: "sample" as const,
+        storage: () => ({}),
+        staticIntegrations: () => [
+          {
+            kind: "control" as const,
+            id: "sample.ctl",
+            name: "Sample Control",
+            tools: [
+              tool({
+                name: "readTool",
+                description: "read tool",
+                inputSchema: Schema.toStandardSchemaV1(
+                  Schema.toStandardJSONSchemaV1(Schema.Struct({})),
+                ),
+                execute: () => Effect.succeed("read-data"),
+              }),
+              tool({
+                name: "deleteTool",
+                description: "delete tool",
+                inputSchema: Schema.toStandardSchemaV1(
+                  Schema.toStandardJSONSchemaV1(Schema.Struct({})),
+                ),
+                execute: () => Effect.succeed("deleted"),
+              }),
+            ],
+          },
+        ],
+      }))();
+
+      const harness = yield* makeTestWorkspaceHarness({
+        plugins: [toolkitsPlugin(), samplePlugin] as const,
+      });
+      const setup = harness.executor;
+
+      const toolkit = yield* setup.toolkits.create({
+        owner: "org",
+        name: "Test Kit",
+      });
+      yield* setup.toolkits.createConnection(toolkit.id, {
+        pattern: "sample.ctl.*",
+      });
+
+      // Workspace policy: require_approval on readTool
+      yield* setup.policies.create({
+        owner: "org",
+        pattern: "sample.ctl.readTool",
+        action: "require_approval",
+      });
+
+      // Workspace policy: block on deleteTool
+      yield* setup.policies.create({
+        owner: "org",
+        pattern: "sample.ctl.deleteTool",
+        action: "block",
+      });
+
+      // Now create a toolkit-scoped executor (as built for /mcp/toolkits/<slug>) sharing the same db
+      const toolkitExecutor = yield* createExecutor({
+        ...harness.config,
+        plugins: [toolkitsPlugin({ activeToolkitSlug: toolkit.slug }), samplePlugin] as const,
+      });
+
+      // 1. readTool is visible in tools.list
+      const tools = yield* toolkitExecutor.tools.list();
+      expect(tools.map((t) => String(t.address))).toContain("sample.ctl.readTool");
+      // deleteTool was blocked by workspace policy, so it must not be in tools.list
+      expect(tools.map((t) => String(t.address))).not.toContain("sample.ctl.deleteTool");
+
+      // 2. readTool policy resolves to require_approval
+      const readPolicy = yield* toolkitExecutor.policies.resolve(
+        ToolAddress.make("sample.ctl.readTool"),
+      );
+      expect(readPolicy.action).toBe("require_approval");
+
+      // 3. deleteTool policy resolves to block
+      const deletePolicy = yield* toolkitExecutor.policies.resolve(
+        ToolAddress.make("sample.ctl.deleteTool"),
+      );
+      expect(deletePolicy.action).toBe("block");
+
+      // 4. Executing readTool prompts elicitation
+      let elicited = false;
+      const result = yield* toolkitExecutor.execute(
+        ToolAddress.make("sample.ctl.readTool"),
+        {},
+        {
+          onElicitation: () => {
+            elicited = true;
+            return Effect.succeed({ action: "accept" as const });
+          },
+        },
+      );
+      expect(result).toBe("read-data");
+      expect(elicited).toBe(true);
+
+      // 5. Executing deleteTool is blocked
+      const blocked = yield* Effect.result(
+        toolkitExecutor.execute(ToolAddress.make("sample.ctl.deleteTool"), {}),
+      );
+      expect(Result.isFailure(blocked)).toBe(true);
+      if (!Result.isFailure(blocked)) return;
+      expect(Predicate.isTagged("ToolBlockedError")(blocked.failure)).toBe(true);
+
+      // 6. Toolkit approve policy cannot weaken workspace require_approval policy
+      yield* setup.toolkits.createPolicy(toolkit.id, {
+        pattern: "sample.ctl.readTool",
+        action: "approve",
+      });
+
+      const toolkitExecutorWithApprove = yield* createExecutor({
+        ...harness.config,
+        plugins: [toolkitsPlugin({ activeToolkitSlug: toolkit.slug }), samplePlugin] as const,
+      });
+
+      const stillRequireApproval = yield* toolkitExecutorWithApprove.policies.resolve(
+        ToolAddress.make("sample.ctl.readTool"),
+      );
+      expect(stillRequireApproval.action).toBe("require_approval");
+
+      let elicitedAgain = false;
+      const resultAgain = yield* toolkitExecutorWithApprove.execute(
+        ToolAddress.make("sample.ctl.readTool"),
+        {},
+        {
+          onElicitation: () => {
+            elicitedAgain = true;
+            return Effect.succeed({ action: "accept" as const });
+          },
+        },
+      );
+      expect(resultAgain).toBe("read-data");
+      expect(elicitedAgain).toBe(true);
     }),
   );
 });

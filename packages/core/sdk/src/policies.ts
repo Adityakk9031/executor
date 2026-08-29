@@ -188,7 +188,7 @@ const actionRestrictionRank = (action: ToolPolicyAction): number =>
     Match.exhaustive,
   );
 
-const moreRestrictive = <T extends { readonly action: ToolPolicyAction }>(
+export const moreRestrictive = <T extends { readonly action: ToolPolicyAction }>(
   current: T | undefined,
   candidate: T,
 ): T => {
@@ -196,6 +196,37 @@ const moreRestrictive = <T extends { readonly action: ToolPolicyAction }>(
   const currentRank = actionRestrictionRank(current.action);
   const candidateRank = actionRestrictionRank(candidate.action);
   return candidateRank > currentRank ? candidate : current;
+};
+
+export const moreRestrictivePolicy = moreRestrictive;
+
+/**
+ * Combine policy resolution from a scoped tool policy provider (e.g. a toolkit)
+ * with the ambient workspace/global policy set under the principle of least privilege:
+ * - If either policy explicitly blocks (or the tool is outside the toolkit connection boundary), it is blocked.
+ * - If both have explicit user/org rules, the most restrictive user rule wins.
+ * - If only one has an explicit user/org rule, that user rule takes precedence over plugin default.
+ * - If neither has an explicit user/org rule, fall back to the most restrictive plugin default.
+ */
+export const combineEffectivePolicies = (
+  providerPolicy: EffectivePolicy,
+  globalPolicy: EffectivePolicy,
+): EffectivePolicy => {
+  if (providerPolicy.action === "block") return providerPolicy;
+  if (globalPolicy.action === "block") return globalPolicy;
+
+  if (providerPolicy.source === "user" && globalPolicy.source === "user") {
+    return moreRestrictive(providerPolicy, globalPolicy);
+  }
+
+  if (globalPolicy.source === "user") {
+    return globalPolicy;
+  }
+  if (providerPolicy.source === "user") {
+    return providerPolicy;
+  }
+
+  return moreRestrictive(providerPolicy, globalPolicy);
 };
 
 export const resolveToolPolicy = (
