@@ -922,11 +922,12 @@ type RunAutomaticOAuthConnectInput = {
   >;
   /** A reconnect carries the STORED client's RFC 8707 resource — including an
    *  EXPLICIT null for a client registered WITHOUT a resource indicator
-   *  (#1822: some servers reject any `resource` parameter). When present it
-   *  overrides the probe-derived value, so client reuse matches the stored
-   *  row and a genuinely needed re-registration preserves the absence.
-   *  Undefined (a fresh connect, or the stored row is gone) keeps the probed
-   *  behavior. */
+   *  (#1822: some servers reject any `resource` parameter). The flow
+   *  RECONCILES it with the probe: an explicit null always wins (the
+   *  deliberate absence is preserved), a probed resource beats a stored one
+   *  (the server migrated), and the stored one stands when the probe
+   *  advertises none. Undefined (a fresh connect, or the stored row is gone)
+   *  keeps the probed behavior. */
   readonly storedResource?: string | null;
 };
 
@@ -950,7 +951,10 @@ const DCR_CLIENT_NAME = "Executor";
  *   so the caller can show why (e.g. a redirect-URI rejection) over the generic copy.
  * - Register failed without detail (null) → `{ kind: "fallback", reason: "registration-failed", probe }`.
  * - Surface gone after any await (`isActive` false) → `{ kind: "aborted" }`,
- *   window released, popup never launched.
+ *   window released, popup never launched. Checked BEFORE inspecting that
+ *   await's result, so aborted wins even when the round trip failed — a
+ *   failure outcome would have the caller write fallback state for a modal
+ *   that no longer exists.
  * - Success → calls `start` and reports which automatic flow was used.
  */
 export async function runAutomaticOAuthConnect(
@@ -976,12 +980,19 @@ export async function runAutomaticOAuthConnect(
     deps.release();
     return { kind: "fallback", reason: "probe-failed" };
   }
-  // The flow's RFC 8707 resource indicator: a reconnect's stored value wins
-  // (see `storedResource`), otherwise the probe's advertised resource with the
+  // The flow's RFC 8707 resource indicator. A reconnect RECONCILES the stored
+  // value with the probe rather than pinning it: a stored EXPLICIT null always
+  // wins (#1822 — the deliberate absence some servers require), a probed
+  // resource beats a stored one (the server migrated its protected resource,
+  // and the probe is the fresh truth), and a stored resource stands when the
+  // probe advertises none — including over the discovery-URL fallback, which
+  // is our own guess. A fresh connect keeps the probed value with the
   // discovery-URL fallback.
   const resource =
     input.storedResource !== undefined
-      ? input.storedResource
+      ? input.storedResource === null
+        ? null
+        : (probe.resource ?? input.storedResource)
       : (probe.resource ?? input.resourceFallback ?? null);
   if (probe.clientIdMetadataDocumentSupported === true) {
     const resolved = await resolveCimdClient(
@@ -996,13 +1007,15 @@ export async function runAutomaticOAuthConnect(
         existingClients: input.cimd.existingClients,
       },
     );
-    if (resolved.kind === "failed") {
-      deps.release();
-      return { kind: "fallback", reason: "client-metadata-failed", probe };
-    }
+    // Aborted wins over failure: a "fallback" outcome makes the caller write
+    // recovery state, and the modal that would render it is gone.
     if (!deps.isActive()) {
       deps.release();
       return { kind: "aborted" };
+    }
+    if (resolved.kind === "failed") {
+      deps.release();
+      return { kind: "fallback", reason: "client-metadata-failed", probe };
     }
     deps.start({ client: resolved.client, owner: input.owner, reservation });
     return { kind: "started", flow: "cimd" };
@@ -1029,6 +1042,14 @@ export async function runAutomaticOAuthConnect(
     redirectUri: input.redirectUri,
     originIntegration: input.integration,
   });
+  // A close that raced the registration itself cannot unmint the client (there
+  // is no server-side cancel) — the row is inert, reusable DCR plumbing — but
+  // nothing may land on the closed surface afterwards: not the sign-in popup,
+  // and not a failure fallback either, so aborted wins over the mint result.
+  if (!deps.isActive()) {
+    deps.release();
+    return { kind: "aborted" };
+  }
   if (minted === null) {
     deps.release();
     return { kind: "fallback", reason: "registration-failed", probe };
@@ -1038,13 +1059,6 @@ export async function runAutomaticOAuthConnect(
   if (typeof minted === "object") {
     deps.release();
     return { kind: "fallback", reason: "registration-failed", probe, message: minted.error };
-  }
-  // A close that raced the registration itself cannot unmint the client (there
-  // is no server-side cancel) — the row is inert, reusable DCR plumbing — but
-  // the sign-in popup must never launch after the modal is gone.
-  if (!deps.isActive()) {
-    deps.release();
-    return { kind: "aborted" };
   }
   deps.start({ client: minted, owner: input.owner, reservation });
   return { kind: "started", flow: "dcr" };
@@ -1056,10 +1070,10 @@ export async function runAutomaticOAuthConnect(
  * True when the integration advertises dynamic registration (MCP oauth2) OR
  * carries a discovery URL we can probe at connect time — the probe decides
  * between CIMD and DCR from there. This is a METHOD capability only: a
- * reconnect additionally requires the STORED client binding to be an
- * auto-minted DCR one (`reconnectAllowsAutomaticRegistration`) before taking
- * the automatic route, so a static/BYO or first-party binding is never
- * silently rebound.
+ * reconnect routes by the STORED client binding instead (`reconnectRoute`),
+ * so a static/BYO or first-party binding is never silently rebound, and an
+ * auto-minted DCR binding re-registers even when the method declares no
+ * capability (the probe falls back to the token URL).
  */
 export const hasDcr = (method: AuthMethod | undefined | null): boolean =>
   method?.kind === "oauth" &&
@@ -2499,10 +2513,11 @@ function AddAccountModalView(props: AddAccountModalProps) {
             : {}),
         },
       );
-      setDcrBusy(false);
-      // The modal closed mid-flight: this view is unmounted, so there is
-      // nothing to report and no fallback to show.
+      // The modal closed mid-flight: this view is unmounted, so no state may
+      // be written at all — not the fallback below, and not even the busy
+      // flag, which belongs to the surface that is gone.
       if (outcome.kind === "aborted") return;
+      setDcrBusy(false);
       // `connection_oauth_started` measures the connect funnel; a reconnect
       // reports through `connection_reconnected` on the popup callbacks above,
       // so it must not also land here.
@@ -2592,7 +2607,12 @@ function AddAccountModalView(props: AddAccountModalProps) {
     oauthReconnectOpenedKey.current = handoff.key;
     setMethodId(oauthMethod.id);
 
-    if (hasDcr(oauthMethod) && oauthClient.dynamicRegistration === true) {
+    // The accounts section vetted the STORED binding as auto-minted DCR
+    // (`dynamicRegistration: true`), and that alone routes: the automatic
+    // flow probes the method's token URL even when it declares no
+    // discovery/DCR capability, whereas the direct path below would dead-end
+    // an origin-drifted DCR client (#1542).
+    if (oauthClient.dynamicRegistration === true) {
       void startAutomaticOAuthConnect({
         method: oauthMethod,
         owner: connectionOwner,

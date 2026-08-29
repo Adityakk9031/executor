@@ -13,8 +13,8 @@ import {
 import {
   missingScopes,
   oauthReconnectPayload,
-  reconnectAllowsAutomaticRegistration,
   reconnectMode,
+  reconnectRoute,
   reconnectStoredClient,
   reconsentRequiredScopes,
 } from "./oauth-reconnect";
@@ -122,30 +122,54 @@ describe("reconnectStoredClient (resolve a connection's stored app)", () => {
   });
 });
 
-describe("reconnectAllowsAutomaticRegistration (which bindings may re-register)", () => {
-  // Only an auto-minted DCR binding may re-run probe/registration; a manual
-  // (static/BYO) or first-party binding must keep the direct stored-client
-  // path — re-registering would silently rebind the connection.
-  it("allows an auto-minted DCR binding", () => {
-    expect(
-      reconnectAllowsAutomaticRegistration(
-        clientSummary({ origin: { kind: "dynamic_client_registration", integration: null } }),
-      ),
-    ).toBe(true);
+describe("reconnectRoute (where an OAuth Reconnect goes)", () => {
+  const dcrBinding = clientSummary({
+    origin: { kind: "dynamic_client_registration", integration: null },
   });
 
-  it("allows a binding whose stored row is gone (nothing to start directly against)", () => {
-    expect(reconnectAllowsAutomaticRegistration(undefined)).toBe(true);
+  // The summaries have not loaded → the stored binding is UNKNOWN, and no
+  // route may be chosen. The old routing chose "direct" here, permanently
+  // dead-ending an origin-drifted DCR client exactly as #1542 described.
+  it("waits (never chooses direct) while the client summaries are loading", () => {
+    expect(reconnectRoute(undefined, connection(), true)).toEqual({ kind: "unknown" });
+    expect(reconnectRoute(undefined, connection(), false)).toEqual({ kind: "unknown" });
   });
 
-  it("keeps a manual (static/BYO) binding on the direct path", () => {
-    expect(reconnectAllowsAutomaticRegistration(clientSummary())).toBe(false);
+  // The BINDING's origin routes, not the method's capability flags: the
+  // automatic flow can probe the token URL even when the method declares no
+  // discovery/DCR support.
+  it("routes a DCR-origin binding to the automatic path regardless of method capability", () => {
+    expect(reconnectRoute([dcrBinding], connection(), false)).toEqual({
+      kind: "automatic",
+      stored: dcrBinding,
+    });
+    expect(reconnectRoute([dcrBinding], connection(), true)).toEqual({
+      kind: "automatic",
+      stored: dcrBinding,
+    });
+  });
+
+  // A manual (static/BYO) or first-party binding must keep the direct
+  // stored-client path — re-registering would silently rebind the connection.
+  it("keeps a manual (static/BYO) binding on the direct path even on a capable method", () => {
+    expect(reconnectRoute([clientSummary()], connection(), true)).toEqual({ kind: "direct" });
   });
 
   it("keeps a first-party binding on the direct path", () => {
     expect(
-      reconnectAllowsAutomaticRegistration(clientSummary({ origin: { kind: "first_party" } })),
-    ).toBe(false);
+      reconnectRoute([clientSummary({ origin: { kind: "first_party" } })], connection(), true),
+    ).toEqual({ kind: "direct" });
+  });
+
+  // A binding whose row is GONE has nothing to start directly against, so
+  // re-registration is its only recovery — when the method supports the
+  // automatic flow at all.
+  it("re-registers a gone binding when the method supports the automatic flow", () => {
+    expect(reconnectRoute([], connection(), true)).toEqual({
+      kind: "automatic",
+      stored: undefined,
+    });
+    expect(reconnectRoute([], connection(), false)).toEqual({ kind: "direct" });
   });
 });
 

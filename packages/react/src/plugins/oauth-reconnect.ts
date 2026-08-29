@@ -63,17 +63,47 @@ export function reconnectStoredClient(
   );
 }
 
-/** Whether Reconnect may take the automatic probe/CIMD/DCR route for this
- *  stored binding. Only an auto-minted DCR client may be re-registered (its
- *  whole lifecycle is automatic), and a binding whose row is GONE has nothing
- *  to start directly against, so re-registration is its only recovery. A
- *  manual (static/BYO) or first-party binding must keep the direct
- *  stored-client path — routing it through registration would silently rebind
- *  the connection to an automatic client. */
-export function reconnectAllowsAutomaticRegistration(
-  stored: OAuthClientSummary | undefined,
-): boolean {
-  return stored === undefined || stored.origin.kind === "dynamic_client_registration";
+/** Where an OAuth connection's Reconnect goes. */
+export type ReconnectRoute =
+  /** The client summaries have not loaded, so the stored binding is unknown.
+   *  NO route may be chosen yet: guessing "direct" dead-ends an origin-drifted
+   *  DCR client (#1542), and guessing "automatic" would rebind a manual app.
+   *  The caller keeps the action unavailable until the summaries resolve. */
+  | { readonly kind: "unknown" }
+  /** Re-run the automatic probe/CIMD/DCR flow. `stored` is the binding's
+   *  summary — undefined when its row is gone — so the handoff can carry its
+   *  resource. */
+  | { readonly kind: "automatic"; readonly stored: OAuthClientSummary | undefined }
+  /** Start the OAuth flow directly against the stored client. */
+  | { readonly kind: "direct" };
+
+/** Decide the Reconnect route from the STORED client binding.
+ *
+ *  The binding's ORIGIN is what routes, not the method's capability flags:
+ *  - An auto-minted DCR binding re-registers (its whole lifecycle is
+ *    automatic, and the automatic flow can probe the token URL even when the
+ *    method declares no discovery/DCR support). Reusing it directly dead-ends
+ *    once the callback origin drifts (#1542).
+ *  - A manual (static/BYO) or first-party binding keeps the direct
+ *    stored-client path — re-registering would silently rebind the connection
+ *    to an automatic client.
+ *  - A binding whose row is GONE has nothing to start directly against, so it
+ *    re-registers when the method supports the automatic flow at all.
+ *  Pass `clients: undefined` while the summaries are loading: the decision is
+ *  then `"unknown"`, never a guess. */
+export function reconnectRoute(
+  clients: readonly OAuthClientSummary[] | undefined,
+  connection: Connection,
+  methodSupportsAutomatic: boolean,
+): ReconnectRoute {
+  if (clients === undefined) return { kind: "unknown" };
+  const stored = reconnectStoredClient(clients, connection);
+  if (stored !== undefined) {
+    return stored.origin.kind === "dynamic_client_registration"
+      ? { kind: "automatic", stored }
+      : { kind: "direct" };
+  }
+  return methodSupportsAutomatic ? { kind: "automatic", stored: undefined } : { kind: "direct" };
 }
 
 // ---------------------------------------------------------------------------

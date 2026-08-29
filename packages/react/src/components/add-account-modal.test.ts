@@ -656,7 +656,10 @@ describe("runAutomaticOAuthConnect (reconnect)", () => {
     expect(registerArgs!.resource).toBeNull();
   });
 
-  it("re-registers under the stored client's resource, not the probe's", async () => {
+  // The server MIGRATED its protected resource (R1 → R2) since the client was
+  // stored: the probe's freshly advertised value is the truth, so the stored
+  // one must not pin the reconnect to the old resource forever.
+  it("follows a migrated resource: the probe's advertised value beats the stored one", async () => {
     let registerArgs: RegisterArgs | null = null;
     await runDcrConnect(
       {
@@ -676,6 +679,38 @@ describe("runAutomaticOAuthConnect (reconnect)", () => {
       },
       {
         discoveryUrl: "https://mcp.example.com/mcp",
+        redirectUri: "http://localhost:4788/api/oauth/callback",
+        owner: "user" as Owner,
+        integration: TEST_INTEGRATION,
+        storedResource: "https://stored.example.com/mcp",
+      },
+    );
+
+    expect(registerArgs!.resource).toBe("https://probed.example.com/mcp");
+  });
+
+  // When the probe advertises NO resource, the stored one stands — including
+  // over the discovery-URL fallback, which is our own guess, not the server's.
+  it("keeps the stored resource when the probe advertises none", async () => {
+    let registerArgs: RegisterArgs | null = null;
+    await runDcrConnect(
+      {
+        ...popupSpy(),
+        probe: (): Promise<ProbeResult> =>
+          Promise.resolve({
+            authorizationUrl: "https://auth.example.com/authorize",
+            tokenUrl: "https://auth.example.com/token",
+            registrationEndpoint: "https://auth.example.com/register",
+          }),
+        register: (args: RegisterArgs): Promise<OAuthClientSlug> => {
+          registerArgs = args;
+          return Promise.resolve(OAuthClientSlug.make("reconnected-app"));
+        },
+        start: (): void => {},
+      },
+      {
+        discoveryUrl: "https://mcp.example.com/mcp",
+        resourceFallback: "https://mcp.example.com/mcp",
         redirectUri: "http://localhost:4788/api/oauth/callback",
         owner: "user" as Owner,
         integration: TEST_INTEGRATION,
@@ -777,6 +812,77 @@ describe("runAutomaticOAuthConnect (modal closed mid-flight)", () => {
           // The modal closes while the local CIMD client is being minted.
           active = false;
           return Promise.resolve(args.slug);
+        },
+        register: (): Promise<OAuthClientSlug> =>
+          Promise.resolve(OAuthClientSlug.make("unexpected")),
+        start: (): void => {
+          popup.calls.push("start");
+        },
+      },
+      {
+        discoveryUrl: "https://mcp.example.com/mcp",
+        owner: "user" as Owner,
+        integration: TEST_INTEGRATION,
+        cimd: {
+          integrationName: "Test MCP",
+          clientIdMetadataDocumentUrl: "https://executor.example/api/oauth/client-id-metadata.json",
+          existingClients: [],
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ kind: "aborted" });
+    expect(popup.calls).toEqual(["reserve", "release"]);
+  });
+
+  // A close racing a FAILED registration must still abort: a "fallback"
+  // outcome would make the caller write recovery state into a modal that no
+  // longer exists.
+  it("aborts (not fallback) when the close races a failed registration", async () => {
+    const popup = popupSpy();
+    let active = true;
+    const outcome = await runDcrConnect(
+      {
+        ...popup,
+        isActive: (): boolean => active,
+        probe: probeOk,
+        register: (): Promise<OAuthClientSlug | null> => {
+          // The modal closes while the registration is in flight, AND the
+          // server rejects it.
+          active = false;
+          return Promise.resolve(null);
+        },
+        start: (): void => {
+          popup.calls.push("start");
+        },
+      },
+      input,
+    );
+
+    expect(outcome).toEqual({ kind: "aborted" });
+    expect(popup.calls).toEqual(["reserve", "release"]);
+  });
+
+  // Same for the CIMD branch: a failed mint racing the close is an abort, not
+  // a client-metadata-failed fallback for the unmounted modal to render.
+  it("aborts (not fallback) when the close races a failed CIMD mint", async () => {
+    const popup = popupSpy();
+    let active = true;
+    const outcome = await runAutomaticOAuthConnect(
+      {
+        ...popup,
+        isActive: (): boolean => active,
+        probe: (): Promise<ProbeResult> =>
+          Promise.resolve({
+            authorizationUrl: "https://auth.example.com/authorize",
+            tokenUrl: "https://auth.example.com/token",
+            clientIdMetadataDocumentSupported: true,
+          }),
+        createCimdClient: (): Promise<OAuthClientSlug | null> => {
+          // The modal closes while the local CIMD client is being minted, AND
+          // the mint fails.
+          active = false;
+          return Promise.resolve(null);
         },
         register: (): Promise<OAuthClientSlug> =>
           Promise.resolve(OAuthClientSlug.make("unexpected")),

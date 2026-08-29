@@ -29,9 +29,8 @@ import type { AuthMethod } from "../lib/auth-placements";
 import {
   connectionNeedsReconsent,
   oauthReconnectPayload,
-  reconnectAllowsAutomaticRegistration,
   reconnectMode,
-  reconnectStoredClient,
+  reconnectRoute,
   reconsentRequiredScopes,
 } from "../plugins/oauth-reconnect";
 import { useOAuthPopupFlow } from "../plugins/oauth-sign-in";
@@ -125,6 +124,10 @@ function AccountRow(props: {
   readonly showOwnerLabel: boolean;
   readonly onEdit: () => void;
   readonly onReconnect: () => void;
+  /** Reconnect routing needs the stored client binding; while the client
+   *  summaries are still loading the route is unknown, so the action is
+   *  disabled rather than guessed (same idiom as "Check now" above). */
+  readonly reconnectDisabled: boolean;
   readonly onRemove: () => void;
 }) {
   const { connection, needsReconsent } = props;
@@ -278,7 +281,11 @@ function AccountRow(props: {
             <DropdownMenuItem className="text-sm" onClick={props.onEdit}>
               Edit
             </DropdownMenuItem>
-            <DropdownMenuItem className="text-sm" onClick={props.onReconnect}>
+            <DropdownMenuItem
+              className="text-sm"
+              disabled={props.reconnectDisabled}
+              onClick={props.onReconnect}
+            >
               Reconnect
             </DropdownMenuItem>
             <DropdownMenuItem variant="destructive" className="text-sm" onClick={props.onRemove}>
@@ -346,23 +353,23 @@ function OwnerAccounts(props: {
         (candidate: AuthMethod) =>
           candidate.kind === "oauth" && String(candidate.template) === String(connection.template),
       );
-      // Route through the automatic probe/registration flow ONLY when the
-      // STORED binding is itself an auto-minted DCR client, or its row is
-      // known to be gone (nothing left to start directly against). A
+      // Route by the STORED binding's origin (`reconnectRoute`): an
+      // auto-minted DCR binding re-runs the automatic probe/registration flow
+      // (direct reuse dead-ends once the callback origin drifts, #1542); a
       // static/BYO or first-party binding takes the direct path below even on
       // a discovery-capable integration — re-registering would silently
       // rebind the connection to an automatic client. While the client list
-      // is still loading the binding is unknown, so the direct path wins
-      // (never rebind on a guess).
-      const stored = AsyncResult.isSuccess(allClients)
-        ? reconnectStoredClient(allClients.value, connection)
-        : undefined;
-      if (
-        AsyncResult.isSuccess(allClients) &&
-        hasDcr(method) &&
-        reconnectAllowsAutomaticRegistration(stored)
-      ) {
-        props.onDcrReconnect(connection, stored);
+      // is still loading the binding is UNKNOWN and no route may be chosen:
+      // the menu item is disabled until then, and this guard backstops a
+      // race — a permanent wrong choice on a guess is never acceptable.
+      const route = reconnectRoute(
+        AsyncResult.isSuccess(allClients) ? allClients.value : undefined,
+        connection,
+        hasDcr(method),
+      );
+      if (route.kind === "unknown") return;
+      if (route.kind === "automatic") {
+        props.onDcrReconnect(connection, route.stored);
         return;
       }
       const payload = oauthReconnectPayload(connection);
@@ -482,6 +489,12 @@ function OwnerAccounts(props: {
             showOwnerLabel={props.showOwnerLabels}
             onEdit={() => props.onEdit(connection)}
             onReconnect={() => void handleReconnect(connection)}
+            // An OAuth Reconnect routes by the stored client binding; until
+            // the summaries load the route is unknown, so the action waits.
+            // Static-credential rows refresh without the binding.
+            reconnectDisabled={
+              reconnectMode(connection) === "oauth" && !AsyncResult.isSuccess(allClients)
+            }
             onRemove={() => setRemovingConnection(connection)}
           />
         ))}
@@ -687,9 +700,11 @@ export function AccountsSection(props: {
                     // modal may re-run the automatic flow.
                     dynamicRegistration: true,
                     // The stored client's RFC 8707 resource — an EXPLICIT null
-                    // for a client registered WITHOUT a resource indicator, so
-                    // reuse matches the stored row and a re-registration
-                    // preserves the absence. Omitted when the row is gone.
+                    // for a client registered WITHOUT a resource indicator
+                    // (that absence always survives re-registration); a stored
+                    // value is reconciled against the probe downstream, so a
+                    // migrated resource follows the server. Omitted when the
+                    // row is gone.
                     ...(storedClient !== undefined
                       ? { resource: storedClient.resource ?? null }
                       : {}),
