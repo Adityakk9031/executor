@@ -285,17 +285,15 @@ export const copyDirRecursive = (
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
-    yield* fs
-      .makeDirectory(dest, { recursive: true })
-      .pipe(
-        Effect.mapError(
-          (err) =>
-            new SkillGatewayError({
-              message: `Failed to create destination dir ${dest}`,
-              cause: err,
-            }),
-        ),
-      );
+    yield* fs.makeDirectory(dest, { recursive: true }).pipe(
+      Effect.mapError(
+        (err) =>
+          new SkillGatewayError({
+            message: `Failed to create destination dir ${dest}`,
+            cause: err,
+          }),
+      ),
+    );
 
     const entries = yield* fs
       .readDirectory(src)
@@ -454,28 +452,24 @@ export const addSkill = (input: {
         computedHash = computeFileHash(skillMdContent);
 
         const storeDir = path.join(centralSkillsDir, skillName);
-        yield* fs
-          .makeDirectory(storeDir, { recursive: true })
-          .pipe(
-            Effect.mapError(
-              (err) =>
-                new SkillGatewayError({
-                  message: `Failed to create store dir ${storeDir}`,
-                  cause: err,
-                }),
-            ),
-          );
-        yield* fs
-          .writeFileString(path.join(storeDir, "SKILL.md"), skillMdContent)
-          .pipe(
-            Effect.mapError(
-              (err) =>
-                new SkillGatewayError({
-                  message: `Failed to write SKILL.md in ${storeDir}`,
-                  cause: err,
-                }),
-            ),
-          );
+        yield* fs.makeDirectory(storeDir, { recursive: true }).pipe(
+          Effect.mapError(
+            (err) =>
+              new SkillGatewayError({
+                message: `Failed to create store dir ${storeDir}`,
+                cause: err,
+              }),
+          ),
+        );
+        yield* fs.writeFileString(path.join(storeDir, "SKILL.md"), skillMdContent).pipe(
+          Effect.mapError(
+            (err) =>
+              new SkillGatewayError({
+                message: `Failed to write SKILL.md in ${storeDir}`,
+                cause: err,
+              }),
+          ),
+        );
       }
     } else {
       // Remote source fallback registration
@@ -487,17 +481,15 @@ export const addSkill = (input: {
           ?.replace(/\.git$/, "") ??
         "remote-skill";
       const storeDir = path.join(centralSkillsDir, skillName);
-      yield* fs
-        .makeDirectory(storeDir, { recursive: true })
-        .pipe(
-          Effect.mapError(
-            (err) =>
-              new SkillGatewayError({
-                message: `Failed to create store dir ${storeDir}`,
-                cause: err,
-              }),
-          ),
-        );
+      yield* fs.makeDirectory(storeDir, { recursive: true }).pipe(
+        Effect.mapError(
+          (err) =>
+            new SkillGatewayError({
+              message: `Failed to create store dir ${storeDir}`,
+              cause: err,
+            }),
+        ),
+      );
       const stubContent = `---\nname: "${skillName}"\ndescription: "Skill from ${input.source}"\n---\n# ${skillName}\n\nRemote skill installed from ${input.source}.\n`;
       yield* fs
         .writeFileString(path.join(storeDir, "SKILL.md"), stubContent)
@@ -639,17 +631,15 @@ export const toggleSkill = (input: {
       for (const agent of detectedTargets) {
         const agentSkillDir = path.join(agent.path, input.name);
         if (yield* fs.exists(agentSkillDir).pipe(Effect.orElseSucceed(() => false))) {
-          yield* fs
-            .remove(agentSkillDir, { recursive: true })
-            .pipe(
-              Effect.mapError(
-                (err) =>
-                  new SkillGatewayError({
-                    message: `Failed to remove ${agentSkillDir}`,
-                    cause: err,
-                  }),
-              ),
-            );
+          yield* fs.remove(agentSkillDir, { recursive: true }).pipe(
+            Effect.mapError(
+              (err) =>
+                new SkillGatewayError({
+                  message: `Failed to remove ${agentSkillDir}`,
+                  cause: err,
+                }),
+            ),
+          );
         }
       }
     } else {
