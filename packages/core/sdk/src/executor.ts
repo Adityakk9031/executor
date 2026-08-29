@@ -3309,22 +3309,44 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         // clears it, and reconnect re-syncs tools anyway). Read fresh, since
         // the recorder wrote AFTER this sync's row was loaded. Keep stamping
         // the sync time so the stale-catalog check does not re-attempt this
-        // connection on every read.
-        const stampSyncedWithHealth = (reason: string) =>
+        // connection on every read. A plugin-supplied actionable `health`
+        // (e.g. the MCP plugin's reauthorization-required verdict) replaces
+        // the generic tool-sync verdict, never a recorded dead grant's.
+        //
+        // The UPDATE compare-and-swaps on the stamps the fresh read observed
+        // (the same legs as `persistHealthResult`): the fresh read alone
+        // leaves a check-to-write window, and a reconnect landing inside it
+        // clears the dead-grant state this guard reads — the reconnected row
+        // has nothing left to observe, so only the swap can refuse stamping
+        // the old credential's verdict onto the new grant. The loser is a
+        // silent no-op (the conflicting writer is newer evidence, and a
+        // reconnect re-syncs tools anyway); at worst the skipped
+        // `tools_synced_at` stamp makes the next read re-attempt the sync.
+        const stampSyncedWithHealth = (reason: string, health?: HealthCheckResult) =>
           findConnectionRow(ref).pipe(
             Effect.flatMap((fresh) =>
-              core.updateMany("connection", {
-                where: connectionWhere,
-                set:
-                  fresh !== null &&
-                  oauthReauthRequiredFromProviderState(fresh.provider_state) !== null
-                    ? { tools_synced_at: Date.now() }
-                    : {
-                        tools_synced_at: Date.now(),
-                        last_health: toolSyncHealth(reason),
-                        updated_at: new Date(),
-                      },
-              }),
+              fresh === null
+                ? Effect.void
+                : core
+                    .updateMany("connection", {
+                      where: (b: AnyCb) =>
+                        b.and(
+                          connectionWhere(b),
+                          b("updated_at", "=", fresh.updated_at),
+                          fresh.tools_synced_at == null
+                            ? b.isNull("tools_synced_at")
+                            : b("tools_synced_at", "=", fresh.tools_synced_at),
+                        ),
+                      set:
+                        oauthReauthRequiredFromProviderState(fresh.provider_state) !== null
+                          ? { tools_synced_at: Date.now() }
+                          : {
+                              tools_synced_at: Date.now(),
+                              last_health: health ?? toolSyncHealth(reason),
+                              updated_at: new Date(),
+                            },
+                    })
+                    .pipe(Effect.asVoid),
             ),
           );
 
@@ -3390,7 +3412,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           // server isn't re-dialed on every read; the freshness TTL re-attempts
           // later.
           const reason = syncHealthReason(result);
-          yield* stampSyncedWithHealth(reason);
+          yield* stampSyncedWithHealth(reason, result.health);
           yield* Effect.logWarning("executor tool sync preserved catalog", {
             reason,
             integration: String(ref.integration),
