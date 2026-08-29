@@ -619,6 +619,51 @@ describe("createExecutor", () => {
     ),
   );
 
+  it.effect(
+    "single-workspace coreTools clamps oauth.clients.create owner: 'user' to 'org' and removes it cleanly",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* serveOAuthTestServer({ scopes: ["read"] });
+          const executor = yield* makeTestExecutor({
+            plugins: [demoPlugin] as const,
+            coreTools: { webBaseUrl: "http://localhost:3000" },
+            singleWorkspace: true,
+          });
+          yield* executor.demo.seed();
+
+          const client = "demo-local-app";
+          const created = yield* executor.execute(
+            ToolAddress.make("executor.coreTools.oauth.clients.create"),
+            {
+              owner: "user",
+              slug: client,
+              authorizationUrl: server.authorizationEndpoint,
+              tokenUrl: server.tokenEndpoint,
+              grant: "authorization_code",
+              clientId: "test-client",
+            },
+          );
+          expect(created).toEqual({ client });
+
+          const clients = yield* executor.oauth.listClients();
+          const found = clients.find((c) => String(c.slug) === client);
+          expect(found).toBeDefined();
+          expect(found?.owner).toBe("org");
+
+          // Removing via coreTools with owner: 'user' or 'org' succeeds
+          const removed = yield* executor.execute(
+            ToolAddress.make("executor.coreTools.oauth.clients.remove"),
+            {
+              owner: "user",
+              slug: client,
+            },
+          );
+          expect(removed).toEqual({ removed: true });
+        }),
+      ),
+  );
+
   it.effect("orders integration detection results by confidence", () =>
     Effect.gen(function* () {
       const plugins = [

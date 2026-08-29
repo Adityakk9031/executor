@@ -546,6 +546,10 @@ export interface CoreToolsPluginOptions {
    *  the right org's console (`${webBaseUrl}/<orgSlug>/integrations/...`). */
   readonly orgSlug?: string;
   readonly includeProviders?: boolean;
+  /** Whether the host is a single-workspace deployment (local/desktop) where
+   *  all resources are org/local-scoped. When true, user-scoped client writes
+   *  are clamped to org scope. */
+  readonly singleWorkspace?: boolean;
 }
 
 export const coreToolsPlugin = definePlugin((options: CoreToolsPluginOptions = {}) => ({
@@ -820,7 +824,7 @@ export const coreToolsPlugin = definePlugin((options: CoreToolsPluginOptions = {
           execute: (input: typeof OAuthCreateClientInput.Type, { ctx }) =>
             Effect.map(
               ctx.oauth.createClient({
-                owner: input.owner as Owner,
+                owner: (options.singleWorkspace ? "org" : input.owner) as Owner,
                 slug: OAuthClientSlug.make(input.slug),
                 authorizationUrl: input.authorizationUrl,
                 tokenUrl: input.tokenUrl,
@@ -852,7 +856,13 @@ export const coreToolsPlugin = definePlugin((options: CoreToolsPluginOptions = {
           // path (it routes the secret to the human in the browser), so it is
           // deliberately NOT approval-gated, mirroring `connections.createHandoff`.
           execute: (input: typeof OAuthCreateClientHandoffInput.Type) => {
-            const url = oauthClientCreateHandoffUrl(options.webBaseUrl, options.orgSlug, input);
+            const effectiveOwner = options.singleWorkspace
+              ? "org"
+              : (input.owner as Owner | undefined);
+            const url = oauthClientCreateHandoffUrl(options.webBaseUrl, options.orgSlug, {
+              ...input,
+              ...(effectiveOwner !== undefined ? { owner: effectiveOwner } : {}),
+            });
             return Effect.succeed({
               url,
               instructions:
@@ -873,7 +883,7 @@ export const coreToolsPlugin = definePlugin((options: CoreToolsPluginOptions = {
           execute: (input: typeof OAuthRegisterDynamicInput.Type, { ctx }) =>
             Effect.map(
               ctx.oauth.registerDynamicClient({
-                owner: input.owner as Owner,
+                owner: (options.singleWorkspace ? "org" : input.owner) as Owner,
                 slug: OAuthClientSlug.make(input.slug),
                 issuer: input.issuer ?? null,
                 registrationEndpoint: input.registrationEndpoint,
@@ -905,7 +915,7 @@ export const coreToolsPlugin = definePlugin((options: CoreToolsPluginOptions = {
           annotations: { requiresApproval: true },
           execute: (input: typeof OAuthRemoveClientInput.Type, { ctx }) =>
             Effect.gen(function* () {
-              const owner = input.owner as Owner;
+              const owner = (options.singleWorkspace ? "org" : input.owner) as Owner;
               const slug = OAuthClientSlug.make(input.slug);
               // `removeClient` is idempotent by design at the storage layer, so
               // on its own it cannot distinguish a real deletion from a typo'd
@@ -914,7 +924,9 @@ export const coreToolsPlugin = definePlugin((options: CoreToolsPluginOptions = {
               // Checking the visible set first is what keeps `removed` honest.
               const clients = yield* ctx.oauth.listClients();
               const matched = clients.some(
-                (client) => client.owner === owner && String(client.slug) === String(slug),
+                (client) =>
+                  (options.singleWorkspace || client.owner === owner) &&
+                  String(client.slug) === String(slug),
               );
               if (!matched) return { removed: false };
               yield* ctx.oauth.removeClient(owner, slug);

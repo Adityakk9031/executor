@@ -878,6 +878,50 @@ describe("oauth.start / oauth.complete", () => {
       }),
     ),
   );
+
+  it.effect(
+    "on a single-workspace host (singleWorkspace: true), user client ownership is clamped to org and usable by local connections",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* serveOAuthTestServer({ scopes: ["read"] });
+          const harness = yield* makeTestWorkspaceHarness({
+            plugins,
+            singleWorkspace: true,
+          });
+          const { executor } = harness;
+          yield* executor.acme.seed();
+
+          // Registering with owner: "user" on a single-workspace host clamps to org
+          const registered = yield* executor.oauth.createClient({
+            owner: "user",
+            slug: CLIENT,
+            authorizationUrl: server.authorizationEndpoint,
+            tokenUrl: server.tokenEndpoint,
+            grant: "authorization_code",
+            clientId: "test-client",
+            clientSecret: "test-secret",
+          });
+          expect(registered).toEqual(CLIENT);
+
+          const clients = yield* executor.oauth.listClients();
+          const client = clients.find((c) => String(c.slug) === String(CLIENT));
+          expect(client).toBeDefined();
+          expect(client?.owner).toBe("org");
+
+          // Starting a flow with clientOwner: "user" or "org" succeeds and does NOT throw "must use a Workspace app"
+          const started = yield* executor.oauth.start({
+            owner: "org",
+            clientOwner: "user",
+            client: CLIENT,
+            name: ConnectionName.make("local-conn"),
+            integration: INTEG,
+            template: TEMPLATE,
+          });
+          expect(started.status).toBe("redirect");
+        }),
+      ),
+  );
 });
 
 describe("oauth token refresh in resolveConnectionValue", () => {

@@ -258,6 +258,10 @@ export interface OAuthServiceDeps {
    *  client CRUD surface rejects the namespace. Empty/omitted on hosts that
    *  ship no first-party apps. */
   readonly firstPartyClients?: readonly FirstPartyOAuthClientConfig[];
+  /** Whether the host is a single-workspace deployment (local/desktop) where
+   *  all resources are org/local-scoped. When true, user client ownership is
+   *  clamped to org scope and local connections can use any local client. */
+  readonly singleWorkspace?: boolean;
 }
 
 type LooseDb = {
@@ -857,8 +861,9 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
         });
       }
       yield* validateClientEndpoints(input, deps.endpointUrlPolicy);
+      const clientOwner: Owner = deps.singleWorkspace ? "org" : input.owner;
       const keys = yield* Effect.try({
-        try: () => deps.ownedKeys(input.owner),
+        try: () => deps.ownedKeys(clientOwner),
         catch: (cause) =>
           new StorageError({
             message: "Cannot write oauth_client for owner without a subject",
@@ -880,7 +885,7 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
             cause: undefined,
           });
         }
-        clientSecretItemIdValue = clientSecretItemId(input.owner, input.slug);
+        clientSecretItemIdValue = clientSecretItemId(clientOwner, input.slug);
         yield* provider.set(ProviderItemId.make(clientSecretItemIdValue), input.clientSecret);
       }
 
@@ -888,7 +893,9 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
         .use("oauth_client.deleteExisting", (db) =>
           looseDb(db).deleteMany("oauth_client", {
             where: (b: any) =>
-              b.and(b("owner", "=", input.owner), b("slug", "=", String(input.slug))),
+              deps.singleWorkspace
+                ? b("slug", "=", String(input.slug))
+                : b.and(b("owner", "=", clientOwner), b("slug", "=", String(input.slug))),
           }),
         )
         .pipe(Effect.catch(() => Effect.void));
@@ -950,13 +957,17 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
           cause: undefined,
         });
       }
+      const clientOwner: Owner = deps.singleWorkspace ? "org" : owner;
       // "Is there an app at (owner, slug) right now?" — asked twice, for two
       // different reasons. Before the delete it says whether this call removes
       // anything at all; after the commit it says whether the secret key still
       // belongs to the app this call removed.
       const findClientRow = deps.fuma.use("oauth_client.findFirst", (db) =>
         looseDb(db).findFirst("oauth_client", {
-          where: (b: any) => b.and(b("owner", "=", owner), b("slug", "=", String(slug))),
+          where: (b: any) =>
+            deps.singleWorkspace
+              ? b("slug", "=", String(slug))
+              : b.and(b("owner", "=", clientOwner), b("slug", "=", String(slug))),
         }),
       );
 
@@ -964,7 +975,10 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
       yield* deps.fuma
         .use("oauth_client.delete", (db) =>
           looseDb(db).deleteMany("oauth_client", {
-            where: (b: any) => b.and(b("owner", "=", owner), b("slug", "=", String(slug))),
+            where: (b: any) =>
+              deps.singleWorkspace
+                ? b("slug", "=", String(slug))
+                : b.and(b("owner", "=", clientOwner), b("slug", "=", String(slug))),
           }),
         )
         .pipe(Effect.asVoid);
@@ -1000,7 +1014,17 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
             // an orphaned secret is recoverable, a destroyed live one is not.
             const recreated = yield* findClientRow;
             if (recreated) return;
-            yield* dropSecret.call(provider, ProviderItemId.make(clientSecretItemId(owner, slug)));
+            yield* dropSecret.call(
+              provider,
+              ProviderItemId.make(
+                clientSecretItemId(
+                  (deps.singleWorkspace
+                    ? "org"
+                    : ((removedRow.owner as Owner | undefined) ?? clientOwner)) as Owner,
+                  slug,
+                ),
+              ),
+            );
           }).pipe(Effect.catch(() => Effect.void)),
         );
       }
@@ -1318,7 +1342,7 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
               );
             }
             return Effect.succeed({
-              owner: String(row.owner) as Owner,
+              owner: (deps.singleWorkspace ? "org" : (String(row.owner) as Owner)) as Owner,
               slug: OAuthClientSlug.make(String(row.slug)),
               grant,
               authorizationUrl: String(row.authorization_url),
@@ -1347,10 +1371,14 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
       const config = firstPartyBySlug.get(String(slug));
       return Effect.succeed(config ? loadedFirstPartyClient(config) : null);
     }
+    const clientOwner: Owner = deps.singleWorkspace ? "org" : owner;
     return deps.fuma
       .use("oauth_client.findFirst", (db) =>
         looseDb(db).findFirst("oauth_client", {
-          where: (b: any) => b.and(b("owner", "=", owner), b("slug", "=", String(slug))),
+          where: (b: any) =>
+            deps.singleWorkspace
+              ? b("slug", "=", String(slug))
+              : b.and(b("owner", "=", clientOwner), b("slug", "=", String(slug))),
         }),
       )
       .pipe(
@@ -1422,9 +1450,14 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
         "executor.oauth.client_first_party": firstPartyFlow,
       });
       if (!firstPartyFlow && input.owner === "org" && input.clientOwner === "user") {
-        return yield* new OAuthStartError({
-          message: "A Workspace connection must use a Workspace app.",
-        });
+        if (deps.singleWorkspace) {
+          // On single-workspace hosts (local/desktop), all resources are owned by
+          // the single local actor; cross-owner restrictions do not apply.
+        } else {
+          return yield* new OAuthStartError({
+            message: "A Workspace connection must use a Workspace app.",
+          });
+        }
       }
       // Load the app by its EXPLICIT owner (the caller knows it — no derivation).
       // The connection is still minted under `input.owner`. Storage visibility

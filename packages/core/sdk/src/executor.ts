@@ -729,6 +729,16 @@ export interface ExecutorConfig<TPlugins extends readonly AnyPlugin[] = readonly
    */
   readonly firstPartyOAuthClients?: readonly FirstPartyOAuthClientConfig[];
   /**
+   * Whether this executor operates in a single-workspace host (local/desktop)
+   * where all connections are org-scoped and there are no distinct personal
+   * member accounts. When true:
+   * - OAuth client registration clamps `owner: "user"` to `owner: "org"`.
+   * - Agent tools (`oauth.clients.create`, `oauth.clients.registerDynamic`, etc.)
+   *   clamp `owner: "user"` to `owner: "org"`.
+   * - OAuth start allows existing user-scoped clients to be used by the local connection.
+   */
+  readonly singleWorkspace?: boolean;
+  /**
    * Enable the built-in `core-tools` plugin which contributes agent-facing
    * static tools over the v2 surface (integrations / connections / policies).
    */
@@ -1852,6 +1862,8 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           )
         : Effect.void;
 
+    const singleWorkspace = config.singleWorkspace ?? subject === "local";
+
     // Built-in core-tools plugin: agent-facing static tools over the v2 surface.
     const plugins: readonly AnyPlugin[] = config.coreTools
       ? ([
@@ -1859,6 +1871,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             webBaseUrl: config.coreTools.webBaseUrl,
             orgSlug: config.coreTools.orgSlug,
             includeProviders: config.coreTools.includeProviders,
+            singleWorkspace,
           }),
           ...userPlugins,
         ] as readonly AnyPlugin[])
@@ -6003,6 +6016,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       owner: ownerBinding,
       tenant,
       subject,
+      singleWorkspace,
       ownedKeys: (owner: Owner) => ownedKeys(owner),
       defaultWritableProvider,
       mintOAuthConnection: (input: MintOAuthConnectionInput) => mintOAuthConnection(input),
