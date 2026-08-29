@@ -31,6 +31,7 @@
   },
   "scripts": {
     "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
+    "pretest": "bun run build",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
