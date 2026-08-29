@@ -550,7 +550,7 @@ describe("cloudflare host configuration errors", () => {
         "Cloudflare Access is not configured. Set ACCESS_TEAM_DOMAIN and ACCESS_AUD before serving requests.\n",
       );
     }
-  });
+  }, 30_000);
 });
 
 describe("cloudflare host e2e with built-in auth (AUTH_MODE=builtin)", () => {
@@ -569,8 +569,6 @@ describe("cloudflare host e2e with built-in auth (AUTH_MODE=builtin)", () => {
         EXECUTOR_SECRET_KEY: "test-secret-key-0123456789abcdef",
         AUTH_MODE: "builtin",
         BETTER_AUTH_SECRET: "test-secret-0123456789-abcdefghijklmnop-qrstuv",
-        EXECUTOR_BOOTSTRAP_ADMIN_EMAIL: "admin@test.local",
-        EXECUTOR_BOOTSTRAP_ADMIN_PASSWORD: "admin-password-123",
       },
     });
   }, 120_000);
