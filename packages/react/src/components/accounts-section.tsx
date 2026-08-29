@@ -335,10 +335,10 @@ function OwnerAccounts(props: {
   const connections = useAtomValue(connectionsForIntegrationAtom({ integration, owner }));
   // Registered-app summaries: the Reconnect routing below inspects the STORED
   // client binding (its origin kind and resource), not just the method's
-  // capability, before sending a connection into the automatic flow. The view
-  // keeps STALE summaries from a failed refresh usable for routing, and only a
-  // data-less failure marks the action failed (recoverable — opening the row
-  // menu retries the query).
+  // capability, before sending a connection into the automatic flow. Routing
+  // only ever reads a current successful load — never stale data — and a
+  // failed query marks the action failed (recoverable — opening the row menu
+  // retries the query).
   const allClients = useAtomValue(oauthClientsOptimisticAtom);
   const refreshClients = useAtomRefresh(oauthClientsOptimisticAtom);
   const clientsView = reconnectClientsView(allClients);
@@ -511,16 +511,15 @@ function OwnerAccounts(props: {
             showOwnerLabel={props.showOwnerLabels}
             onEdit={() => props.onEdit(connection)}
             onReconnect={() => void handleReconnect(connection)}
-            // An OAuth Reconnect routes by the stored client binding; with no
-            // data (loading, or a failure that never loaded) the route is
-            // unknown, so the action waits — stale summaries on a failed
-            // refresh still count as data. Static-credential rows refresh
+            // An OAuth Reconnect routes by the stored client binding; without
+            // a current successful load (loading or failed) the route is
+            // unknown, so the action waits. Static-credential rows refresh
             // without the binding.
             reconnectDisabled={
               reconnectMode(connection) === "oauth" && clientsView.kind !== "ready"
             }
-            // The data-less failure is surfaced on the item (not silently
-            // disabled) and recovers on menu open, which retries the query.
+            // A failed load is surfaced on the item (not silently disabled)
+            // and recovers on menu open, which retries the query.
             reconnectFailed={reconnectMode(connection) === "oauth" && clientsView.kind === "failed"}
             onMenuOpenChange={(open: boolean) =>
               retryReconnectClientsOnMenuOpen(open, clientsView, refreshClients)

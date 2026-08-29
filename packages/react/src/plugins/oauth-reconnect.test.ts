@@ -187,21 +187,21 @@ describe("reconnectClientsView (Reconnect availability from the summaries query)
     expect(reconnectClientsView(loaded)).toEqual({ kind: "ready", clients: [dcrBinding] });
   });
 
-  // The unrecoverable-state bug: a transient listClients failure used to
-  // discard previously loaded summaries and disable Reconnect for the mounted
-  // lifetime. Stale summaries are SAFE for routing — worst case the route
-  // matches the last known binding — so a failure carrying previousSuccess
-  // stays ready and routes from that previous value.
-  it("routes from the PREVIOUS successful data when a refresh fails", () => {
+  // Stale data NEVER routes: a binding changed since the retained snapshot can
+  // misroute (repeat the origin-drift dead end, or treat a client absent from
+  // the snapshot as vanished and rebind it). A failed refresh is failed even
+  // with previousSuccess — disabled, surfaced, and retried on menu open like
+  // any other failure.
+  it("is failed when a refresh fails, even with previous successful data", () => {
     const failedRefresh = AsyncResult.fail("listClients failed", {
       previousSuccess: Option.some(loaded),
     });
     const view = reconnectClientsView(failedRefresh);
-    expect(view).toEqual({ kind: "ready", clients: [dcrBinding] });
-    // The stale summaries drive the same route the last successful load chose.
-    expect(
-      reconnectRoute(view.kind === "ready" ? view.clients : undefined, connection(), false),
-    ).toEqual({ kind: "automatic", stored: dcrBinding });
+    expect(view).toEqual({ kind: "failed" });
+    // The failed view recovers like any other: opening the menu retries.
+    let calls = 0;
+    retryReconnectClientsOnMenuOpen(true, view, () => calls++);
+    expect(calls).toBe(1);
   });
 
   it("is loading while the first load is in flight", () => {
@@ -209,16 +209,25 @@ describe("reconnectClientsView (Reconnect availability from the summaries query)
     expect(reconnectClientsView(AsyncResult.initial(true))).toEqual({ kind: "loading" });
   });
 
-  it("is failed only for a failure that never produced data", () => {
+  it("is failed for a first-load failure (never produced data)", () => {
     expect(reconnectClientsView(AsyncResult.fail("listClients failed"))).toEqual({
       kind: "failed",
     });
   });
 
-  it("reads a data-less failure that is retrying as loading, not failed", () => {
+  it("reads a failure that is retrying as loading, not failed", () => {
     expect(reconnectClientsView(AsyncResult.fail("listClients failed", { waiting: true }))).toEqual(
       { kind: "loading" },
     );
+    // A retry in flight is loading even when previous data is retained.
+    expect(
+      reconnectClientsView(
+        AsyncResult.fail("listClients failed", {
+          waiting: true,
+          previousSuccess: Option.some(loaded),
+        }),
+      ),
+    ).toEqual({ kind: "loading" });
   });
 });
 
