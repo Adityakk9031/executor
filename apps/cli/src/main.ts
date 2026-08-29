@@ -167,6 +167,7 @@ import {
   validateCliServerConnectionProfileName,
   type CliServerConnectionStore,
 } from "./server-profile";
+import { addSkill, listSkills, removeSkill, syncSkills, toggleSkill } from "./skills-gateway";
 import {
   buildResumeContentTemplate,
   buildDescribeToolCode,
@@ -2209,6 +2210,129 @@ const toolsCommand = Command.make("tools").pipe(
   Command.withDescription("Discover available tools and integrations"),
 );
 
+// ---------------------------------------------------------------------------
+// Skills Gateway — Central skill store & multi-agent sync
+// ---------------------------------------------------------------------------
+
+const skillsGlobalOption = Options.boolean("global")
+  .pipe(Options.withDefault(false))
+  .pipe(
+    Options.withDescription(
+      "Manage user-level skills (~/.executor/skills) instead of workspace skills (.executor/skills)",
+    ),
+  );
+
+const skillsListCommand = Command.make(
+  "list",
+  {
+    global: skillsGlobalOption,
+  },
+  ({ global }) =>
+    Effect.gen(function* () {
+      const skills = yield* listSkills({ global });
+      if (skills.length === 0) {
+        console.log("No skills installed.");
+        console.log("");
+        console.log("Install a skill from a local folder or Git repo:");
+        console.log(`  ${cliPrefix} skills add <source>`);
+        return;
+      }
+      console.log(`Installed skills (${global ? "global" : "workspace"}):`);
+      console.log("");
+      for (const skill of skills) {
+        const status = skill.enabled ? "enabled" : "disabled";
+        const targets =
+          skill.syncedTargets.length > 0 ? ` (synced to: ${skill.syncedTargets.join(", ")})` : "";
+        console.log(`  - ${skill.name} [${status}]${targets}`);
+        if (skill.description) {
+          console.log(`    ${skill.description}`);
+        }
+        console.log(`    Source: ${skill.source} (${skill.sourceType})`);
+      }
+    }),
+).pipe(Command.withDescription("List installed skills"));
+
+const skillsAddCommand = Command.make(
+  "add",
+  {
+    source: Args.string("source"),
+    name: Options.string("name").pipe(
+      Options.optional,
+      Options.withDescription("Custom name for the skill"),
+    ),
+    global: skillsGlobalOption,
+  },
+  ({ source, name, global }) =>
+    Effect.gen(function* () {
+      const customName = Option.getOrUndefined(name);
+      console.log(`Installing skill from ${source}...`);
+      const result = yield* addSkill({ source, name: customName, global });
+      console.log(`Installed skill '${result.name}' successfully.`);
+      if (result.syncedTargets.length > 0) {
+        console.log(`Synced to agents: ${result.syncedTargets.join(", ")}`);
+      }
+    }),
+).pipe(Command.withDescription("Install a skill and sync it to connected agents"));
+
+const skillsRemoveCommand = Command.make(
+  "remove",
+  {
+    name: Args.string("name"),
+    global: skillsGlobalOption,
+  },
+  ({ name, global }) =>
+    Effect.gen(function* () {
+      yield* removeSkill({ name, global });
+      console.log(`Removed skill '${name}'.`);
+    }),
+).pipe(Command.withDescription("Remove an installed skill"));
+
+const skillsToggleCommand = Command.make(
+  "toggle",
+  {
+    name: Args.string("name"),
+    action: Args.choice("action", ["enable", "disable"] as const),
+    global: skillsGlobalOption,
+  },
+  ({ name, action, global }) =>
+    Effect.gen(function* () {
+      const enabled = action === "enable";
+      yield* toggleSkill({ name, enabled, global });
+      console.log(`Skill '${name}' is now ${action}d.`);
+    }),
+).pipe(Command.withDescription("Enable or disable a skill to toggle agent loading"));
+
+const skillsSyncCommand = Command.make(
+  "sync",
+  {
+    global: skillsGlobalOption,
+  },
+  ({ global }) =>
+    Effect.gen(function* () {
+      console.log("Syncing skills to connected agents...");
+      const synced = yield* syncSkills({ global });
+      if (synced.length === 0) {
+        console.log("No enabled skills or agent target directories found to sync.");
+        return;
+      }
+      for (const record of synced) {
+        console.log(`  - Synced ${record.skillName} -> ${record.target} (${record.destination})`);
+      }
+      console.log(`Sync complete (${synced.length} target records synced).`);
+    }),
+).pipe(Command.withDescription("Sync installed skills to detected agent directories"));
+
+const skillsCommand = Command.make("skills").pipe(
+  Command.withSubcommands([
+    skillsListCommand,
+    skillsAddCommand,
+    skillsRemoveCommand,
+    skillsToggleCommand,
+    skillsSyncCommand,
+  ] as const),
+  Command.withDescription("Manage agent skills and sync them across AI coding assistants"),
+);
+
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -3299,6 +3423,7 @@ const root = Command.make("executor").pipe(
     callCommand,
     resumeCommand,
     toolsCommand,
+    skillsCommand,
     installCommand,
     loginCommand,
     logoutCommand,
