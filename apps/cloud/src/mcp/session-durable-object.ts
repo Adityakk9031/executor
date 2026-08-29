@@ -44,6 +44,7 @@ import {
 } from "@executor-js/cloudflare/mcp/execution-owner-directory";
 import { mcpSessionStub } from "@executor-js/cloudflare/mcp/session-stub";
 import { buildExecuteDescription, type ResumeResponse } from "@executor-js/execution";
+import { acquireBuildSlot, type BuildSlotHandle } from "./session-build-semaphore";
 
 // The DO meters executions just like the HTTP `/api/*` plane: it builds its
 // engine with `CloudMeteredExecutionStackLayer`, so every MCP execution is
@@ -162,6 +163,20 @@ const loadAppShellHtml = makeAssetsShellHtmlLoader({
     import("virtual:executor-mcp-apps-shell-dev-html").then((mod) => mod.devShellHtml),
 });
 
+// QuickJS-WASM must be loaded before the smoke render asks for a sandbox: the
+// default variant cannot fetch its own `.wasm` on Workers. `../quickjs` is
+// imported dynamically here, not at module scope, so a session that never
+// calls create_artifact/edit_artifact never pays for it — see the comment on
+// the dynamic import block in `buildMcpServer` for why that matters on a cold
+// isolate. `preloadQuickJs()` itself is memoized per isolate (and resets on
+// failure), so concurrent artifact calls, and repeat calls after the first,
+// are all free past the first successful load.
+const smokeRenderArtifactAfterQuickJsPreload: typeof smokeRenderArtifact = async (code) => {
+  const { preloadQuickJs } = await import("../quickjs");
+  await preloadQuickJs();
+  return smokeRenderArtifact(code);
+};
+
 // ---------------------------------------------------------------------------
 // Durable Object
 // ---------------------------------------------------------------------------
@@ -235,39 +250,62 @@ export class McpSessionDOSqlite extends McpAgentSessionDOBase<Env, CloudSessionD
     dbHandle: CloudSessionDbHandle,
   ): Effect.Effect<BuiltMcpServer> {
     const self = this;
-    return Effect.gen(function* () {
+    // Set synchronously, inside the `Effect.promise` executor below, before
+    // any `await` — so there is no window where interruption can land after
+    // the handle exists but before this is assigned. `cancel` is idempotent
+    // (see `session-build-semaphore.ts`), so it is safe to invoke from both
+    // the abort listener below AND the `Effect.ensuring` finalizer without
+    // risking a double release.
+    let buildSlot: BuildSlotHandle | undefined;
+    const build = Effect.gen(function* () {
+      // A burst of cold sessions landing on one isolate at once used to pay
+      // full concurrent build cost; this bounds it to `MAX_CONCURRENT_BUILDS`
+      // at a time and queues the rest FIFO, degrading to old concurrent
+      // behavior (see `timedOut` below) rather than stalling if the queue
+      // itself gets stuck. See `session-build-semaphore.ts`.
+      //
+      // `Effect.promise` hands its executor an `AbortSignal` tied to this
+      // fiber's own interruption — firing it (rather than merely walking
+      // away) is what lets a waiter still sitting in the semaphore's queue
+      // be dequeued immediately on a client disconnect, instead of getting
+      // granted a slot later with no one left to release it.
+      const slot = yield* Effect.promise((signal) => {
+        const handle = acquireBuildSlot();
+        buildSlot = handle;
+        signal.addEventListener("abort", () => handle.cancel(), { once: true });
+        return handle.promise;
+      });
+      if (slot.timedOut) {
+        yield* Effect.annotateCurrentSpan({ "mcp.init.build_queue_timeout": true });
+      } else if (slot.waitMs > 0) {
+        yield* Effect.annotateCurrentSpan({ "mcp.init.build_queue_ms": slot.waitMs });
+      }
+
       // Imported here rather than at module scope. Cloudflare requires a
       // Durable Object class to be exported from the Worker entry, so every
       // static import this module makes is evaluated by *every* cold isolate —
       // including the ones that only render a page or forward a passthrough
-      // proxy and never open an MCP session. These three roots pull the whole
-      // code-execution stack (sucrase, ajv, QuickJS-WASM): measured at 1.9 MB
-      // of the Worker's startup closure, for code only a real session runs.
+      // proxy and never open an MCP session. These two roots pull the whole
+      // code-execution stack (sucrase, ajv): measured at 1.9 MB of the
+      // Worker's startup closure, for code only a real session runs.
       // `apps/cloud/scripts/start-closure.mjs` reports that number and will
-      // show it moving back if these become static again.
-      const [{ preloadQuickJs }, { makeExecutionStack }, { CloudMeteredExecutionStackLayer }] =
-        yield* Effect.promise(
-          () =>
-            Promise.all([
-              import("../quickjs"),
-              import("../engine/execution-stack"),
-              import("../engine/execution-stack-metered"),
-            ]) as Promise<
-              [
-                typeof import("../quickjs"),
-                typeof import("../engine/execution-stack"),
-                typeof import("../engine/execution-stack-metered"),
-              ]
-            >,
-        );
+      // show it moving back if these become static again. QuickJS-WASM is a
+      // separate dynamic import off the artifact smoke-render path only (see
+      // `smokeRenderArtifactAfterQuickJsPreload` above) — it is never needed
+      // during init, so it no longer lives in this Promise.all at all.
+      const [{ makeExecutionStack }, { CloudMeteredExecutionStackLayer }] = yield* Effect.promise(
+        () =>
+          Promise.all([
+            import("../engine/execution-stack"),
+            import("../engine/execution-stack-metered"),
+          ]) as Promise<
+            [
+              typeof import("../engine/execution-stack"),
+              typeof import("../engine/execution-stack-metered"),
+            ]
+          >,
+      );
 
-      // QuickJS-WASM must be loaded before anything asks for a sandbox: the
-      // default variant cannot fetch its own `.wasm` on Workers. Cloud runs
-      // user `execute` code on the dynamic-worker runtime, but the artifact
-      // smoke render is a QuickJS sandbox on every host — without this it fails
-      // open on each create and the check silently does nothing.
-      // Idempotent per isolate.
-      yield* Effect.promise(() => preloadQuickJs());
       const { executor, engine } = yield* makeExecutionStack(
         sessionMeta.userId,
         sessionMeta.organizationId,
@@ -307,7 +345,7 @@ export class McpSessionDOSqlite extends McpAgentSessionDOBase<Env, CloudSessionD
         restoredAppsEnabled: sessionMeta.appsEnabled ?? false,
         onAppsEnabledChange: (appsEnabled) => self.persistAppsEnabled(appsEnabled),
         loadAppShellHtml,
-        smokeRenderArtifact,
+        smokeRenderArtifact: smokeRenderArtifactAfterQuickJsPreload,
         artifactUrl: artifactUrlFor(
           env.VITE_PUBLIC_SITE_URL ?? "https://executor.sh",
           sessionMeta.organizationSlug,
@@ -333,8 +371,21 @@ export class McpSessionDOSqlite extends McpAgentSessionDOBase<Env, CloudSessionD
             : { mode: sessionElicitationMode },
       }).pipe(Effect.withSpan("McpSessionDOSqlite.createExecutorMcpServer"));
       return { mcpServer, engine } satisfies BuiltMcpServer;
-    }).pipe(
+    });
+    return build.pipe(
       Effect.withSpan("McpSessionDOSqlite.buildMcpServer"),
+      // Always paired with the `acquireBuildSlot` above: releases on success,
+      // failure, and interruption alike, so a build that throws — or a fiber
+      // that is interrupted mid-build — never wedges the FIFO queue behind
+      // it. `handle.cancel()` is idempotent and self-describing about
+      // whether a slot was actually granted, so no separate "did we acquire"
+      // flag is needed here; this and the abort listener above may both fire
+      // for the same handle without double-releasing.
+      Effect.ensuring(
+        Effect.sync(() => {
+          buildSlot?.cancel();
+        }),
+      ),
       Effect.provide(makeSessionServices(dbHandle)),
       // oxlint-disable-next-line executor/no-effect-escape-hatch -- boundary: runtime-build failures surface as the base's tapCause/cleanup defect
       Effect.orDie,
