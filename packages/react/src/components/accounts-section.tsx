@@ -130,10 +130,11 @@ function AccountRow(props: {
    *  summaries carry no data the route is unknown, so the action is
    *  disabled rather than guessed (same idiom as "Check now" above). */
   readonly reconnectDisabled: boolean;
-  /** The summaries query failed with NO data to route by: the Reconnect item
-   *  stays disabled but says so (never a silently dead action). Opening the
-   *  menu retries the query via `onMenuOpenChange`, so the hint reflects a
-   *  retry that just failed, not a permanently stuck state. */
+  /** The summaries query failed: the Reconnect item stays disabled but says
+   *  so (never a silently dead action). Retained stale data never routes — a
+   *  binding changed since the snapshot could misroute. Opening the menu
+   *  retries the query via `onMenuOpenChange`, so the hint reflects a retry
+   *  that just failed, not a permanently stuck state. */
   readonly reconnectFailed: boolean;
   /** Forwarded to the row menu; the owner uses the OPEN transition to retry
    *  a failed client-summaries query. */
@@ -378,12 +379,13 @@ function OwnerAccounts(props: {
       // (direct reuse dead-ends once the callback origin drifts, #1542); a
       // static/BYO or first-party binding takes the direct path below even on
       // a discovery-capable integration — re-registering would silently
-      // rebind the connection to an automatic client. While the client list
-      // has no data (loading or a data-less failure) the binding is UNKNOWN
-      // and no route may be chosen: the menu item is disabled until then, and
-      // this guard backstops a race — a permanent wrong choice on a guess is
-      // never acceptable. Stale summaries retained by a FAILED refresh do
-      // route: worst case the decision matches the last known binding.
+      // rebind the connection to an automatic client. Unless the client list
+      // is a CURRENT success the binding is UNKNOWN and no route may be
+      // chosen: the menu item is disabled until then, and this guard
+      // backstops a race — a permanent wrong choice on a guess is never
+      // acceptable. A failed refresh never routes, even when stale data is
+      // retained: a binding changed since the snapshot could repeat the
+      // origin-drift dead end or silently rebind to an automatic client.
       const route = reconnectRoute(
         clientsView.kind === "ready" ? clientsView.clients : undefined,
         connection,

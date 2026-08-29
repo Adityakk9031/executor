@@ -231,7 +231,7 @@ describe("reconnectClientsView (Reconnect availability from the summaries query)
   });
 });
 
-describe("retryReconnectClientsOnMenuOpen (recovery for the data-less failure)", () => {
+describe("retryReconnectClientsOnMenuOpen (recovery for a failed summaries query)", () => {
   const counter = () => {
     let calls = 0;
     return { retry: () => calls++, calls: () => calls };
