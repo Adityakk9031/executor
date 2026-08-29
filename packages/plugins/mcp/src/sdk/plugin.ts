@@ -1350,9 +1350,7 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
             const remoteInput = input as typeof McpUpdateRemoteServerInputSchema.Type;
             let authenticationTemplate = current.authenticationTemplate;
             if (remoteInput.authenticationTemplate !== undefined) {
-              authenticationTemplate = normalizeMcpAuthMethods(
-                remoteInput.authenticationTemplate,
-              );
+              authenticationTemplate = normalizeMcpAuthMethods(remoteInput.authenticationTemplate);
             } else if (remoteInput.auth !== undefined) {
               authenticationTemplate = [mcpAuthMethodFromShorthand(remoteInput.auth)];
             }
