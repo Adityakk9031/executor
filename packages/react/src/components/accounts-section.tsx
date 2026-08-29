@@ -2,13 +2,19 @@ import { useEffect, useMemo, useState } from "react";
 import { useAtomValue, useAtomSet } from "@effect/atom-react";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Exit from "effect/Exit";
-import { IntegrationSlug, type Connection, type Owner } from "@executor-js/sdk/shared";
+import {
+  IntegrationSlug,
+  type Connection,
+  type OAuthClientSummary,
+  type Owner,
+} from "@executor-js/sdk/shared";
 import type { IntegrationAccountHandoff } from "@executor-js/sdk/client";
 import { toast } from "sonner";
 
 import {
   addConnectionOptimistic,
   connectionsForIntegrationAtom,
+  oauthClientsOptimisticAtom,
   refreshConnection,
   removeConnectionOptimistic,
   startOAuth,
@@ -23,11 +29,13 @@ import type { AuthMethod } from "../lib/auth-placements";
 import {
   connectionNeedsReconsent,
   oauthReconnectPayload,
+  reconnectAllowsAutomaticRegistration,
   reconnectMode,
+  reconnectStoredClient,
   reconsentRequiredScopes,
 } from "../plugins/oauth-reconnect";
 import { useOAuthPopupFlow } from "../plugins/oauth-sign-in";
-import { AddAccountModal } from "./add-account-modal";
+import { AddAccountModal, hasDcr } from "./add-account-modal";
 import { ConnectionEditSheet } from "./metadata-edit-sheet";
 import type { CreateCustomMethod } from "./add-custom-method-modal";
 import {
@@ -289,13 +297,24 @@ function OwnerAccounts(props: {
   readonly showOwnerLabels: boolean;
   readonly methods: readonly AuthMethod[];
   readonly onEdit: (connection: Connection) => void;
-  readonly onDcrReconnect: (connection: Connection) => void;
+  /** Hand the connection to the modal's automatic reconnect flow. Only called
+   *  once the stored binding was vetted as auto-minted DCR (or gone);
+   *  `storedClient` is that binding's summary — undefined when the row is
+   *  gone — so the handoff can carry its resource. */
+  readonly onDcrReconnect: (
+    connection: Connection,
+    storedClient: OAuthClientSummary | undefined,
+  ) => void;
   /** The integration's declared oauth scopes — compared against each connection's
    *  granted `oauthScope` to flag connections that must reconnect for new access. */
   readonly declaredScopes: readonly string[] | undefined;
 }) {
   const { integration, owner } = props;
   const connections = useAtomValue(connectionsForIntegrationAtom({ integration, owner }));
+  // Registered-app summaries: the Reconnect routing below inspects the STORED
+  // client binding (its origin kind and resource), not just the method's
+  // capability, before sending a connection into the automatic flow.
+  const allClients = useAtomValue(oauthClientsOptimisticAtom);
   // Removal confirms in a dialog. State lives here (not in the row) because the
   // Remove menu item closes its dropdown on click, which would unmount a dialog
   // nested inside it — so the row only nominates the connection to remove.
@@ -327,11 +346,23 @@ function OwnerAccounts(props: {
         (candidate: AuthMethod) =>
           candidate.kind === "oauth" && String(candidate.template) === String(connection.template),
       );
+      // Route through the automatic probe/registration flow ONLY when the
+      // STORED binding is itself an auto-minted DCR client, or its row is
+      // known to be gone (nothing left to start directly against). A
+      // static/BYO or first-party binding takes the direct path below even on
+      // a discovery-capable integration — re-registering would silently
+      // rebind the connection to an automatic client. While the client list
+      // is still loading the binding is unknown, so the direct path wins
+      // (never rebind on a guess).
+      const stored = AsyncResult.isSuccess(allClients)
+        ? reconnectStoredClient(allClients.value, connection)
+        : undefined;
       if (
-        method?.oauth?.supportsDynamicRegistration === true ||
-        method?.oauth?.discoveryUrl != null
+        AsyncResult.isSuccess(allClients) &&
+        hasDcr(method) &&
+        reconnectAllowsAutomaticRegistration(stored)
       ) {
-        props.onDcrReconnect(connection);
+        props.onDcrReconnect(connection, stored);
         return;
       }
       const payload = oauthReconnectPayload(connection);
@@ -632,7 +663,10 @@ export function AccountsSection(props: {
               showOwnerLabels={ownerDisplay.showOwnerLabels}
               methods={methods}
               onEdit={setEditingConnection}
-              onDcrReconnect={(connection: Connection) => {
+              onDcrReconnect={(
+                connection: Connection,
+                storedClient: OAuthClientSummary | undefined,
+              ) => {
                 if (connection.oauthClient == null) return;
                 setReconnectHandoff({
                   key: `reconnect:${connection.owner}:${String(connection.integration)}:${String(
@@ -648,6 +682,17 @@ export function AccountsSection(props: {
                     action: "reconnect",
                     slug: String(connection.oauthClient),
                     owner: connection.oauthClientOwner ?? connection.owner,
+                    // Vetted by the routing in `handleReconnect`: the stored
+                    // binding is auto-minted DCR (or its row is gone), so the
+                    // modal may re-run the automatic flow.
+                    dynamicRegistration: true,
+                    // The stored client's RFC 8707 resource — an EXPLICIT null
+                    // for a client registered WITHOUT a resource indicator, so
+                    // reuse matches the stored row and a re-registration
+                    // preserves the absence. Omitted when the row is gone.
+                    ...(storedClient !== undefined
+                      ? { resource: storedClient.resource ?? null }
+                      : {}),
                   },
                 });
               }}

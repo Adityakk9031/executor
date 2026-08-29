@@ -86,13 +86,16 @@ type AutomaticOAuthDeps = Parameters<typeof runAutomaticOAuthConnect>[0];
 type AutomaticOAuthInput = Parameters<typeof runAutomaticOAuthConnect>[1];
 
 /** DCR-focused tests use defaults for the CIMD branch they intentionally do
- *  not exercise. Discovery-level tests call the orchestrator directly. */
+ *  not exercise (and an always-mounted surface unless a test closes it).
+ *  Discovery-level tests call the orchestrator directly. */
 const runDcrConnect = (
-  deps: Omit<AutomaticOAuthDeps, "createCimdClient">,
+  deps: Omit<AutomaticOAuthDeps, "createCimdClient" | "isActive"> &
+    Partial<Pick<AutomaticOAuthDeps, "isActive">>,
   input: Omit<AutomaticOAuthInput, "cimd">,
 ) =>
   runAutomaticOAuthConnect(
     {
+      isActive: (): boolean => true,
       ...deps,
       createCimdClient: (): Promise<OAuthClientSlug | null> => Promise.resolve(null),
     },
@@ -452,6 +455,7 @@ describe("runAutomaticOAuthConnect", () => {
     const outcome = await runAutomaticOAuthConnect(
       {
         ...popup,
+        isActive: (): boolean => true,
         probe: (): Promise<ProbeResult> => {
           calls.push("probe");
           return Promise.resolve({
@@ -613,6 +617,186 @@ describe("runAutomaticOAuthConnect (reconnect)", () => {
     );
 
     expect(outcome).toMatchObject({ kind: "fallback", reason: "no-registration-endpoint" });
+    expect(popup.calls).toEqual(["reserve", "release"]);
+  });
+
+  // #1822: a stored client registered WITHOUT a resource indicator (explicit
+  // null) must stay resource-less through a reconnect — the probe's advertised
+  // resource (or the discovery-URL fallback) must not resurrect the parameter
+  // some servers reject.
+  it("preserves the stored client's explicit resource absence through re-registration", async () => {
+    let registerArgs: RegisterArgs | null = null;
+    const outcome = await runDcrConnect(
+      {
+        ...popupSpy(),
+        probe: (): Promise<ProbeResult> =>
+          Promise.resolve({
+            authorizationUrl: "https://auth.example.com/authorize",
+            tokenUrl: "https://auth.example.com/token",
+            registrationEndpoint: "https://auth.example.com/register",
+            resource: "https://mcp.example.com/mcp",
+          }),
+        register: (args: RegisterArgs): Promise<OAuthClientSlug> => {
+          registerArgs = args;
+          return Promise.resolve(OAuthClientSlug.make("reconnected-app"));
+        },
+        start: (): void => {},
+      },
+      {
+        discoveryUrl: "https://mcp.example.com/mcp",
+        resourceFallback: "https://mcp.example.com/mcp",
+        redirectUri: "http://localhost:4788/api/oauth/callback",
+        owner: "user" as Owner,
+        integration: TEST_INTEGRATION,
+        storedResource: null,
+      },
+    );
+
+    expect(outcome).toEqual({ kind: "started", flow: "dcr" });
+    expect(registerArgs!.resource).toBeNull();
+  });
+
+  it("re-registers under the stored client's resource, not the probe's", async () => {
+    let registerArgs: RegisterArgs | null = null;
+    await runDcrConnect(
+      {
+        ...popupSpy(),
+        probe: (): Promise<ProbeResult> =>
+          Promise.resolve({
+            authorizationUrl: "https://auth.example.com/authorize",
+            tokenUrl: "https://auth.example.com/token",
+            registrationEndpoint: "https://auth.example.com/register",
+            resource: "https://probed.example.com/mcp",
+          }),
+        register: (args: RegisterArgs): Promise<OAuthClientSlug> => {
+          registerArgs = args;
+          return Promise.resolve(OAuthClientSlug.make("reconnected-app"));
+        },
+        start: (): void => {},
+      },
+      {
+        discoveryUrl: "https://mcp.example.com/mcp",
+        redirectUri: "http://localhost:4788/api/oauth/callback",
+        owner: "user" as Owner,
+        integration: TEST_INTEGRATION,
+        storedResource: "https://stored.example.com/mcp",
+      },
+    );
+
+    expect(registerArgs!.resource).toBe("https://stored.example.com/mcp");
+  });
+});
+
+describe("runAutomaticOAuthConnect (modal closed mid-flight)", () => {
+  const probeOk = (): Promise<ProbeResult> =>
+    Promise.resolve({
+      authorizationUrl: "https://auth.example.com/authorize",
+      tokenUrl: "https://auth.example.com/token",
+      registrationEndpoint: "https://auth.example.com/register",
+    });
+  const input = {
+    discoveryUrl: "https://mcp.example.com/mcp",
+    redirectUri: "http://localhost:4788/api/oauth/callback",
+    owner: "user" as Owner,
+    integration: TEST_INTEGRATION,
+  };
+
+  // Closing the modal unmounts the view, but the awaited sequence keeps
+  // running. It must stop at the next checkpoint: nothing registered, nothing
+  // launched, the claimed window given back.
+  it("stops after the probe: no client is registered and no popup launches", async () => {
+    const popup = popupSpy();
+    let active = true;
+    let registered = 0;
+    const outcome = await runDcrConnect(
+      {
+        ...popup,
+        isActive: (): boolean => active,
+        probe: (): Promise<ProbeResult> => {
+          // The modal closes while the probe is in flight.
+          active = false;
+          return probeOk();
+        },
+        register: (): Promise<OAuthClientSlug> => {
+          registered += 1;
+          return Promise.resolve(OAuthClientSlug.make("mcp-app"));
+        },
+        start: (): void => {
+          popup.calls.push("start");
+        },
+      },
+      input,
+    );
+
+    expect(outcome).toEqual({ kind: "aborted" });
+    expect(registered).toBe(0);
+    expect(popup.calls).toEqual(["reserve", "release"]);
+  });
+
+  // A close racing the registration itself cannot unmint the client (no
+  // server-side cancel exists; the row is inert, reusable DCR plumbing), but
+  // the sign-in popup must never launch after the modal is gone.
+  it("never launches the popup when the close raced the registration", async () => {
+    const popup = popupSpy();
+    let active = true;
+    const outcome = await runDcrConnect(
+      {
+        ...popup,
+        isActive: (): boolean => active,
+        probe: probeOk,
+        register: (): Promise<OAuthClientSlug> => {
+          // The modal closes while the registration is in flight.
+          active = false;
+          return Promise.resolve(OAuthClientSlug.make("mcp-app"));
+        },
+        start: (): void => {
+          popup.calls.push("start");
+        },
+      },
+      input,
+    );
+
+    expect(outcome).toEqual({ kind: "aborted" });
+    expect(popup.calls).toEqual(["reserve", "release"]);
+  });
+
+  it("never starts a CIMD flow after the close", async () => {
+    const popup = popupSpy();
+    let active = true;
+    const outcome = await runAutomaticOAuthConnect(
+      {
+        ...popup,
+        isActive: (): boolean => active,
+        probe: (): Promise<ProbeResult> =>
+          Promise.resolve({
+            authorizationUrl: "https://auth.example.com/authorize",
+            tokenUrl: "https://auth.example.com/token",
+            clientIdMetadataDocumentSupported: true,
+          }),
+        createCimdClient: (args: CimdCreateArgs): Promise<OAuthClientSlug> => {
+          // The modal closes while the local CIMD client is being minted.
+          active = false;
+          return Promise.resolve(args.slug);
+        },
+        register: (): Promise<OAuthClientSlug> =>
+          Promise.resolve(OAuthClientSlug.make("unexpected")),
+        start: (): void => {
+          popup.calls.push("start");
+        },
+      },
+      {
+        discoveryUrl: "https://mcp.example.com/mcp",
+        owner: "user" as Owner,
+        integration: TEST_INTEGRATION,
+        cimd: {
+          integrationName: "Test MCP",
+          clientIdMetadataDocumentUrl: "https://executor.example/api/oauth/client-id-metadata.json",
+          existingClients: [],
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ kind: "aborted" });
     expect(popup.calls).toEqual(["reserve", "release"]);
   });
 });

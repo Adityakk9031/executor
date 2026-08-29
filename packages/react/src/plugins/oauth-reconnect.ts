@@ -1,4 +1,4 @@
-import type { Connection } from "@executor-js/sdk/shared";
+import type { Connection, OAuthClientSummary } from "@executor-js/sdk/shared";
 
 import type { OAuthStartPayload } from "./oauth-sign-in";
 
@@ -41,6 +41,39 @@ export function oauthReconnectPayload(connection: Connection): OAuthStartPayload
     template: connection.template,
     identityLabel: connection.identityLabel ?? undefined,
   };
+}
+
+/** The stored OAuth app backing a connection, resolved from the loaded client
+ *  summaries. First-party apps are config-declared and deployment-scoped, so
+ *  they match on slug alone; stored rows are owner-scoped, matched against the
+ *  app's stored owner (a Personal connection may be backed by a shared
+ *  Workspace app). Undefined when the connection is not OAuth or its client
+ *  row is gone (e.g. removed by hand). */
+export function reconnectStoredClient(
+  clients: readonly OAuthClientSummary[],
+  connection: Connection,
+): OAuthClientSummary | undefined {
+  if (connection.oauthClient == null) return undefined;
+  const slug = String(connection.oauthClient);
+  const owner = connection.oauthClientOwner ?? connection.owner;
+  return clients.find(
+    (client) =>
+      String(client.slug) === slug &&
+      (client.origin.kind === "first_party" || client.owner === owner),
+  );
+}
+
+/** Whether Reconnect may take the automatic probe/CIMD/DCR route for this
+ *  stored binding. Only an auto-minted DCR client may be re-registered (its
+ *  whole lifecycle is automatic), and a binding whose row is GONE has nothing
+ *  to start directly against, so re-registration is its only recovery. A
+ *  manual (static/BYO) or first-party binding must keep the direct
+ *  stored-client path — routing it through registration would silently rebind
+ *  the connection to an automatic client. */
+export function reconnectAllowsAutomaticRegistration(
+  stored: OAuthClientSummary | undefined,
+): boolean {
+  return stored === undefined || stored.origin.kind === "dynamic_client_registration";
 }
 
 // ---------------------------------------------------------------------------

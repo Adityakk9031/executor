@@ -7,12 +7,15 @@ import {
   OAuthClientSlug,
   ProviderKey,
   type Connection,
+  type OAuthClientSummary,
 } from "@executor-js/sdk/shared";
 
 import {
   missingScopes,
   oauthReconnectPayload,
+  reconnectAllowsAutomaticRegistration,
   reconnectMode,
+  reconnectStoredClient,
   reconsentRequiredScopes,
 } from "./oauth-reconnect";
 
@@ -67,6 +70,82 @@ describe("oauthReconnectPayload (re-mint the SAME connection)", () => {
 
   it("returns null for a non-OAuth connection (no oauthClient)", () => {
     expect(oauthReconnectPayload(connection({ oauthClient: null }))).toBeNull();
+  });
+});
+
+const clientSummary = (overrides: Partial<OAuthClientSummary> = {}): OAuthClientSummary => ({
+  owner: "user",
+  slug: OAuthClientSlug.make("github-app"),
+  grant: "authorization_code",
+  authorizationUrl: "https://auth.example.com/authorize",
+  tokenUrl: "https://auth.example.com/token",
+  resource: null,
+  clientId: "client-123",
+  origin: { kind: "manual", integration: null },
+  ...overrides,
+});
+
+describe("reconnectStoredClient (resolve a connection's stored app)", () => {
+  it("finds the stored row by slug and the app's stored owner", () => {
+    const stored = clientSummary();
+    expect(reconnectStoredClient([clientSummary({ owner: "org" }), stored], connection())).toBe(
+      stored,
+    );
+  });
+
+  it("matches against oauthClientOwner when the app is shared (org app, user connection)", () => {
+    const shared = clientSummary({ owner: "org" });
+    expect(reconnectStoredClient([shared], connection({ oauthClientOwner: "org" }))).toBe(shared);
+    // Without the stored app owner, the connection's own owner is the key.
+    expect(reconnectStoredClient([shared], connection())).toBeUndefined();
+  });
+
+  it("matches a first-party app on slug alone (config-declared, deployment-scoped)", () => {
+    const firstParty = clientSummary({
+      owner: "org",
+      slug: OAuthClientSlug.make("first-party:github"),
+      origin: { kind: "first_party" },
+    });
+    expect(
+      reconnectStoredClient(
+        [firstParty],
+        connection({ oauthClient: OAuthClientSlug.make("first-party:github") }),
+      ),
+    ).toBe(firstParty);
+  });
+
+  it("is undefined for a non-OAuth connection and for a binding whose row is gone", () => {
+    expect(
+      reconnectStoredClient([clientSummary()], connection({ oauthClient: null })),
+    ).toBeUndefined();
+    expect(reconnectStoredClient([], connection())).toBeUndefined();
+  });
+});
+
+describe("reconnectAllowsAutomaticRegistration (which bindings may re-register)", () => {
+  // Only an auto-minted DCR binding may re-run probe/registration; a manual
+  // (static/BYO) or first-party binding must keep the direct stored-client
+  // path — re-registering would silently rebind the connection.
+  it("allows an auto-minted DCR binding", () => {
+    expect(
+      reconnectAllowsAutomaticRegistration(
+        clientSummary({ origin: { kind: "dynamic_client_registration", integration: null } }),
+      ),
+    ).toBe(true);
+  });
+
+  it("allows a binding whose stored row is gone (nothing to start directly against)", () => {
+    expect(reconnectAllowsAutomaticRegistration(undefined)).toBe(true);
+  });
+
+  it("keeps a manual (static/BYO) binding on the direct path", () => {
+    expect(reconnectAllowsAutomaticRegistration(clientSummary())).toBe(false);
+  });
+
+  it("keeps a first-party binding on the direct path", () => {
+    expect(
+      reconnectAllowsAutomaticRegistration(clientSummary({ origin: { kind: "first_party" } })),
+    ).toBe(false);
   });
 });
 

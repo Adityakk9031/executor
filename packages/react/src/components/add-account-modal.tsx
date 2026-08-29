@@ -856,6 +856,10 @@ type DcrStartArgs = {
 type AutomaticOAuthOutcome =
   | { readonly kind: "started"; readonly flow: "cimd" | "dcr" }
   | { readonly kind: "popup-blocked" }
+  /** The owning surface went away mid-flight (`isActive` turned false): the
+   *  sequence stopped before its next side effect and released the window.
+   *  Nothing to report — the modal that would show it is gone. */
+  | { readonly kind: "aborted" }
   | { readonly kind: "fallback"; readonly reason: "probe-failed" }
   | {
       readonly kind: "fallback";
@@ -888,6 +892,10 @@ type RunAutomaticOAuthConnectDeps = {
   readonly reserve: () => OAuthPopupReservation;
   /** Close a claimed window this flow turned out not to need. */
   readonly release: () => void;
+  /** Whether the surface that started this connect still exists. Checked
+   *  after every awaited round trip: closing the modal mid-flight must not
+   *  register a client or launch the popup afterwards. */
+  readonly isActive: () => boolean;
 };
 
 type RunAutomaticOAuthConnectInput = {
@@ -912,6 +920,14 @@ type RunAutomaticOAuthConnectInput = {
     RunCimdConnectInput,
     "integrationName" | "clientIdMetadataDocumentUrl" | "existingClients"
   >;
+  /** A reconnect carries the STORED client's RFC 8707 resource — including an
+   *  EXPLICIT null for a client registered WITHOUT a resource indicator
+   *  (#1822: some servers reject any `resource` parameter). When present it
+   *  overrides the probe-derived value, so client reuse matches the stored
+   *  row and a genuinely needed re-registration preserves the absence.
+   *  Undefined (a fresh connect, or the stored row is gone) keeps the probed
+   *  behavior. */
+  readonly storedResource?: string | null;
 };
 
 /** RFC 7591 `client_name` sent for every dynamic registration. Deliberately
@@ -933,6 +949,8 @@ const DCR_CLIENT_NAME = "Executor";
  * - Register rejected with a message → `{ kind: "fallback", reason: "registration-failed", probe, message }`
  *   so the caller can show why (e.g. a redirect-URI rejection) over the generic copy.
  * - Register failed without detail (null) → `{ kind: "fallback", reason: "registration-failed", probe }`.
+ * - Surface gone after any await (`isActive` false) → `{ kind: "aborted" }`,
+ *   window released, popup never launched.
  * - Success → calls `start` and reports which automatic flow was used.
  */
 export async function runAutomaticOAuthConnect(
@@ -947,10 +965,24 @@ export async function runAutomaticOAuthConnect(
   if (reservation.kind === "blocked") return { kind: "popup-blocked" };
 
   const probe = await deps.probe(input.discoveryUrl);
+  // The modal may have closed while the probe was in flight. Stop BEFORE the
+  // next side effect (registration persists a client; start launches the
+  // popup) and give the claimed window back.
+  if (!deps.isActive()) {
+    deps.release();
+    return { kind: "aborted" };
+  }
   if (probe === null) {
     deps.release();
     return { kind: "fallback", reason: "probe-failed" };
   }
+  // The flow's RFC 8707 resource indicator: a reconnect's stored value wins
+  // (see `storedResource`), otherwise the probe's advertised resource with the
+  // discovery-URL fallback.
+  const resource =
+    input.storedResource !== undefined
+      ? input.storedResource
+      : (probe.resource ?? input.resourceFallback ?? null);
   if (probe.clientIdMetadataDocumentSupported === true) {
     const resolved = await resolveCimdClient(
       { createClient: deps.createCimdClient },
@@ -959,7 +991,7 @@ export async function runAutomaticOAuthConnect(
         integrationName: input.cimd.integrationName,
         authorizationUrl: probe.authorizationUrl,
         tokenUrl: probe.tokenUrl,
-        resource: probe.resource ?? input.resourceFallback ?? null,
+        resource,
         clientIdMetadataDocumentUrl: input.cimd.clientIdMetadataDocumentUrl,
         existingClients: input.cimd.existingClients,
       },
@@ -967,6 +999,10 @@ export async function runAutomaticOAuthConnect(
     if (resolved.kind === "failed") {
       deps.release();
       return { kind: "fallback", reason: "client-metadata-failed", probe };
+    }
+    if (!deps.isActive()) {
+      deps.release();
+      return { kind: "aborted" };
     }
     deps.start({ client: resolved.client, owner: input.owner, reservation });
     return { kind: "started", flow: "cimd" };
@@ -986,7 +1022,7 @@ export async function runAutomaticOAuthConnect(
     registrationEndpoint,
     authorizationUrl: probe.authorizationUrl,
     tokenUrl: probe.tokenUrl,
-    resource: probe.resource ?? input.resourceFallback ?? null,
+    resource,
     scopes,
     tokenEndpointAuthMethodsSupported: probe.tokenEndpointAuthMethodsSupported,
     clientName: DCR_CLIENT_NAME,
@@ -1003,6 +1039,13 @@ export async function runAutomaticOAuthConnect(
     deps.release();
     return { kind: "fallback", reason: "registration-failed", probe, message: minted.error };
   }
+  // A close that raced the registration itself cannot unmint the client (there
+  // is no server-side cancel) — the row is inert, reusable DCR plumbing — but
+  // the sign-in popup must never launch after the modal is gone.
+  if (!deps.isActive()) {
+    deps.release();
+    return { kind: "aborted" };
+  }
   deps.start({ client: minted, owner: input.owner, reservation });
   return { kind: "started", flow: "dcr" };
 }
@@ -1012,8 +1055,11 @@ export async function runAutomaticOAuthConnect(
  *
  * True when the integration advertises dynamic registration (MCP oauth2) OR
  * carries a discovery URL we can probe at connect time — the probe decides
- * between CIMD and DCR from there. Shared by the connect button and the
- * reconnect handoff so both take the same route for the same method.
+ * between CIMD and DCR from there. This is a METHOD capability only: a
+ * reconnect additionally requires the STORED client binding to be an
+ * auto-minted DCR one (`reconnectAllowsAutomaticRegistration`) before taking
+ * the automatic route, so a static/BYO or first-party binding is never
+ * silently rebound.
  */
 export const hasDcr = (method: AuthMethod | undefined | null): boolean =>
   method?.kind === "oauth" &&
@@ -1031,6 +1077,10 @@ type AutomaticOAuthConnectRequest = {
   /** A reconnect re-authorizes a connection that already exists; a connect
    *  creates one. The only behavioral difference between the two paths. */
   readonly mode: "connect" | "reconnect";
+  /** Reconnect only: the stored client's RFC 8707 resource, an EXPLICIT null
+   *  when it was registered WITHOUT one. See
+   *  `RunAutomaticOAuthConnectInput.storedResource`. */
+  readonly storedResource?: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -2302,6 +2352,19 @@ function AddAccountModalView(props: AddAccountModalProps) {
     }
   };
 
+  // Whether this view is still mounted. Closing the modal unmounts it (see
+  // `AddAccountModal`), and the automatic connect sequence below polls this
+  // between its awaited round trips so a close mid-flight aborts instead of
+  // registering a client / launching the popup into a dead surface. The ref is
+  // re-armed in the effect body so a StrictMode remount stays active.
+  const viewMountedRef = useRef(true);
+  useEffect(() => {
+    viewMountedRef.current = true;
+    return () => {
+      viewMountedRef.current = false;
+    };
+  }, []);
+
   // Automatic discovered OAuth: probe once, then prefer CIMD or use DCR
   // according to the authorization server's advertised metadata. On failure we
   // flip `dcrFailed` so the bring-your-own-app picker remains the recovery path.
@@ -2326,6 +2389,11 @@ function AddAccountModalView(props: AddAccountModalProps) {
         {
           reserve: oauthPopup.reserve,
           release: oauthPopup.releaseReservation,
+          // Closing the modal genuinely unmounts this view (see
+          // `AddAccountModal`), so "still mounted" is exactly "still open".
+          // The sequence checks it between round trips: a close mid-flight
+          // must not register a client or launch the popup afterwards.
+          isActive: () => viewMountedRef.current,
           probe: async (url: string): Promise<OAuthProbeResult | null> => {
             const exit = await doProbe({ payload: { url }, reactivityKeys: [] });
             if (Exit.isFailure(exit)) return null;
@@ -2426,9 +2494,15 @@ function AddAccountModalView(props: AddAccountModalProps) {
             clientIdMetadataDocumentUrl: oauthClientIdMetadataDocumentUrl(),
             existingClients: clientSummaries,
           },
+          ...(request.storedResource !== undefined
+            ? { storedResource: request.storedResource }
+            : {}),
         },
       );
       setDcrBusy(false);
+      // The modal closed mid-flight: this view is unmounted, so there is
+      // nothing to report and no fallback to show.
+      if (outcome.kind === "aborted") return;
       // `connection_oauth_started` measures the connect funnel; a reconnect
       // reports through `connection_reconnected` on the popup callbacks above,
       // so it must not also land here.
@@ -2491,9 +2565,12 @@ function AddAccountModalView(props: AddAccountModalProps) {
   // OAuth flow immediately. Fires once per handoff key (tracked by ref), which
   // is also what makes a re-render mid-flight harmless.
   //
-  // A DCR-capable method re-runs the automatic path rather than reusing the
-  // stored client — see `startAutomaticOAuthConnect`. Everything else has a
-  // fixed, registered app, so it starts the popup against that client directly.
+  // Routing follows the STORED binding, not just the method: only a handoff
+  // whose stored client is auto-minted DCR (vetted by the accounts section,
+  // `dynamicRegistration: true`) re-runs the automatic path — see
+  // `startAutomaticOAuthConnect`. Everything else (static/BYO, first-party)
+  // has a fixed, registered app, so it starts the popup against that client
+  // directly and is never rebound to an automatic one.
   useEffect(() => {
     const handoff = initialState;
     const oauthClient = handoff?.oauthClient;
@@ -2515,7 +2592,7 @@ function AddAccountModalView(props: AddAccountModalProps) {
     oauthReconnectOpenedKey.current = handoff.key;
     setMethodId(oauthMethod.id);
 
-    if (hasDcr(oauthMethod)) {
+    if (hasDcr(oauthMethod) && oauthClient.dynamicRegistration === true) {
       void startAutomaticOAuthConnect({
         method: oauthMethod,
         owner: connectionOwner,
@@ -2523,6 +2600,7 @@ function AddAccountModalView(props: AddAccountModalProps) {
         identityLabel: handoff.identityLabel,
         typedLabel: connectionName,
         mode: "reconnect",
+        ...(oauthClient.resource !== undefined ? { storedResource: oauthClient.resource } : {}),
       });
       return;
     }
