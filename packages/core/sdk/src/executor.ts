@@ -5794,175 +5794,265 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           return yield* new ToolNotFoundError({ address });
         }
 
-        // Find the tool row — projected: invoke needs routing/policy fields
-        // only, never the multi-KB input/output schema JSON (`tools.schema`
-        // is the schema-bearing surface).
-        const row = yield* core.findFirst("tool", {
-          where: (b: AnyCb) =>
-            b.and(
-              byOwner(parsed.owner)(b),
-              b("integration", "=", String(parsed.integration)),
-              b("connection", "=", String(parsed.connection)),
-              b("name", "=", String(parsed.tool)),
-            ),
-          select: TOOL_INVOCATION_COLUMNS,
-        });
-        if (!row) {
-          const searchMatches = yield* searchToolRowsForConnection(parsed);
-          const connectionTools =
-            searchMatches.length > 0 ? searchMatches : yield* findToolRowsForConnection(parsed);
-          // An empty catalog on a connection that DOES exist is usually not a
-          // wrong tool name: discovery produced nothing, most often because the
-          // upstream rejected the credential. Reporting only the address sends
-          // the reader after a tool that was never the problem, so name the
-          // connection and point at the surface that knows the cause.
-          const connectionExists =
-            connectionTools.length === 0 &&
-            (yield* findConnectionRow({
-              owner: parsed.owner,
-              integration: parsed.integration,
-              name: parsed.connection,
-            })) !== null;
-          return yield* new ToolNotFoundError({
-            address,
-            suggestions: toolSuggestions(connectionTools),
-            reason: connectionExists
-              ? `connection "${parsed.integration}/${parsed.connection}" has no tools; ` +
-                `check its health for why discovery produced none`
-              : undefined,
-          });
-        }
-
-        // Resolve policy (owner-ranked).
-        const toolForPolicy = rowToTool(row);
-        const policyRules = yield* listActivePolicyRuleSet();
-        const annotations = decodeJsonColumn(row.annotations) as ToolAnnotations | undefined;
-        const policy = yield* resolvePolicyFromRuleSet(
-          normalizedPolicyId(toolForPolicy),
-          policyRules,
-          annotations?.requiresApproval,
+        // The three storage reads this call needs — the tool row (projected:
+        // invoke needs routing/policy fields only, never the multi-KB
+        // input/output schema JSON; `tools.schema` is the schema-bearing
+        // surface), the active policy rule set, and the connection row — are
+        // mutually independent, so they run concurrently instead of paying
+        // three serial round-trips. All three are forked as children of this
+        // fiber (so interrupting the call still interrupts them) and
+        // consumed with `Fiber.join` at exactly the points the sequential
+        // code performed them — a joined fiber resumes with its exact Exit,
+        // so the caller-visible error for a given input is unchanged: a
+        // tool-row read failure still dominates, and a policy or connection
+        // read failure still surfaces only where the old code would have
+        // executed that read. A branch that returns without needing a
+        // speculative read must neither wait on it (a hung read must not
+        // gate an unknown-tool / blocked / plugin-not-loaded error that
+        // never needed it) nor swallow its failure as an unobserved value —
+        // the `ensuring` guard below interrupts whatever was not consumed.
+        // Interrupting a read mid-flight merely abandons the driver promise
+        // (`fumaEffect` takes no abort signal and installs its rejection
+        // handler at construction), so an abandoned read cannot
+        // unhandled-reject; a fiber interrupted before it ever ran issues no
+        // read at all.
+        // Launch order is dominant-first. The dominant tool-row read is
+        // forked FIRST with `startImmediately: true`: an immediate fork
+        // evaluates the child INLINE (`forkUnsafe` calls `child.evaluate` on
+        // the spot), and a forked fiber enters its run loop with a FRESH
+        // operation count (`runLoop` zeroes `currentOpCount`), so the few
+        // dozen operations between fork and the driver-promise suspension
+        // cannot reach the cooperative-yield budget (`MaxOpsBeforeYield`
+        // defaults to 2048) — the read is issued before the speculative
+        // forks below are even scheduled (a plain fork only queues its child
+        // on the dispatcher for the next tick). Dominant-first matters
+        // beyond taste: cloud's postgres pool is `max: 1`, so queries
+        // pipeline through one connection in issue order — a speculative
+        // query issued first would sit ahead of the read every branch needs,
+        // and a slow or lock-blocked speculative query would gate it. Under
+        // a pathologically small budget override (single digits — a test
+        // harness setting; 1-2 deadlocks the effect run loop itself) the
+        // inline launch can park early and a speculative read may issue
+        // first; that bounded case is accepted rather than suppressed,
+        // because the only known suppression (a fiber-lifetime
+        // `PreventSchedulerYield`) is inherited by everything the child runs
+        // and provably keeps effect timeouts from firing across CPU-bound
+        // stretches.
+        const toolRowFiber = yield* Effect.forkChild(
+          core.findFirst("tool", {
+            where: (b: AnyCb) =>
+              b.and(
+                byOwner(parsed.owner)(b),
+                b("integration", "=", String(parsed.integration)),
+                b("connection", "=", String(parsed.connection)),
+                b("name", "=", String(parsed.tool)),
+              ),
+            select: TOOL_INVOCATION_COLUMNS,
+          }),
+          { startImmediately: true },
         );
-        if (policy.action === "block") {
-          return yield* new ToolBlockedError({
-            address,
-            pattern: policy.pattern ?? "*",
-          });
-        }
-
-        const runtime = runtimes.get(row.plugin_id);
-        if (!runtime) {
-          return yield* new PluginNotLoadedError({
-            address,
-            pluginId: row.plugin_id,
-          });
-        }
-        if (!runtime.plugin.invokeTool) {
-          return yield* new NoHandlerError({
-            address,
-            pluginId: row.plugin_id,
-          });
-        }
-
-        // Find the connection row.
-        const connectionRow = yield* findConnectionRow({
-          owner: parsed.owner,
-          integration: parsed.integration,
-          name: parsed.connection,
-        });
-        if (!connectionRow) {
-          return yield* new ConnectionNotFoundError({
+        const policyRulesFiber = yield* Effect.forkChild(listActivePolicyRuleSet());
+        const connectionRowFiber = yield* Effect.forkChild(
+          findConnectionRow({
             owner: parsed.owner,
             integration: parsed.integration,
             name: parsed.connection,
-          });
-        }
+          }),
+        );
+        const invokeDynamicTool = Effect.gen(function* () {
+          const row = yield* Fiber.join(toolRowFiber);
+          if (!row) {
+            const searchMatches = yield* searchToolRowsForConnection(parsed);
+            const connectionTools =
+              searchMatches.length > 0 ? searchMatches : yield* findToolRowsForConnection(parsed);
+            // An empty catalog on a connection that DOES exist is usually not a
+            // wrong tool name: discovery produced nothing, most often because the
+            // upstream rejected the credential. Reporting only the address sends
+            // the reader after a tool that was never the problem, so name the
+            // connection and point at the surface that knows the cause.
+            // Joining here is the sequential read this branch always
+            // performed; the short-circuit keeps the suggestion path from
+            // waiting on a connection read it does not need.
+            const connectionExists =
+              connectionTools.length === 0 && (yield* Fiber.join(connectionRowFiber)) !== null;
+            return yield* new ToolNotFoundError({
+              address,
+              suggestions: toolSuggestions(connectionTools),
+              reason: connectionExists
+                ? `connection "${parsed.integration}/${parsed.connection}" has no tools; ` +
+                  `check its health for why discovery produced none`
+                : undefined,
+            });
+          }
 
-        // Resolve annotations + enforce approval.
-        let resolvedAnnotations = annotations;
-        if (policy.action !== "approve" && runtime.plugin.resolveAnnotations) {
-          const map = yield* runtime.plugin
-            .resolveAnnotations({
-              ctx: runtime.ctx,
+          // Resolve policy (owner-ranked).
+          const toolForPolicy = rowToTool(row);
+          const policyRules = yield* Fiber.join(policyRulesFiber);
+          const annotations = decodeJsonColumn(row.annotations) as ToolAnnotations | undefined;
+          const policy = yield* resolvePolicyFromRuleSet(
+            normalizedPolicyId(toolForPolicy),
+            policyRules,
+            annotations?.requiresApproval,
+          );
+          if (policy.action === "block") {
+            return yield* new ToolBlockedError({
+              address,
+              pattern: policy.pattern ?? "*",
+            });
+          }
+
+          const runtime = runtimes.get(row.plugin_id);
+          if (!runtime) {
+            return yield* new PluginNotLoadedError({
+              address,
+              pluginId: row.plugin_id,
+            });
+          }
+          if (!runtime.plugin.invokeTool) {
+            return yield* new NoHandlerError({
+              address,
+              pluginId: row.plugin_id,
+            });
+          }
+
+          // Join the connection row (read concurrently above).
+          const connectionRow = yield* Fiber.join(connectionRowFiber);
+          if (!connectionRow) {
+            return yield* new ConnectionNotFoundError({
+              owner: parsed.owner,
+              integration: parsed.integration,
+              name: parsed.connection,
+            });
+          }
+
+          // Resolve annotations + enforce approval.
+          let resolvedAnnotations = annotations;
+          if (policy.action !== "approve" && runtime.plugin.resolveAnnotations) {
+            const map = yield* runtime.plugin
+              .resolveAnnotations({
+                ctx: runtime.ctx,
+                integration: parsed.integration,
+                connection: parsed.connection,
+                toolRows: [row],
+              })
+              .pipe(wrapInvocationError);
+            resolvedAnnotations = map[String(parsed.tool)] ?? annotations;
+          }
+          // When this call is about to pause for approval, validate args
+          // first: a call that can only fail (missing required path param /
+          // body) must be rejected here, not after the user grants an approval
+          // that then goes to waste. Non-pausing calls skip this — invokeTool
+          // raises the identical failure moments later without the extra pass.
+          if (approvalRequired(resolvedAnnotations, policy) && runtime.plugin.validateToolArgs) {
+            yield* runtime.plugin
+              .validateToolArgs({ ctx: runtime.ctx, toolRow: row, args })
+              .pipe(wrapInvocationError);
+          }
+          yield* enforceApproval(resolvedAnnotations, address, args, policy, handler);
+
+          // Resolve every named credential input (`variable → value`); `value` is
+          // the primary `token` for single-input + OAuth callers. The
+          // integration-row read is independent of credential resolution, so
+          // the two run concurrently. Both start only after
+          // `enforceApproval` above completes — a declined call must never
+          // trigger the token refresh credential resolution can perform.
+          // Credential resolution is the dominant work here and launches
+          // first: an immediate fork evaluates it inline to its first
+          // suspension before the plain integration-row fork is even
+          // scheduled (best-effort — see the launch-order comment at the
+          // pre-approval forks for why the rare budget-yield reversal is
+          // accepted and why suppressing it is off the table: credential
+          // resolution runs extension-owned provider code, and a
+          // fiber-lifetime yield guard would disable the provider-call
+          // timeout across it and leak into the detached refresh fork). The
+          // integration fork is joined after `values`, so a credential
+          // resolution failure keeps dominating a storage failure exactly as
+          // it did when the reads were sequential (`Fiber.join` resumes with
+          // the credential fiber's exact Exit); on that failure path the
+          // integration fork is interrupted rather than joined, so a hung
+          // integration read cannot gate the credential error and a failed
+          // one is deliberately abandoned, never silently dropped as an
+          // unobserved value.
+          const valuesFiber = yield* Effect.forkChild(resolveConnectionValues(connectionRow), {
+            startImmediately: true,
+          });
+          const integrationRowFiber = yield* Effect.forkChild(
+            findIntegrationRow(parsed.integration),
+          );
+          const values = yield* Fiber.join(valuesFiber).pipe(
+            Effect.onError(() => Fiber.interrupt(integrationRowFiber)),
+          );
+          const integrationRow = yield* Fiber.join(integrationRowFiber);
+          const grantedScopes = grantedScopesFromRow(connectionRow);
+          const invokeTool = runtime.plugin.invokeTool;
+          const invokeWith = (
+            resolved: Record<string, string | null>,
+          ): Effect.Effect<unknown, ToolInvocationError> => {
+            const credential: ToolInvocationCredential = {
+              owner: parsed.owner,
               integration: parsed.integration,
               connection: parsed.connection,
-              toolRows: [row],
-            })
-            .pipe(wrapInvocationError);
-          resolvedAnnotations = map[String(parsed.tool)] ?? annotations;
-        }
-        // When this call is about to pause for approval, validate args
-        // first: a call that can only fail (missing required path param /
-        // body) must be rejected here, not after the user grants an approval
-        // that then goes to waste. Non-pausing calls skip this — invokeTool
-        // raises the identical failure moments later without the extra pass.
-        if (approvalRequired(resolvedAnnotations, policy) && runtime.plugin.validateToolArgs) {
-          yield* runtime.plugin
-            .validateToolArgs({ ctx: runtime.ctx, toolRow: row, args })
-            .pipe(wrapInvocationError);
-        }
-        yield* enforceApproval(resolvedAnnotations, address, args, policy, handler);
-
-        // Resolve every named credential input (`variable → value`); `value` is
-        // the primary `token` for single-input + OAuth callers.
-        const values = yield* resolveConnectionValues(connectionRow);
-        const integrationRow = yield* findIntegrationRow(parsed.integration);
-        const grantedScopes = grantedScopesFromRow(connectionRow);
-        const invokeTool = runtime.plugin.invokeTool;
-        const invokeWith = (
-          resolved: Record<string, string | null>,
-        ): Effect.Effect<unknown, ToolInvocationError> => {
-          const credential: ToolInvocationCredential = {
-            owner: parsed.owner,
-            integration: parsed.integration,
-            connection: parsed.connection,
-            template: AuthTemplateSlug.make(connectionRow.template),
-            value: resolved[PRIMARY_INPUT_VARIABLE] ?? null,
-            values: resolved,
-            config: integrationRow ? decodeJsonColumn(integrationRow.config) : undefined,
-            ...(grantedScopes ? { grantedScopes } : {}),
+              template: AuthTemplateSlug.make(connectionRow.template),
+              value: resolved[PRIMARY_INPUT_VARIABLE] ?? null,
+              values: resolved,
+              config: integrationRow ? decodeJsonColumn(integrationRow.config) : undefined,
+              ...(grantedScopes ? { grantedScopes } : {}),
+            };
+            return wrapInvocationError(
+              invokeTool({
+                ctx: runtime.ctx,
+                toolRow: row,
+                credential,
+                args,
+                elicit: buildElicit(address, args, handler),
+                invokeOptions: options,
+              }),
+            );
           };
-          return wrapInvocationError(
-            invokeTool({
-              ctx: runtime.ctx,
-              toolRow: row,
-              credential,
-              args,
-              elicit: buildElicit(address, args, handler),
-              invokeOptions: options,
-            }),
-          );
-        };
 
-        const first = yield* invokeWith(values);
-        // Reactive refresh. `expires_at` is only ever the AS's ADVERTISED
-        // lifetime; the upstream rejecting the token is the authoritative word
-        // on whether it is still good. The two diverge routinely: server-side
-        // revocation, an identity provider's idle-timeout policy shorter than
-        // the token lifetime, and connections whose AS omitted `expires_in`
-        // entirely (null expiry → the proactive check never fires, so this is
-        // their ONLY route back to a working token short of a reconnect).
-        //
-        // Deliberately narrow: exactly one retry, only on the 401 that means
-        // "this credential is not valid", and only for a connection holding a
-        // refresh token. A 403 is excluded — it means authenticated-but-not-
-        // permitted, and re-minting the same grant returns the same answer.
-        // If the retry also fails its result stands, so a genuinely dead grant
-        // still surfaces the upstream's own auth failure and its reconnect
-        // guidance rather than a masked one.
-        const { result, usedValues } = yield* Effect.gen(function* () {
-          if (!isUnauthorizedToolFailure(first)) return { result: first, usedValues: values };
-          const refreshed = yield* forceRefreshConnectionValues(connectionRow).pipe(
-            // A failed re-mint is not this call's failure to report: the upstream
-            // already produced an auth failure with recovery guidance, which is
-            // strictly more actionable than a refresh-plumbing error. Keep it.
-            Effect.catchTag("CredentialResolutionError", () => Effect.succeed(null)),
-          );
-          if (!refreshed) return { result: first, usedValues: values };
-          yield* Effect.annotateCurrentSpan({ "executor.oauth.refresh.retried": true });
-          return { result: yield* invokeWith(refreshed), usedValues: refreshed };
+          const first = yield* invokeWith(values);
+          // Reactive refresh. `expires_at` is only ever the AS's ADVERTISED
+          // lifetime; the upstream rejecting the token is the authoritative word
+          // on whether it is still good. The two diverge routinely: server-side
+          // revocation, an identity provider's idle-timeout policy shorter than
+          // the token lifetime, and connections whose AS omitted `expires_in`
+          // entirely (null expiry → the proactive check never fires, so this is
+          // their ONLY route back to a working token short of a reconnect).
+          //
+          // Deliberately narrow: exactly one retry, only on the 401 that means
+          // "this credential is not valid", and only for a connection holding a
+          // refresh token. A 403 is excluded — it means authenticated-but-not-
+          // permitted, and re-minting the same grant returns the same answer.
+          // If the retry also fails its result stands, so a genuinely dead grant
+          // still surfaces the upstream's own auth failure and its reconnect
+          // guidance rather than a masked one.
+          const { result, usedValues } = yield* Effect.gen(function* () {
+            if (!isUnauthorizedToolFailure(first)) return { result: first, usedValues: values };
+            const refreshed = yield* forceRefreshConnectionValues(connectionRow).pipe(
+              // A failed re-mint is not this call's failure to report: the upstream
+              // already produced an auth failure with recovery guidance, which is
+              // strictly more actionable than a refresh-plumbing error. Keep it.
+              Effect.catchTag("CredentialResolutionError", () => Effect.succeed(null)),
+            );
+            if (!refreshed) return { result: first, usedValues: values };
+            yield* Effect.annotateCurrentSpan({ "executor.oauth.refresh.retried": true });
+            return { result: yield* invokeWith(refreshed), usedValues: refreshed };
+          });
+          yield* healPersistedHealthOnUse(connectionRow, result, usedValues);
+          return result;
         });
-        yield* healPersistedHealthOnUse(connectionRow, result, usedValues);
-        return result;
+        // Interrupting an already-completed (or already-joined) fiber is a
+        // no-op, so this single guard covers every exit path: a path that
+        // consumed a read leaves a finished fiber behind, and a path that
+        // exited early — an early-return branch or a tool-row read failure —
+        // deliberately abandons the reads it never needed instead of waiting
+        // on them or dropping their failures unobserved. The tool-row fiber
+        // is settled by the time any branch past its join runs; it is listed
+        // so an interruption that lands before the join reaches it promptly.
+        return yield* Effect.ensuring(
+          invokeDynamicTool,
+          Fiber.interruptAll([toolRowFiber, policyRulesFiber, connectionRowFiber]),
+        );
       }).pipe(
         // Expected tool failures (`ToolResult.fail`) resolve through the
         // success channel, so the tracer alone would record them as healthy
