@@ -81,6 +81,7 @@ const AddStdioServerPayload = Schema.Struct({
       server: Schema.String,
       surface: Schema.optional(Schema.Literals(["sky", "browser"])),
       modulePath: Schema.optional(Schema.String),
+      presetId: Schema.optional(Schema.String),
     }),
   ),
   slug: Schema.optional(Schema.String),
@@ -177,6 +178,7 @@ const CodexPluginEntrySchema = Schema.Struct({
       server: Schema.String,
       surface: Schema.optional(Schema.Literals(["sky", "browser"])),
       modulePath: Schema.optional(Schema.String),
+      presetId: Schema.optional(Schema.String),
     }),
   ),
   setupHint: Schema.optional(Schema.String),
@@ -188,6 +190,20 @@ const CodexPluginEntrySchema = Schema.Struct({
   displayName: Schema.optional(Schema.String),
   tagline: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
+});
+
+/** The result of actually trying the plugin, not a reading of any privacy
+ *  database — macOS exposes no way to read another app's decisions. */
+const CodexPluginAccessResponse = Schema.Struct({
+  status: Schema.Literals([
+    "ok",
+    "blocked",
+    "not-installed",
+    "nothing-to-check",
+    "unknown",
+    "unsupported",
+  ]),
+  message: Schema.optional(Schema.String),
 });
 
 const ListCodexPluginsResponse = Schema.Struct({
@@ -263,6 +279,13 @@ export const McpGroup = HttpApiGroup.make("mcp")
   .add(
     HttpApiEndpoint.get("listCodexPlugins", "/mcp/codex-plugins", {
       success: ListCodexPluginsResponse,
+      error: [InternalError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("checkCodexPluginAccess", "/mcp/codex-plugins/:id/check", {
+      params: { id: Schema.String },
+      success: CodexPluginAccessResponse,
       error: [InternalError],
     }),
   )

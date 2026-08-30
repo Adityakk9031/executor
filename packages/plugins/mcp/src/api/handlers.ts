@@ -43,7 +43,12 @@ const toServerInput = (
       cwd?: string;
       versionNegotiation?: "legacy" | "auto";
       spawnPerCall?: boolean;
-      appServer?: { server: string; surface?: "sky" | "browser"; modulePath?: string };
+      appServer?: {
+        server: string;
+        surface?: "sky" | "browser";
+        modulePath?: string;
+        presetId?: string;
+      };
       slug?: string;
     };
     return {
@@ -176,6 +181,14 @@ export const McpHandlers = HttpApiBuilder.group(ExecutorApiWithMcp, "mcp", (hand
           const ext = yield* McpExtensionService;
           const plugins = yield* ext.listCodexPlugins();
           return { plugins: [...plugins] };
+        }),
+      ),
+    )
+    .handle("checkCodexPluginAccess", ({ params }) =>
+      capture(
+        Effect.gen(function* () {
+          const ext = yield* McpExtensionService;
+          return yield* ext.checkCodexPluginAccess(params.id);
         }),
       ),
     )
