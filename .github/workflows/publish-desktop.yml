@@ -18,6 +18,14 @@ on:
         required: false
         default: false
         type: boolean
+      executor_run_id:
+        description: >-
+          Publish Executor run id for this tag. Set by the automatic trigger;
+          the promote gate waits for exactly this run. Leave empty for manual
+          dispatches.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -231,6 +239,8 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
+      # Read Publish Executor run state for the promote gate below.
+      actions: read
 
     steps:
       - name: Checkout validation script
@@ -277,6 +287,52 @@ jobs:
             -o -name "latest*.yml" \) -print0 \
             | xargs -0 -n1 -P8 -I{} sh -c \
               'echo "Uploading: $1"; exec gh release upload "$RELEASE_TAG" "$1" --repo "$GITHUB_REPOSITORY" --clobber' _ {}
+
+      # A published release must imply the npm packages for this tag exist.
+      # Publish Executor triggers this workflow before its npm publishes (to
+      # overlap them with the desktop build) and hands over its own run id,
+      # so wait for exactly that run to conclude successfully before going
+      # public. A run-name search would fail open whenever the run fell
+      # outside the listing window, so only an explicitly empty run id (a
+      # manual dispatch) skips the gate — the operator owns the invariant
+      # then.
+      - name: Wait for executor package publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXECUTOR_RUN_ID: ${{ inputs.executor_run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXECUTOR_RUN_ID" ]; then
+            echo "No executor_run_id given (manual dispatch); skipping the publish gate."
+            exit 0
+          fi
+          deadline=$((SECONDS + 1200))
+          while :; do
+            run=$(gh run view "$EXECUTOR_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+              --json status,conclusion,url,displayTitle)
+            title=$(echo "$run" | jq -r .displayTitle)
+            if [ "$title" != "publish executor $RELEASE_TAG" ]; then
+              echo "Run $EXECUTOR_RUN_ID is '$title', not 'publish executor $RELEASE_TAG' — refusing to promote."
+              exit 1
+            fi
+            status=$(echo "$run" | jq -r .status)
+            if [ "$status" = "completed" ]; then
+              conclusion=$(echo "$run" | jq -r .conclusion)
+              if [ "$conclusion" = "success" ]; then
+                echo "Publish Executor succeeded."
+                break
+              fi
+              echo "Publish Executor concluded '$conclusion' — leaving the release in draft."
+              echo "$run" | jq -r .url
+              exit 1
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Timed out waiting for Publish Executor — leaving the release in draft."
+              exit 1
+            fi
+            echo "Publish Executor status: $status; waiting..."
+            sleep 15
+          done
 
       # Flip draft → published only after every desktop asset is uploaded —
       # this is the atomic point where the new tag becomes "latest".
