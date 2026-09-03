@@ -1,5 +1,7 @@
 # @executor-js/codemode-core
 
+## 2.0.0
+
 ## 1.6.7
 
 ## 1.6.6
