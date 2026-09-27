@@ -147,7 +147,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
           {
             name: "HTTP 200 invalid_grant",
             tokenError: { status: 200, body: { error: "invalid_grant" } },
-            reason: "sign_in_expired",
+            reason: "authorization_code_rejected",
             evidence: "HTTP 200, provider error invalid_grant",
           },
           {
@@ -192,7 +192,8 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
         }
 
         // Callback errors keep their RFC 6749 §4.1.2.1 meaning, after the RFC 9207 issuer check.
-        // A callback from another issuer is a configuration mismatch, whatever error it carries.
+        // A callback from another issuer is an issuer mismatch, whatever error it carries. Only
+        // access_denied is a cancellation; other and unknown codes are authorization errors.
         const callbackErrors: ReadonlyArray<{
           readonly error: string;
           readonly reason: string;
@@ -202,13 +203,13 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
           { error: "invalid_scope", reason: "invalid_scope" },
           { error: "server_error", reason: "service_unavailable" },
           { error: "temporarily_unavailable", reason: "service_unavailable" },
-          { error: "invalid_request", reason: "incompatible_response" },
-          { error: "unsupported_response_type", reason: "incompatible_response" },
+          { error: "invalid_request", reason: "authorization_rejected" },
+          { error: "unsupported_response_type", reason: "authorization_rejected" },
           { error: "unauthorized_client", reason: "invalid_client" },
-          { error: "private_nonstandard_code", reason: "denied" },
+          { error: "private_nonstandard_code", reason: "authorization_rejected" },
           {
             error: "access_denied",
-            reason: "incompatible_response",
+            reason: "issuer_mismatch",
             callbackIssuer: "https://issuer.invalid",
           },
         ];

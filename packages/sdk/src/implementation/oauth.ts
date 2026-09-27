@@ -26,6 +26,7 @@ import {
   type CheckOAuthSetup,
   type OAuthClientSetup,
   OAuthCompletionFailed,
+  type OAuthCompletionReason,
   OAuthAttempt,
   OAuthAttemptId,
   OAuthClientId,
@@ -152,6 +153,7 @@ const clientCredentialsFailed = (error: OAuthProtocolFailed) =>
           ),
   });
 
+/** A failed token exchange. Callback validation runs first, so every failure here reached the token endpoint or failed before sending. */
 const exchangeFailed = (error: OAuthProtocolFailed) =>
   new OAuthCompletionFailed({
     cause: causeOf("exchange", error),
@@ -159,18 +161,15 @@ const exchangeFailed = (error: OAuthProtocolFailed) =>
       error.reason === "invalid_client" || error.reason === "unsupported"
         ? error.reason
         : error.reason === "invalid_grant"
-          ? "sign_in_expired"
-          : // The service identified itself differently from its declared issuer: a configuration mismatch.
-            error.field === "issuer"
-            ? "incompatible_response"
-            : Match.value(outcome(error)).pipe(
-                Match.when("unavailable", () => "service_unavailable" as const),
-                Match.when("incompatible", () => "incompatible_response" as const),
-                // Other callback validation fails before any token request is sent.
-                Match.when("unanswered", () => "invalid_callback" as const),
-                Match.whenOr("blocked", "rejected", () => "exchange_failed" as const),
-                Match.exhaustive,
-              ),
+          ? "authorization_code_rejected"
+          : Match.value(outcome(error)).pipe(
+              Match.when("blocked", () => "destination_blocked" as const),
+              Match.when("unavailable", () => "service_unavailable" as const),
+              Match.when("rejected", () => "exchange_failed" as const),
+              // A 2xx that failed validation, or a request the library refused to build.
+              Match.whenOr("incompatible", "unanswered", () => "incompatible_response" as const),
+              Match.exhaustive,
+            ),
   });
 
 /** A client with a secret uses RFC 7591's client_secret_basic default unless the server only accepts the body form. */
@@ -181,22 +180,33 @@ const secretMethod = (supported: readonly string[] | undefined) =>
     ? ("client_secret_basic" as const)
     : ("client_secret_post" as const);
 
-/** An RFC 6749 §4.1.2.1 error on the callback, after its state and RFC 9207 issuer were validated. */
+/**
+ * A failed authorization response: its RFC 9207 issuer, then an RFC 6749 §4.1.2.1 error code.
+ * Codes outside the recorded vocabulary are still authorization errors, never a cancellation.
+ */
 const callbackFailed = (error: OAuthProtocolFailed) =>
   new OAuthCompletionFailed({
     cause: causeOf("authorize", error),
-    reason: Match.value(error.providerError).pipe(
-      Match.whenOr("invalid_client", "unauthorized_client", () => "invalid_client" as const),
-      Match.when("invalid_scope", () => "invalid_scope" as const),
-      Match.whenOr("server_error", "temporarily_unavailable", () => "service_unavailable" as const),
-      Match.whenOr(
-        "invalid_request",
-        "unsupported_response_type",
-        () => "incompatible_response" as const,
-      ),
-      // access_denied, and codes outside the recorded vocabulary.
-      Match.orElse(() => "denied" as const),
-    ),
+    reason:
+      error.field === "issuer"
+        ? "issuer_mismatch"
+        : error.code !== "OAUTH_AUTHORIZATION_RESPONSE_ERROR"
+          ? "callback_malformed"
+          : Match.value(error.providerError).pipe(
+              Match.when("access_denied", () => "denied" as const),
+              Match.whenOr(
+                "invalid_client",
+                "unauthorized_client",
+                () => "invalid_client" as const,
+              ),
+              Match.when("invalid_scope", () => "invalid_scope" as const),
+              Match.whenOr(
+                "server_error",
+                "temporarily_unavailable",
+                () => "service_unavailable" as const,
+              ),
+              Match.orElse(() => "authorization_rejected" as const),
+            ),
   });
 
 /** Compose persisted sign-in and refresh operations with the host's encryption and transport. */
@@ -601,36 +611,42 @@ export const makeOAuth = (
     Effect.gen(function* () {
       const connectionState = yield* readConnection(db, input);
       if (connectionState.state.status === "completed") return connectionState.state.account;
-      const invalid = () => new OAuthCompletionFailed({ reason: "invalid_callback" });
-      if (protocol === undefined) return yield* invalid();
+      const failed = (reason: OAuthCompletionReason) => new OAuthCompletionFailed({ reason });
+      if (protocol === undefined) return yield* failed("oauth_unavailable");
       const callback = yield* Effect.try({
         try: () => new URL(Redacted.value(input.callbackUrl)),
-        catch: invalid,
+        catch: () => failed("callback_malformed"),
       });
       const states = callback.searchParams.getAll("state");
       const state = states[0];
-      if (state === undefined || state.length < 32 || states.length !== 1 || callback.hash !== "")
-        return yield* invalid();
+      if (
+        state === undefined ||
+        state.length < 32 ||
+        states.length !== 1 ||
+        callback.href.includes("#") ||
+        callback.username !== "" ||
+        callback.password !== ""
+      )
+        return yield* failed("callback_malformed");
       const id = OAuthAttemptId.make(`oauth_${yield* hash(state)}`);
       const row = yield* query(() =>
         db.findFirst("oauthAttempts", { where: (b) => b("id", "=", id) }),
       );
-      if (row === null) return yield* invalid();
+      if (row === null) return yield* failed("sign_in_not_found");
+      // Claimed and completed attempts are never reopened, including after a failed completion.
+      if (row.status !== "pending") return yield* failed("sign_in_used");
       const now = yield* Clock.currentTimeMillis;
-      if (row.status !== "pending" || row.expiresAt.getTime() <= now)
-        return yield* new OAuthCompletionFailed({ reason: "sign_in_expired" });
+      if (row.expiresAt.getTime() <= now) return yield* failed("sign_in_expired");
       const attempt = yield* decrypt(id, row.encrypted, OAuthAttempt);
       yield* Effect.annotateCurrentSpan("oauth.provider.id", attempt.provider);
-      if (attempt.connection !== input.connection) return yield* invalid();
+      // This browser, or this connection, has since started a newer sign-in.
+      if (attempt.connection !== input.connection) return yield* failed("sign_in_replaced");
       const connection = yield* openConnection(db, input);
-      if (connection.oauthAttempt !== id) return yield* invalid();
+      if (connection.oauthAttempt !== id) return yield* failed("sign_in_replaced");
       const redirect = new URL(attempt.redirectUri);
       if (
         callback.origin !== redirect.origin ||
         callback.pathname !== redirect.pathname ||
-        callback.username !== "" ||
-        callback.password !== "" ||
-        callback.href.includes("#") ||
         [...redirect.searchParams.keys()].some((key) => {
           const expected = redirect.searchParams.getAll(key);
           const actual = callback.searchParams.getAll(key);
@@ -640,7 +656,7 @@ export const makeOAuth = (
           );
         })
       )
-        return yield* invalid();
+        return yield* failed("redirect_mismatch");
       const claim = `claim_${yield* nextId}`;
       // Conditional UPDATE is atomic even on adapters without row locks or update counts.
       yield* query(() =>
@@ -652,19 +668,14 @@ export const makeOAuth = (
       const claimed = yield* query(() =>
         db.findFirst("oauthAttempts", { where: (b) => b("id", "=", id) }),
       );
-      if (claimed?.status !== claim)
-        return yield* new OAuthCompletionFailed({ reason: "sign_in_expired" });
+      if (claimed?.status !== claim) return yield* failed("sign_in_used");
       if (attempt.reconnect) yield* reconnectTarget(db, attempt);
-      // The exchange validates the callback's state and issuer before reading its `error`.
+      const parameters = yield* protocol
+        .callback(attempt, callback)
+        .pipe(Effect.mapError(callbackFailed));
       const tokens = yield* protocol
-        .exchange(attempt, callback)
-        .pipe(
-          Effect.mapError((error) =>
-            error.code === "OAUTH_AUTHORIZATION_RESPONSE_ERROR"
-              ? callbackFailed(error)
-              : exchangeFailed(error),
-          ),
-        );
+        .exchange(attempt, parameters)
+        .pipe(Effect.mapError(exchangeFailed));
       const fields = yield* project(attempt.response, tokens).pipe(
         Effect.mapError(
           () =>
@@ -711,7 +722,8 @@ export const makeOAuth = (
         Effect.gen(function* () {
           yield* lockConnection(tx, input, crypto);
           const current = yield* openConnection(tx, input);
-          if (current.oauthAttempt !== id) return yield* invalid();
+          // A newer sign-in started while the token exchange was running.
+          if (current.oauthAttempt !== id) return yield* failed("sign_in_replaced");
           // Read again after the remote exchange: deletion must win, and a concurrent rename must survive.
           const saved = attempt.reconnect ? yield* reconnectTarget(tx, attempt) : account;
           if (attempt.reconnect) {

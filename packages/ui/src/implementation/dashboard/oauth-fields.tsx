@@ -106,7 +106,7 @@ export function OAuthFields<A, E>({
     setup === "unresolved" ||
     pending ||
     !label.trim() ||
-    (manual && (!clientId.trim() || (needsSecret && !clientSecret)));
+    (manual && (!clientId.trim() || (needsSecret && !clientSecret.trim())));
   const connect = () => {
     if (blocked) return;
     setPending(true);
@@ -115,7 +115,9 @@ export function OAuthFields<A, E>({
     const client = manual
       ? {
           clientId: clientId.trim(),
-          ...(acceptsSecret && clientSecret ? { clientSecret: Redacted.make(clientSecret) } : {}),
+          ...(acceptsSecret && clientSecret.trim()
+            ? { clientSecret: Redacted.make(clientSecret.trim()) }
+            : {}),
         }
       : undefined;
     const operation = start({ label: label.trim(), ...(client ? { client } : {}) });

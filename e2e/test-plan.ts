@@ -1075,7 +1075,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "oauth-client-recovery.spec.ts",
     title:
-      "Rejected OAuth clients remain editable and replacements commit only after successful sign-in",
+      "Rejected OAuth clients remain editable, other failures retry without blaming the client, and replacements commit only after successful sign-in",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback OAuth issuer."),
@@ -1181,6 +1181,17 @@ export const scenarios = {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback OAuth issuer."),
       local: na("Exercises shared OAuth through the hosted API."),
+    },
+  },
+  oauthCompletionReasons: {
+    fixtures: "actors",
+    file: "oauth-completion-reasons.spec.ts",
+    title:
+      "OAuth completion names each callback failure, and the callback page offers only the recovery that reason allows",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Hosted callback page and account dialogs."),
     },
   },
   oauthDeclaredEndpoints: {

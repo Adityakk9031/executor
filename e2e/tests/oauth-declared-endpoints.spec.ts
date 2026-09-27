@@ -236,12 +236,13 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
         const expectRejected = (
           attempt: { readonly profile: typeof Profile.Type; readonly connection: string },
           response: { readonly status: number; readonly body: unknown },
+          reason: "incompatible_response" | "issuer_mismatch",
         ) =>
           Effect.gen(function* () {
             expect(response.status).toBe(400);
             expect(yield* body(Failure, response)).toEqual({
               _tag: "OAuthCompletionFailed",
-              reason: "incompatible_response",
+              reason,
             });
             expect(
               (yield* body(
@@ -269,6 +270,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
         yield* expectRejected(
           foreignIdToken,
           yield* complete(foreignIdToken.connection, foreignCallback),
+          "incompatible_response",
         );
         expect((yield* issuer.metrics).tokenExchanges).toBe(exchangesBeforeIdToken + 1);
         yield* issuer.configure({ idTokenIssuer: signInOrigin });
@@ -281,6 +283,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
         yield* expectRejected(
           mismatched,
           yield* complete(mismatched.connection, mismatchedCallback.href),
+          "issuer_mismatch",
         );
         expect((yield* issuer.metrics).tokenExchanges).toBe(exchanges);
 

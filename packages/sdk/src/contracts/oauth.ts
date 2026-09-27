@@ -332,65 +332,136 @@ export const oauthClientEntryReasons: ReadonlySet<OAuthSetupFailed["reason"]> = 
 ]);
 /** Parsed OAuthSetupFailed failure. */
 export type OAuthSetupFailed = typeof OAuthSetupFailed.Type;
+/** Every way sign-in completion can fail. Each reason names one cause, so recovery never guesses. */
+export const OAuthCompletionReason = Schema.Literals([
+  // Executor matches the callback to the sign-in it started.
+  "callback_malformed",
+  "sign_in_not_found",
+  "sign_in_replaced",
+  "redirect_mismatch",
+  "sign_in_expired",
+  "sign_in_used",
+  "account_unavailable",
+  // The service's authorization response, validated before its `error` is read.
+  "issuer_mismatch",
+  "denied",
+  "invalid_scope",
+  "invalid_client",
+  "authorization_rejected",
+  // The token exchange.
+  "authorization_code_rejected",
+  "exchange_failed",
+  "destination_blocked",
+  "service_unavailable",
+  "incompatible_response",
+  "unsupported",
+  "oauth_unavailable",
+]);
+export type OAuthCompletionReason = typeof OAuthCompletionReason.Type;
+
+const restart = (
+  presentation: Omit<ErrorPresentation, "recovery"> & { readonly instructions: string },
+): ErrorPresentation => ({
+  title: presentation.title,
+  description: presentation.description,
+  recovery: { action: "Start the connection again.", instructions: presentation.instructions },
+  agentFixable: false,
+});
+
 /** Sign-in completion failed. Saved account credentials are not changed. */
 export const OAuthCompletionFailed = UserFacingError.define({
   tag: "OAuthCompletionFailed",
   status: 400,
   fields: {
-    /** Each reason has a different recovery. A consumed attempt always needs a new sign-in. */
-    reason: Schema.Literals([
-      "invalid_callback",
-      "denied",
-      "sign_in_expired",
-      "exchange_failed",
-      "invalid_client",
-      "account_unavailable",
-      "service_unavailable",
-      "incompatible_response",
-      "invalid_scope",
-      "unsupported",
-    ]),
+    /** A consumed attempt always needs a new sign-in. */
+    reason: OAuthCompletionReason,
     cause: Schema.optional(OAuthFailureCause),
   },
   presentation: ({ reason, cause }) =>
     withCause(
       (
         {
-          invalid_callback: {
+          callback_malformed: restart({
             title: "Sign-in response not recognised",
+            description: "The service returned to Executor without a usable sign-in response.",
+            instructions:
+              "The callback URL had no single valid state value, or carried a fragment or credentials. Start a fresh sign-in from Executor; never replay or edit a callback URL.",
+          }),
+          sign_in_not_found: restart({
+            title: "Sign-in not found",
             description: "This sign-in response does not match a sign-in that Executor started.",
+            instructions:
+              "No pending sign-in matches the callback's state. The sign-in may have started on another Executor instance or origin. Start a fresh sign-in from the Executor instance that should own the account; never replay a callback.",
+          }),
+          sign_in_replaced: restart({
+            title: "Sign-in replaced",
+            description:
+              "A newer sign-in was started for this connection, possibly in another tab, so this one can no longer finish.",
+            instructions:
+              "Only the latest sign-in for a connection can complete. Finish the newest sign-in or start a fresh one; never replay a callback.",
+          }),
+          redirect_mismatch: {
+            title: "Sign-in returned to a different address",
+            description:
+              "The service returned to a callback URL other than the one Executor sent it to.",
             recovery: {
-              action: "Start the connection again from Executor.",
+              action:
+                "Check Executor’s public address and the service’s allowed redirect URLs. Copy the fix prompt into your agent to find the mismatch.",
               instructions:
-                "Check that the callback came from the sign-in Executor started, in the same browser session, and that the service returns to Executor’s exact callback URL. Start a fresh sign-in; never replay a callback.",
+                "Compare the callback URL Executor registered for this sign-in with the address the browser returned to, including origin, path and query parameters. Check the instance’s public origin and any proxy or relay rewriting the callback. Preserve exact redirect matching.",
+            },
+          },
+          sign_in_expired: restart({
+            title: "Sign-in expired",
+            description: "This sign-in took longer than ten minutes to finish.",
+            instructions: "Sign-ins expire after ten minutes. Start a fresh sign-in.",
+          }),
+          sign_in_used: restart({
+            title: "Sign-in already used",
+            description: "This sign-in response was already used, possibly in another tab.",
+            instructions:
+              "Each sign-in can complete once. Check Accounts for an account the other completion created, or start a fresh sign-in; never replay a callback.",
+          }),
+          account_unavailable: {
+            title: "Account changed during sign-in",
+            description:
+              "The account being reconnected was removed or changed before sign-in finished.",
+            recovery: {
+              action: "Open Accounts and start the connection again.",
+              instructions:
+                "Check whether the reconnected account still exists with the same provider and sign-in method. Start a fresh connection for the intended account.",
+            },
+            agentFixable: false,
+          },
+          issuer_mismatch: {
+            title: "Service identified itself differently",
+            description:
+              "The service’s sign-in response named a different issuer than this app’s OAuth settings, or none when one was required.",
+            recovery: {
+              action:
+                "Check the app’s OAuth issuer settings. Copy the fix prompt into your agent to correct them.",
+              instructions:
+                "Compare the issuer the app's provider definition declares, or the issuer its discovery URL publishes, with the service's documented issuer. Prefer the service's discovery document, or declare its exact issuer alongside explicit endpoints. Do not disable issuer validation (RFC 9207).",
             },
           },
           denied: {
-            title: "Sign-in was not approved",
-            description: "The service reported that sign-in was cancelled or refused.",
+            title: "Sign-in was cancelled",
+            description: "Access was not approved on the service’s sign-in page.",
             recovery: {
               action: "Start the connection again and approve access.",
               instructions:
-                "Check whether the user cancelled consent or the service refused access for this account. Start a fresh sign-in after resolving the refusal.",
+                "The service returned access_denied: the user cancelled consent, or the service refused access for this account. Start a fresh sign-in after resolving the refusal.",
             },
+            agentFixable: false,
           },
-          sign_in_expired: {
-            title: "Sign-in expired",
-            description: "This sign-in expired or was already used.",
-            recovery: {
-              action: "Start the connection again.",
-              instructions:
-                "Start a fresh sign-in. Sign-ins expire after ten minutes and each can complete once; never replay a consumed code.",
-            },
-          },
-          exchange_failed: {
-            title: "Service rejected the sign-in",
-            description: "The service refused to complete this sign-in.",
+          invalid_scope: {
+            title: "Requested access not accepted",
+            description: "The service refused the permissions this app requested.",
             recovery: {
               action:
-                "Start the connection again. If this continues, copy the fix prompt to investigate.",
+                "Check the app’s requested scopes. Copy the fix prompt into your agent to correct them.",
               instructions:
-                "Inspect the app’s OAuth token endpoint, client authentication method, callback configuration, and requested scopes. Fix verified configuration errors and start a fresh sign-in; never replay a consumed code.",
+                "Compare the scopes the app’s provider definition requests with the scopes the service documents and advertises for this client. Remove or correct unknown or unavailable scopes, then start a fresh sign-in. Do not request broader access to work around the refusal.",
             },
           },
           invalid_client: {
@@ -402,14 +473,42 @@ export const OAuthCompletionFailed = UserFacingError.define({
                 "Compare the selected OAuth client ID, secret availability, authentication method, and redirect URL with the service’s developer settings without exposing secret values. Correct the mismatch and start a fresh sign-in.",
             },
           },
-          account_unavailable: {
-            title: "Account changed during sign-in",
-            description:
-              "The account being reconnected was removed or changed before sign-in finished.",
+          authorization_rejected: {
+            title: "Service rejected the sign-in request",
+            description: "The service’s sign-in page refused the request Executor sent it.",
             recovery: {
-              action: "Open Accounts and start the connection again.",
+              action:
+                "Check the app’s OAuth settings. Copy the fix prompt into your agent to find what the service rejected.",
               instructions:
-                "Check whether the reconnected account still exists with the same provider and sign-in method. Start a fresh connection for the intended account.",
+                "The service returned an authorization error other than access_denied, invalid_scope or a client rejection. Compare the app's declared authorization parameters, response type and endpoints with the service's documentation, then start a fresh sign-in.",
+            },
+          },
+          authorization_code_rejected: restart({
+            title: "Service rejected the sign-in code",
+            description:
+              "The service refused the code from this sign-in. It may have expired or already been used.",
+            instructions:
+              "The token endpoint returned invalid_grant. Start a fresh sign-in; never replay a consumed code. If it repeats, compare the redirect URI and PKCE handling with the service's requirements.",
+          }),
+          exchange_failed: {
+            title: "Service rejected the sign-in",
+            description: "The service refused to complete this sign-in.",
+            recovery: {
+              action:
+                "Check the app’s OAuth settings. Copy the fix prompt into your agent to investigate.",
+              instructions:
+                "Inspect the app’s OAuth token endpoint, client authentication method, callback configuration, and requested scopes. Fix verified configuration errors and start a fresh sign-in; never replay a consumed code.",
+            },
+          },
+          destination_blocked: {
+            title: "OAuth address blocked",
+            description:
+              "This Executor instance does not allow access to the service’s token endpoint.",
+            recovery: {
+              action:
+                "Review the app’s OAuth endpoints and this instance’s network policy. Copy the fix prompt into your agent to find an allowed configuration.",
+              instructions:
+                "Inspect the app's token endpoint against this Executor instance's network policy. Correct unintended addresses. Do not bypass address validation or weaken network protections.",
             },
           },
           service_unavailable: {
@@ -421,16 +520,6 @@ export const OAuthCompletionFailed = UserFacingError.define({
             retryable: false,
           },
           incompatible_response: incompatibleResponse,
-          invalid_scope: {
-            title: "Requested access not accepted",
-            description: "The service refused the permissions this app requested.",
-            recovery: {
-              action:
-                "Check the app’s requested scopes. Copy the fix prompt into your agent to correct them.",
-              instructions:
-                "Compare the scopes the app’s provider definition requests with the scopes the service documents and advertises for this client. Remove or correct unknown or unavailable scopes, then start a fresh sign-in. Do not request broader access to work around the refusal.",
-            },
-          },
           unsupported: {
             title: "Sign-in method unavailable",
             description: "The service issued a kind of access token that Executor cannot use.",
@@ -442,11 +531,56 @@ export const OAuthCompletionFailed = UserFacingError.define({
             },
             agentFixable: false,
           },
-        } satisfies Record<typeof reason, ErrorPresentation>
+          oauth_unavailable: {
+            title: "OAuth sign-in unavailable",
+            description: "This Executor instance is not configured to complete OAuth sign-in.",
+            recovery: {
+              action: "Ask the instance administrator to enable OAuth sign-in.",
+              instructions:
+                "The host was started without OAuth transport options. Check the instance configuration that supplies OAuth support.",
+            },
+            agentFixable: false,
+          },
+        } satisfies Record<OAuthCompletionReason, ErrorPresentation>
       )[reason],
       cause,
     ),
 });
+/**
+ * What the person finishing sign-in can do next, for every completion reason:
+ * - `restart`: start the same connection again.
+ * - `client`: the service rejected the OAuth client; correct its details.
+ * - `configuration`: retrying will not help until the app or instance changes.
+ * - `account`: the account being reconnected changed; start from Accounts.
+ * - `cancelled`: the user declined; nothing is wrong.
+ */
+export type OAuthCompletionRecovery =
+  | "restart"
+  | "client"
+  | "configuration"
+  | "account"
+  | "cancelled";
+export const oauthCompletionRecovery = {
+  callback_malformed: "restart",
+  sign_in_not_found: "restart",
+  sign_in_replaced: "restart",
+  redirect_mismatch: "configuration",
+  sign_in_expired: "restart",
+  sign_in_used: "restart",
+  account_unavailable: "account",
+  issuer_mismatch: "configuration",
+  denied: "cancelled",
+  invalid_scope: "configuration",
+  invalid_client: "client",
+  authorization_rejected: "configuration",
+  authorization_code_rejected: "restart",
+  exchange_failed: "configuration",
+  destination_blocked: "configuration",
+  service_unavailable: "restart",
+  incompatible_response: "configuration",
+  unsupported: "configuration",
+  oauth_unavailable: "configuration",
+} as const satisfies Record<OAuthCompletionReason, OAuthCompletionRecovery>;
 /** Parsed OAuthCompletionFailed failure. */
 export type OAuthCompletionFailed = typeof OAuthCompletionFailed.Type;
 

@@ -658,26 +658,46 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
           ...(nonce === undefined ? {} : { nonce }),
         };
       }).pipe(protocolStage("authorize")),
+    /**
+     * Validate the authorization response before any token request: its state, its RFC 9207
+     * issuer, and then any RFC 6749 §4.1.2.1 `error`. Failures here never reached the token endpoint.
+     */
+    callback: (
+      input: { server: OAuthServer; client: OAuthRegistration; state: string },
+      callback: URL,
+    ) =>
+      Effect.try({
+        try: () => {
+          // RFC 9207 needs the service's real issuer. A derived one cannot be compared, so an
+          // `iss` the service sends (Google does) is ignored rather than rejected.
+          const received = new URL(callback);
+          if (input.server.issuer_derived === true) received.searchParams.delete("iss");
+          const parameters = oauth.validateAuthResponse(
+            metadata(input.server),
+            input.client,
+            received,
+            input.state,
+          );
+          if (!parameters.get("code"))
+            throw new OAuthProtocolFailed({ reason: "invalid_response" });
+          return parameters;
+        },
+        catch: failure,
+      }).pipe(protocolStage("authorize")),
     exchange: (
       input: {
         server: OAuthServer;
         client: OAuthRegistration;
         redirectUri: string;
-        state: string;
         verifier: string;
         resource?: string | undefined;
         nonce?: string | undefined;
         bearerResource?: boolean | undefined;
       },
-      callback: URL,
+      parameters: URLSearchParams,
     ) =>
       request(async (settings) => {
         const server = metadata(input.server);
-        // RFC 9207 needs the service's real issuer. A derived one cannot be compared, so an `iss`
-        // the service sends (Google does) is ignored rather than rejected.
-        const received = new URL(callback);
-        if (input.server.issuer_derived === true) received.searchParams.delete("iss");
-        const parameters = oauth.validateAuthResponse(server, input.client, received, input.state);
         const sent = await tokenResponse(
           await oauth.authorizationCodeGrantRequest(
             server,
