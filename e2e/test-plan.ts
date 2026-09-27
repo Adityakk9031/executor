@@ -1152,6 +1152,17 @@ export const scenarios = {
       local: na("Exercises shared OAuth through the hosted API."),
     },
   },
+  oauthDeclaredEndpoints: {
+    fixtures: "actors",
+    file: "oauth-declared-endpoints.spec.ts",
+    title:
+      "Declared OAuth endpoints accept the service's callback and ID token issuer, refresh, and, like discovered servers open to public and secret clients, leave client authentication to the client",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Hosted account dialogs and saved-client management."),
+    },
+  },
   oauthClientSetup: {
     fixtures: "actors",
     file: "oauth-client-setup.spec.ts",

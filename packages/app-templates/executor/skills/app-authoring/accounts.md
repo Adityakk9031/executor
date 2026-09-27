@@ -73,7 +73,8 @@ discovery only fills them in when the service advertises scopes for the resource
 Declare `authorizationUrl`, `tokenUrl` and `scopes` only when the service
 publishes no metadata. Then set `tokenEndpointAuthMethod` to what its docs say
 the token endpoint accepts (`client_secret_basic`, `client_secret_post`, or `none`
-for public PKCE clients). Do not copy endpoints from an OpenAPI `oauth2` scheme
+for public PKCE clients), and `issuer` when the docs name one, so Executor can
+check the service's `iss` responses. Without `issuer` those checks are skipped. Do not copy endpoints from an OpenAPI `oauth2` scheme
 without checking the service's docs; those schemes carry no issuer or client
 authentication.
 

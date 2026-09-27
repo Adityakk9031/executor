@@ -1,6 +1,6 @@
 /** A scoped external OAuth issuer for setup checks; Executor still uses its real HTTP and storage paths. */
 import { createServer } from "node:http";
-import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, type KeyObject, randomUUID, sign } from "node:crypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Deferred, Effect, Layer, Schema } from "effect";
 import {
@@ -9,6 +9,8 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http";
+
+type TokenAuth = "client_secret_basic" | "client_secret_post" | "none";
 
 /** Start a loopback issuer with controllable discovery and registration metadata. */
 export const oauthSetupIssuer = Effect.gen(function* () {
@@ -28,10 +30,35 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let idTokenAlgorithms: readonly string[] | undefined;
   let includeIdToken = false;
   let invalidNonce = false;
+  /** The ID token `iss`; Google names its sign-in host rather than the token endpoint origin. */
+  let idTokenIssuer: string | undefined;
+  /** Google signs RS256; a declared server advertises no algorithms, so RS256 is the only default. */
+  let idTokenAlgorithm: "ES256" | "RS256" = "ES256";
+  let refreshTokens = false;
+  let expiresIn = 3600;
   let tokenExchanges = 0;
   let tokenChecks: Readonly<Record<string, boolean>> = {};
+  let refreshes = 0;
+  let refreshChecks: Readonly<Record<string, boolean>> = {};
+  /** Client authentication on the latest code exchange; background refreshes do not overwrite it. */
+  let lastExchangeAuth: TokenAuth | undefined;
+  /** Appended to the authorization redirect as RFC 9207 `iss`, as Google does. */
+  let callbackIssuer: string | undefined;
+  /** Origin of the browser page that relays a callback to the advertised redirect URI. */
+  let browserReturn: string | undefined;
   const keyPair = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-  const clients = new Map<string, readonly string[]>();
+  let rsaKey: KeyObject | undefined;
+  /** Refresh tokens issued for each client; like Google, refreshes do not rotate them. */
+  const refreshGrants = new Map<string, string>();
+  const refreshedAccessTokens = new Set<string>();
+  const clients = new Map<
+    string,
+    {
+      readonly redirects: readonly string[];
+      readonly secret: string | null;
+      readonly methods: readonly TokenAuth[];
+    }
+  >();
   const codes = new Map<
     string,
     { clientId: string; redirect: string; challenge: string; nonce: string | null }
@@ -88,7 +115,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           redirect === null ||
           challenge === null ||
           params.get("code_challenge_method") !== "S256" ||
-          !clients.get(clientId)?.includes(redirect)
+          !clients.get(clientId)?.redirects.includes(redirect)
         )
           return HttpServerResponse.empty({ status: 400 });
         const code = randomUUID();
@@ -97,19 +124,31 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         const callback = new URL(redirect);
         callback.searchParams.set("code", code);
         callback.searchParams.set("state", params.get("state") ?? "");
-        return HttpServerResponse.empty({ status: 302, headers: { location: callback.href } });
+        if (callbackIssuer !== undefined) callback.searchParams.set("iss", callbackIssuer);
+        // The managed host advertises a separate callback relay; model its browser return.
+        const location =
+          browserReturn === undefined
+            ? callback
+            : Object.assign(new URL("/oauth/callback", browserReturn), { search: callback.search });
+        return HttpServerResponse.empty({ status: 302, headers: { location: location.href } });
       }),
     ),
     HttpRouter.add(
       "POST",
       "/token",
       Effect.gen(function* () {
-        tokenExchanges++;
         const request = yield* HttpServerRequest.HttpServerRequest;
         const input = new URLSearchParams(yield* request.text);
+        const refreshing = input.get("grant_type") === "refresh_token";
+        if (refreshing) refreshes++;
+        else tokenExchanges++;
         const code = input.get("code"),
-          verifier = input.get("code_verifier");
-        const issued = code === null ? undefined : codes.get(code);
+          verifier = input.get("code_verifier"),
+          presentedRefresh = input.get("refresh_token");
+        const issued = refreshing || code === null ? undefined : codes.get(code);
+        const refreshClient =
+          refreshing && presentedRefresh !== null ? refreshGrants.get(presentedRefresh) : undefined;
+        const clientId = refreshing ? refreshClient : issued?.clientId;
         const authorization = request.headers.authorization;
         const decoded = authorization?.startsWith("Basic ")
           ? Buffer.from(authorization.slice(6), "base64").toString("utf8")
@@ -123,49 +162,96 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           separator < 0
             ? undefined
             : decodeURIComponent(decoded.slice(separator + 1).replace(/\+/g, " "));
-        tokenChecks = {
-          issued: issued !== undefined,
-          grant: input.get("grant_type") === "authorization_code",
-          redirect: issued !== undefined && input.get("redirect_uri") === issued.redirect,
-          pkce:
-            issued !== undefined &&
-            verifier !== null &&
-            createHash("sha256").update(verifier).digest("base64url") === issued.challenge,
-          authHeader: authorization !== undefined,
-          authScheme: authorization?.startsWith("Basic ") === true,
-          authClient: issued !== undefined && username === issued.clientId,
-          authSecret: password === "synthetic-client-secret",
+        const method: TokenAuth =
+          authorization !== undefined
+            ? "client_secret_basic"
+            : input.has("client_secret")
+              ? "client_secret_post"
+              : "none";
+        if (!refreshing) lastExchangeAuth = method;
+        const client = clientId === undefined ? undefined : clients.get(clientId);
+        const presented =
+          method === "client_secret_basic"
+            ? { clientId: username, secret: password }
+            : { clientId: input.get("client_id"), secret: input.get("client_secret") };
+        const authChecks = {
+          authScheme:
+            method !== "client_secret_basic" || authorization?.startsWith("Basic ") === true,
+          authMethod: client?.methods.includes(method) === true,
+          authClient: clientId !== undefined && presented.clientId === clientId,
+          authSecret:
+            client !== undefined &&
+            (client.secret === null ? method === "none" : presented.secret === client.secret),
         };
-        if (issued === undefined || code === null || !Object.values(tokenChecks).every(Boolean))
+        if (refreshing) refreshChecks = { issued: refreshClient !== undefined, ...authChecks };
+        else
+          tokenChecks = {
+            issued: issued !== undefined,
+            grant: input.get("grant_type") === "authorization_code",
+            redirect: issued !== undefined && input.get("redirect_uri") === issued.redirect,
+            pkce:
+              issued !== undefined &&
+              verifier !== null &&
+              createHash("sha256").update(verifier).digest("base64url") === issued.challenge,
+            ...authChecks,
+          };
+        if (
+          clientId === undefined ||
+          !Object.values(refreshing ? refreshChecks : tokenChecks).every(Boolean)
+        )
           return yield* HttpServerResponse.json({ error: "invalid_grant" }, { status: 400 });
-        codes.delete(code);
+        if (code !== null) codes.delete(code);
         const origin = yield* Deferred.await(address);
         const now = Math.floor(Date.now() / 1000);
+        // A refreshed ID token carries no nonce (OpenID Connect Core 12.2).
+        const nonce = issued?.nonce ?? null;
         const jwt = [
-          { alg: "ES256", kid: "synthetic-key", typ: "JWT" },
+          { alg: idTokenAlgorithm, kid: "synthetic-key", typ: "JWT" },
           {
-            iss: origin,
-            aud: issued.clientId,
+            iss: idTokenIssuer ?? origin,
+            aud: clientId,
             sub: "synthetic-subject",
             iat: now,
             exp: now + 3600,
-            ...(issued.nonce === null
-              ? {}
-              : { nonce: invalidNonce ? "wrong-nonce" : issued.nonce }),
+            ...(nonce === null ? {} : { nonce: invalidNonce ? "wrong-nonce" : nonce }),
           },
         ]
           .map((part) => Buffer.from(JSON.stringify(part)).toString("base64url"))
           .join(".");
-        const signature = sign("sha256", Buffer.from(jwt), {
-          key: keyPair.privateKey,
-          dsaEncoding: "ieee-p1363",
-        }).toString("base64url");
+        const signature =
+          idTokenAlgorithm === "ES256"
+            ? sign("sha256", Buffer.from(jwt), {
+                key: keyPair.privateKey,
+                dsaEncoding: "ieee-p1363",
+              }).toString("base64url")
+            : sign(
+                "sha256",
+                Buffer.from(jwt),
+                (rsaKey ??= generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey),
+              ).toString("base64url");
+        const accessToken = refreshing
+          ? `synthetic-refreshed-token-${refreshes}`
+          : "synthetic-access-token";
+        if (refreshing) refreshedAccessTokens.add(accessToken);
+        const refreshToken =
+          refreshTokens && !refreshing ? `synthetic-refresh-${randomUUID()}` : undefined;
+        if (refreshToken !== undefined) refreshGrants.set(refreshToken, clientId);
         return yield* HttpServerResponse.json({
-          access_token: "synthetic-access-token",
+          access_token: accessToken,
           token_type: "Bearer",
-          expires_in: 3600,
+          expires_in: expiresIn,
+          ...(refreshToken === undefined ? {} : { refresh_token: refreshToken }),
           ...(includeIdToken ? { id_token: `${jwt}.${signature}` } : {}),
         });
+      }),
+    ),
+    HttpRouter.add(
+      "GET",
+      "/resource",
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const token = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
+        return yield* HttpServerResponse.json({ refreshed: refreshedAccessTokens.has(token) });
       }),
     ),
     HttpRouter.add(
@@ -267,7 +353,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
             { status: 400 },
           );
         if (!malformedRegistration)
-          clients.set(`synthetic-client-${registrations}`, input.redirect_uris);
+          clients.set(`synthetic-client-${registrations}`, {
+            redirects: input.redirect_uris,
+            secret: "synthetic-client-secret",
+            methods: ["client_secret_basic"],
+          });
         return yield* HttpServerResponse.json(
           {
             ...(malformedRegistration ? {} : { client_id: `synthetic-client-${registrations}` }),
@@ -304,6 +394,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly omitSecretExpiry?: boolean;
       readonly idTokenAlgorithms?: readonly string[];
       readonly includeIdToken?: boolean;
+      readonly idTokenIssuer?: string | null;
+      readonly idTokenAlgorithm?: "ES256" | "RS256";
+      readonly refreshTokens?: boolean;
+      readonly expiresIn?: number;
       readonly invalidNonce?: boolean;
       readonly postChallenge?: boolean;
       readonly challenge?: boolean;
@@ -312,6 +406,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly discovery?: typeof discovery;
       readonly scopes?: readonly string[];
       readonly authMethods?: readonly string[];
+      readonly callbackIssuer?: string | null;
+      readonly browserReturn?: string | null;
     }) =>
       Effect.sync(() => {
         if (input.mcpStatus !== undefined)
@@ -320,6 +416,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (input.challenge !== undefined) challenge = input.challenge;
         if (input.idTokenAlgorithms !== undefined) idTokenAlgorithms = input.idTokenAlgorithms;
         if (input.includeIdToken !== undefined) includeIdToken = input.includeIdToken;
+        if (input.idTokenIssuer !== undefined)
+          idTokenIssuer = input.idTokenIssuer === null ? undefined : input.idTokenIssuer;
+        if (input.idTokenAlgorithm !== undefined) idTokenAlgorithm = input.idTokenAlgorithm;
+        if (input.refreshTokens !== undefined) refreshTokens = input.refreshTokens;
+        if (input.expiresIn !== undefined) expiresIn = input.expiresIn;
         if (input.invalidNonce !== undefined) invalidNonce = input.invalidNonce;
         if (input.registrationStatus !== undefined) registrationStatus = input.registrationStatus;
         if (input.malformedRegistration !== undefined)
@@ -331,6 +432,29 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (input.discovery !== undefined) discovery = input.discovery;
         if (input.scopes !== undefined) scopes = [...input.scopes];
         if (input.authMethods !== undefined) authMethods = [...input.authMethods];
+        if (input.callbackIssuer !== undefined)
+          callbackIssuer = input.callbackIssuer === null ? undefined : input.callbackIssuer;
+        if (input.browserReturn !== undefined)
+          browserReturn = input.browserReturn === null ? undefined : input.browserReturn;
+      }),
+    /**
+     * Accept a client configured by hand at the service. One with a secret may authenticate with
+     * HTTP Basic or the request body, as Google allows; one without is a public PKCE client.
+     */
+    allowClient: (input: {
+      readonly clientId: string;
+      readonly clientSecret?: string;
+      readonly redirect: string;
+    }) =>
+      Effect.sync(() => {
+        clients.set(input.clientId, {
+          redirects: [input.redirect],
+          secret: input.clientSecret ?? null,
+          methods:
+            input.clientSecret === undefined
+              ? ["none"]
+              : ["client_secret_basic", "client_secret_post"],
+        });
       }),
     metrics: Effect.sync(() => ({
       registrations,
@@ -339,6 +463,9 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       probes,
       tokenExchanges,
       tokenChecks,
+      refreshes,
+      refreshChecks,
+      lastExchangeAuth,
       nonceRequested,
     })),
   };

@@ -83,7 +83,10 @@ const failure = (error: unknown): OAuthProtocolFailed => {
     error instanceof oauth.OperationProcessingError
       ? error.message === 'unexpected JWT "alg" header parameter'
         ? "jwt_alg"
-        : /^"response" body "([a-z_]+)" property/.exec(error.message)?.[1]
+        : error.message === 'unexpected "iss" (issuer) response parameter value' ||
+            error.message === 'response parameter "iss" (issuer) missing'
+          ? "issuer"
+          : /^"response" body "([a-z_]+)" property/.exec(error.message)?.[1]
       : undefined;
   return new OAuthProtocolFailed({
     ...(code === undefined ? {} : { code }),
@@ -195,6 +198,21 @@ const hasIdToken = async (response: Response) => {
   } catch {
     return false;
   }
+};
+
+/**
+ * An ID token's `iss` cannot be checked against a derived issuer. Executor never reads ID tokens,
+ * so drop one it cannot validate instead of rejecting the tokens beside it.
+ */
+const withoutIdToken = async (response: Response) => {
+  if (!(await hasIdToken(response))) return response;
+  const body: unknown = await response.json();
+  return new Response(
+    JSON.stringify(
+      Object.fromEntries(Object.entries(body as object).filter(([key]) => key !== "id_token")),
+    ),
+    { status: response.status, headers: response.headers },
+  );
 };
 
 /** Resolve protocol operations against one host-supplied Effect HTTP client. */
@@ -384,14 +402,17 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
           if (method.discover === undefined)
             return {
               server: yield* decode(OAuthTokenServer, {
-                issuer: new URL(method.tokenUrl).origin,
+                ...("issuer" in method && method.issuer !== undefined
+                  ? { issuer: method.issuer }
+                  : { issuer: new URL(method.tokenUrl).origin, issuer_derived: true }),
                 ...(method.authorizationUrl === undefined
                   ? {}
                   : { authorization_endpoint: method.authorizationUrl }),
                 token_endpoint: method.tokenUrl,
               }),
               scopes: [...method.scopes],
-              tokenEndpointAuthMethod: method.tokenEndpointAuthMethod ?? "none",
+              // Undeclared means the client decides: a secret uses RFC 7591's client_secret_basic default.
+              tokenEndpointAuthMethod: method.tokenEndpointAuthMethod,
               ...(method.resource == null ? {} : { resource: method.resource }),
             };
           const resource = yield* secureUrl(method.discover);
@@ -423,7 +444,20 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
           return {
             server,
             scopes: [...scopes],
-            tokenEndpointAuthMethod: yield* clientMethod(server, method.tokenEndpointAuthMethod),
+            // RFC 8414 lists what the server accepts; which one applies is the client's property.
+            // A server open to public and secret clients leaves an undeclared choice to the client.
+            ...(method.tokenEndpointAuthMethod === undefined &&
+            server.token_endpoint_auth_methods_supported?.includes("none") &&
+            server.token_endpoint_auth_methods_supported.some(
+              (m) => m === "client_secret_basic" || m === "client_secret_post",
+            )
+              ? {}
+              : {
+                  tokenEndpointAuthMethod: yield* clientMethod(
+                    server,
+                    method.tokenEndpointAuthMethod,
+                  ),
+                }),
             ...(resourceIndicator == null ? {} : { resource: resourceIndicator }),
           };
         });
@@ -527,8 +561,12 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
     ) =>
       request(async (settings) => {
         const server = metadata(input.server);
-        const parameters = oauth.validateAuthResponse(server, input.client, callback, input.state);
-        const response = await oauth.authorizationCodeGrantRequest(
+        // RFC 9207 needs the service's real issuer. A derived one cannot be compared, so an `iss`
+        // the service sends (Google does) is ignored rather than rejected.
+        const received = new URL(callback);
+        if (input.server.issuer_derived === true) received.searchParams.delete("iss");
+        const parameters = oauth.validateAuthResponse(server, input.client, received, input.state);
+        const sent = await oauth.authorizationCodeGrantRequest(
           server,
           input.client,
           clientAuth(input.client),
@@ -542,6 +580,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
               : { additionalParameters: { resource: input.resource } }),
           },
         );
+        const response = input.server.issuer_derived === true ? await withoutIdToken(sent) : sent;
         // Executor never uses the ID token, so it is optional even after requesting `openid`.
         // When one is returned, its nonce and claims are still validated.
         const nonce =
@@ -581,21 +620,22 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
     }) =>
       request(async (settings) => {
         const server = metadata(input.server);
+        const sent = await oauth.refreshTokenGrantRequest(
+          server,
+          input.client,
+          clientAuth(input.client),
+          input.refreshToken,
+          {
+            ...settings,
+            ...(input.resource === undefined
+              ? {}
+              : { additionalParameters: { resource: input.resource } }),
+          },
+        );
         return oauth.processRefreshTokenResponse(
           server,
           input.client,
-          await oauth.refreshTokenGrantRequest(
-            server,
-            input.client,
-            clientAuth(input.client),
-            input.refreshToken,
-            {
-              ...settings,
-              ...(input.resource === undefined
-                ? {}
-                : { additionalParameters: { resource: input.resource } }),
-            },
-          ),
+          input.server.issuer_derived === true ? await withoutIdToken(sent) : sent,
         );
       }).pipe(protocolStage("refresh")),
   };

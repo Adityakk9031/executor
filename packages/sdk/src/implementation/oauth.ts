@@ -153,15 +153,26 @@ const exchangeFailed = (error: OAuthProtocolFailed) =>
         ? "invalid_client"
         : error.reason === "invalid_grant"
           ? "sign_in_expired"
-          : Match.value(outcome(error)).pipe(
-              Match.when("unavailable", () => "service_unavailable" as const),
-              Match.when("incompatible", () => "incompatible_response" as const),
-              // Callback validation (state, issuer) fails before any token request is sent.
-              Match.when("unanswered", () => "invalid_callback" as const),
-              Match.whenOr("blocked", "rejected", () => "exchange_failed" as const),
-              Match.exhaustive,
-            ),
+          : // The service identified itself differently from its declared issuer: a configuration mismatch.
+            error.field === "issuer"
+            ? "incompatible_response"
+            : Match.value(outcome(error)).pipe(
+                Match.when("unavailable", () => "service_unavailable" as const),
+                Match.when("incompatible", () => "incompatible_response" as const),
+                // Other callback validation fails before any token request is sent.
+                Match.when("unanswered", () => "invalid_callback" as const),
+                Match.whenOr("blocked", "rejected", () => "exchange_failed" as const),
+                Match.exhaustive,
+              ),
   });
+
+/** A client with a secret uses RFC 7591's client_secret_basic default unless the server only accepts the body form. */
+const secretMethod = (supported: readonly string[] | undefined) =>
+  supported === undefined ||
+  supported.includes("client_secret_basic") ||
+  !supported.includes("client_secret_post")
+    ? ("client_secret_basic" as const)
+    : ("client_secret_post" as const);
 
 /** Compose persisted sign-in and refresh operations with the host's encryption and transport. */
 export const makeOAuth = (
@@ -321,7 +332,9 @@ export const makeOAuth = (
               mode,
               scopes: discovered.scopes,
               grant: "authorization_code",
-              tokenEndpointAuthMethod: discovered.tokenEndpointAuthMethod,
+              ...(discovered.tokenEndpointAuthMethod === undefined
+                ? {}
+                : { tokenEndpointAuthMethod: discovered.tokenEndpointAuthMethod }),
             };
       }),
       Effect.withSpan("oauth.setup"),
@@ -354,7 +367,11 @@ export const makeOAuth = (
           return yield* new OAuthSetupFailed({ reason: "invalid_client" });
         client = yield* Schema.decodeUnknownEffect(OAuthRegistration)({
           client_id: input.client.clientId,
-          token_endpoint_auth_method: discovered.tokenEndpointAuthMethod,
+          token_endpoint_auth_method:
+            discovered.tokenEndpointAuthMethod ??
+            (input.client.clientSecret === undefined
+              ? "none"
+              : secretMethod(discovered.server.token_endpoint_auth_methods_supported)),
           ...(input.client.clientSecret === undefined
             ? {}
             : { client_secret: Redacted.value(input.client.clientSecret) }),

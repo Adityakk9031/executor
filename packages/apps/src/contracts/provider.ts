@@ -46,6 +46,8 @@ export const OAuth2Config = Schema.Union([
     authorizationUrl: HttpUrl,
     tokenUrl: HttpUrl,
     scopes: Schema.Array(Schema.String),
+    /** RFC 8414 issuer identifier. Declared issuers are checked against the callback's `iss`. */
+    issuer: Schema.optionalKey(HttpUrl),
     discover: Schema.optionalKey(Schema.Never),
   }),
   Schema.Struct({

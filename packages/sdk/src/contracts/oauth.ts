@@ -34,7 +34,8 @@ export const OAuthClientSetup = Schema.Union([
   Schema.Struct({
     ...clientSetup,
     grant: Schema.Literal("authorization_code"),
-    tokenEndpointAuthMethod: OAuthClientAuth,
+    /** Omitted when the provider does not declare one; the client secret is then optional. */
+    tokenEndpointAuthMethod: Schema.optional(OAuthClientAuth),
   }),
   Schema.Struct({
     ...clientSetup,
@@ -433,6 +434,11 @@ export type OAuthAttemptId = typeof OAuthAttemptId.Type;
 /** Validated subset of authorization-server metadata used for saved grants. */
 export const OAuthTokenServer = Schema.Struct({
   issuer: HttpUrl,
+  /**
+   * The provider declared endpoints without an issuer. Executor derives `issuer` from the token
+   * URL to key saved clients, but it is not the service's identifier, so callbacks are not checked against it.
+   */
+  issuer_derived: Schema.optional(Schema.Literal(true)),
   authorization_endpoint: Schema.optional(HttpUrl),
   token_endpoint: HttpUrl,
   registration_endpoint: Schema.optional(HttpUrl),
