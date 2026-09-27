@@ -1887,6 +1887,16 @@ export const scenarios = {
       local: na("Hosted profile authorization"),
     },
   },
+  hostedProfileStaticSchedules: {
+    fixtures: "actors",
+    file: "hosted-profile-scheduling.spec.ts",
+    title: "profile setup and schedules do not depend on dynamic tool discovery",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted profile setup"),
+    },
+  },
   hostedProfileRevocation: {
     fixtures: "actors",
     file: "hosted-profiles.spec.ts",

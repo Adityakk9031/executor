@@ -473,7 +473,7 @@ export const cloudRuntime = Effect.fn(function* (
             ),
           );
         }).pipe(Effect.withSpan("runtime.cloud.skills")),
-      inspect: ({ app, build, tools, ...context }) =>
+      inspect: ({ app, build, tools, scheduled, ...context }) =>
         Effect.gen(function* () {
           const identity = `${app}:${yield* facetIdentity(build, JSON.stringify(Redacted.value(context.accounts))).pipe(Effect.mapError(protocolFailed))}`;
           yield* Effect.annotateCurrentSpan({
@@ -483,7 +483,7 @@ export const cloudRuntime = Effect.fn(function* (
           return selectTools(tools)(
             yield* dispatch(
               load(build),
-              inspectCommand(tools),
+              inspectCommand(tools, scheduled),
               context,
               Schema.Array(HostedTool),
               HostInspectError,

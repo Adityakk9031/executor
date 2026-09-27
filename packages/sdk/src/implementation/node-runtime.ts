@@ -456,13 +456,13 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
         Effect.map(skillCatalog),
         Effect.withSpan("runtime.node.skills"),
       ),
-    inspect: ({ build, tools, ...context }) =>
+    inspect: ({ build, tools, scheduled, ...context }) =>
       load(build)
         .pipe(
           Effect.flatMap((handler) =>
             cachedDispatch(
               handler,
-              inspectCommand(tools),
+              inspectCommand(tools, scheduled),
               context,
               Schema.Array(HostedTool),
               HostInspectError,

@@ -301,10 +301,13 @@ export const connectedWorkerdApps = (blobs: BlobStorage, transport: WorkerdTrans
           SkillCatalogResponse,
           HostInspectError,
         ).pipe(Effect.map(skillCatalog)),
-      inspect: ({ tools, ...input }) =>
-        dispatch(input, inspectCommand(tools), Schema.Array(HostedTool), HostInspectError).pipe(
-          Effect.map(selectTools(tools)),
-        ),
+      inspect: ({ tools, scheduled, ...input }) =>
+        dispatch(
+          input,
+          inspectCommand(tools, scheduled),
+          Schema.Array(HostedTool),
+          HostInspectError,
+        ).pipe(Effect.map(selectTools(tools))),
       index: (input) =>
         dispatch(input, indexCommand, Schema.Array(HostedToolSummary), HostInspectError),
       query: (input) =>

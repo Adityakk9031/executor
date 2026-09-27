@@ -86,6 +86,8 @@ export interface Runtime<Requirements = never> {
       readonly app: string;
       readonly build: BuildId;
       readonly tools?: readonly string[];
+      /** Describe only declared operations with schedules. Send only to scheduledTools builds. */
+      readonly scheduled?: true;
     } & HostContext,
   ) => Effect.Effect<
     readonly HostedTool[],

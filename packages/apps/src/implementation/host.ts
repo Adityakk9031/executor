@@ -148,7 +148,7 @@ function requirements(slots: AccountSlots, database?: typeof DeclaredRequirement
     }
     return yield* Schema.decodeUnknownEffect(DeclaredRequirements)({
       accounts: Object.fromEntries(accounts),
-      capabilities: { skills: true, toolIndex: true, skillSources: true },
+      capabilities: { skills: true, toolIndex: true, skillSources: true, scheduledTools: true },
       ...(database === undefined ? {} : { database }),
     }).pipe(Effect.mapError(() => new HostDeclarationInvalid()));
   });
@@ -447,15 +447,17 @@ function dispatch(
         ] as const) {
           for (const [name, operation] of Object.entries(catalog ?? {})) {
             if (wanted !== undefined && !wanted.has(`${prefix}${name}`)) continue;
+            const schedules = Object.entries(definition.schedules ?? {})
+              .filter(([, schedule]) => schedule.tool === `${prefix}${name}`)
+              .map(([name, { tool: _tool, ...schedule }]) => ({ name, ...schedule }));
+            if (request.scheduled === true && schedules.length === 0) continue;
             metadata.push(
               yield* safe(
                 () =>
                   Effect.gen(function* () {
                     const fields = {
                       name: `${prefix}${name}`,
-                      schedules: Object.entries(definition.schedules ?? {})
-                        .filter(([, schedule]) => schedule.tool === `${prefix}${name}`)
-                        .map(([name, { tool: _tool, ...schedule }]) => ({ name, ...schedule })),
+                      schedules,
                       description:
                         operation.description ?? `${readOnly ? "Query" : "Mutate"} ${name}`,
                       ...(operation.title === undefined ? {} : { title: operation.title }),
@@ -480,7 +482,9 @@ function dispatch(
             );
           }
         }
-        const dynamic = definition.dynamicTools;
+        // Schedules only target declared operations. Dynamic catalogs can be expensive to
+        // discover, so scheduled inspection never evaluates them.
+        const dynamic = request.scheduled === true ? undefined : definition.dynamicTools;
         if (dynamic !== undefined && (wanted === undefined || metadata.length < wanted.size)) {
           const declared = new Set(metadata.map((tool) => tool.name));
           const discover = (): Effect.Effect<readonly unknown[], unknown> => {

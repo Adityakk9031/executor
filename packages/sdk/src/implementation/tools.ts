@@ -327,6 +327,8 @@ export const makeTools = (
       options: Parameters<typeof runtime.index>[0],
       /** Earlier builds reject index and filtered inspection; they only describe every tool. */
       toolIndex: boolean,
+      /** Earlier builds reject scheduled inspection; they only describe every tool. */
+      scheduledTools: boolean,
     ) => Effect.Effect<A, Effect.Error<ReturnType<typeof runtime.index>>, R>,
   ) =>
     Effect.gen(function* () {
@@ -347,6 +349,7 @@ export const makeTools = (
           ...(workflows === undefined ? {} : { workflowControls: workflows(state) }),
         },
         state.deployment.requirements.capabilities?.toolIndex === true,
+        state.deployment.requirements.capabilities?.scheduledTools === true,
       ).pipe(
         Effect.mapError((error) =>
           Schema.is(ProviderError)(error)
@@ -391,6 +394,22 @@ export const makeTools = (
             : {}),
         };
       }).pipe(Effect.withSpan("sdk.tools.list")),
+    /**
+     * Describe the declared operations that have schedules. Current builds skip dynamic
+     * tool discovery, which can compile a large catalog in the shared app runtime.
+     */
+    scheduled: (input: Parameters<Executor["tools"]["list"]>[0]) =>
+      Effect.gen(function* () {
+        const { value: tools } = yield* evaluate(input, (options, _toolIndex, scheduled) =>
+          runtime.inspect(scheduled ? { ...options, scheduled: true } : options),
+        );
+        return tools.flatMap((tool) =>
+          (tool.schedules ?? []).map((schedule) => ({
+            ...schedule,
+            tool: ToolName.make(tool.name),
+          })),
+        );
+      }).pipe(Effect.withSpan("sdk.tools.scheduled")),
     index: (input: Parameters<Executor["tools"]["index"]>[0]) =>
       Effect.gen(function* () {
         const {

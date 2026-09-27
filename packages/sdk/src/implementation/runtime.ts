@@ -39,6 +39,7 @@ export interface ResolvedAppRuntime {
     readonly build: BuildId;
     readonly accounts: ResolvedAccountsInput;
     readonly tools?: readonly string[];
+    readonly scheduled?: true;
   }) => Promise<readonly HostedTool[]>;
   readonly index: (input: {
     readonly app: string;

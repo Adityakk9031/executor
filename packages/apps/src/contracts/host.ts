@@ -87,6 +87,8 @@ export const DeclaredRequirements = Schema.Struct({
       toolIndex: Schema.optionalKey(Schema.Literal(true)),
       /** Accepts skills sources and reports whether the catalog includes a live loader. */
       skillSources: Schema.optionalKey(Schema.Literal(true)),
+      /** Accepts scheduled inspection. Earlier builds reject it as an excess field. */
+      scheduledTools: Schema.optionalKey(Schema.Literal(true)),
     }),
   ),
   database: Schema.optionalKey(DatabaseSchema),
@@ -187,11 +189,15 @@ export interface SkillCatalog {
 export const skillCatalog = (response: typeof SkillCatalogResponse.Type): SkillCatalog =>
   Schema.is(SkillSources)(response) ? response : { skills: response };
 
-/** Inspection commands. Send detail or tools only to builds that declare toolIndex. */
-export const inspectCommand = (tools?: readonly string[]) =>
-  tools === undefined
-    ? ({ operation: "inspect" } as const)
-    : ({ operation: "inspect", tools: [...tools] } as const);
+/**
+ * Inspection commands. Send detail or tools only to builds that declare toolIndex,
+ * and scheduled only to builds that declare scheduledTools.
+ */
+export const inspectCommand = (tools?: readonly string[], scheduled?: true) => ({
+  operation: "inspect" as const,
+  ...(tools === undefined ? {} : { tools: [...tools] }),
+  ...(scheduled === undefined ? {} : { scheduled }),
+});
 export const indexCommand = { operation: "inspect", detail: "summary" } as const;
 /** Keep only the requested tools from an inspection that may have described every tool. */
 export const selectTools =
@@ -210,6 +216,11 @@ export const HostRequest = Schema.Union([
     detail: Schema.optionalKey(Schema.Literal("summary")),
     /** Describe only these tools. Only builds that declare the toolIndex capability accept this. */
     tools: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
+    /**
+     * Describe only declared operations that have schedules, without dynamic tool discovery.
+     * Only builds that declare the scheduledTools capability accept this.
+     */
+    scheduled: Schema.optionalKey(Schema.Literal(true)),
   }),
   Schema.Struct({
     operation: Schema.Literal("skills"),
