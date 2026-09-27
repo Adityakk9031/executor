@@ -1082,6 +1082,16 @@ export const scenarios = {
       local: na("Local connection-link coverage is in the local OAuth scenario."),
     },
   },
+  oauthDiscoveryFallback: {
+    fixtures: "actors",
+    file: "oauth-discovery-fallback.spec.ts",
+    title: "OAuth discovery falls back to the origin only when path metadata is missing",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises shared OAuth discovery through the hosted API."),
+    },
+  },
   oauthErrorReport: {
     fixtures: "actors",
     file: "oauth-error-report.spec.ts",

@@ -331,6 +331,10 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
       let response = await oauth.discoveryRequest(issuer, { ...settings, algorithm: "oauth2" });
       if (response.status === 404)
         response = await oauth.discoveryRequest(issuer, { ...settings, algorithm: "oidc" });
+      // A well-known URL that refuses the request serves no metadata. Atlassian's MCP endpoint
+      // answers the appended OpenID path with 401.
+      if (response.status >= 400 && response.status < 500 && response.status !== 429)
+        throw new OAuthProtocolFailed({ reason: "metadata_missing" });
       return oauth.processDiscoveryResponse(issuer, discoveryResponse(response));
     }).pipe(Effect.flatMap((server) => decode(OAuthTokenServer, server)));
 
@@ -425,9 +429,10 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
           // server's origin as the authorization base. Atlassian publishes metadata only there.
           const server = yield* found === undefined && issuerUrl.pathname !== "/"
             ? discoverIssuer(issuerUrl).pipe(
+                // Only missing metadata falls back. Served metadata that is invalid or names another
+                // issuer is a failure, never a reason to try a different issuer.
                 Effect.catchIf(
-                  (error) =>
-                    error.reason === "metadata_missing" || error.reason === "invalid_response",
+                  (error) => error.reason === "metadata_missing",
                   () => discoverIssuer(new URL(issuerUrl.origin)),
                 ),
               )

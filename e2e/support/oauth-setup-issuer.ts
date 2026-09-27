@@ -71,6 +71,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
     | "invalid-json"
     | "invalid-metadata"
     | "blocked" = "available";
+  // Metadata for the path-based `/v1/mcp` endpoint, which publishes no protected-resource
+  // metadata. "atlassian" misses the path-inserted URL and refuses the appended OpenID path.
+  let pathDiscovery: "atlassian" | "issuer-mismatch" | "invalid-metadata" = "atlassian";
+  const discoveryRequests: string[] = [];
   let scopes = ["read"];
   let registrations = 0;
   let discoveries = 0;
@@ -289,6 +293,40 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       }),
     ),
     HttpRouter.add("GET", "/challenge-resource", resource),
+    // Like Atlassian's MCP endpoint, `/v1/mcp` challenges without naming resource metadata.
+    HttpRouter.add(
+      "*",
+      "/v1/mcp",
+      HttpServerResponse.empty({ status: 401, headers: { "www-authenticate": "Bearer" } }),
+    ),
+    HttpRouter.add(
+      "GET",
+      "/.well-known/oauth-authorization-server/v1/mcp",
+      Effect.gen(function* () {
+        discoveryRequests.push("/.well-known/oauth-authorization-server/v1/mcp");
+        if (pathDiscovery === "atlassian") return HttpServerResponse.empty({ status: 404 });
+        const origin = yield* Deferred.await(address);
+        if (pathDiscovery === "invalid-metadata")
+          return yield* HttpServerResponse.json({ issuer: `${origin}/v1/mcp` });
+        return yield* HttpServerResponse.json({
+          issuer: origin,
+          authorization_endpoint: `${origin}/authorize`,
+          token_endpoint: `${origin}/token`,
+          code_challenge_methods_supported: ["S256"],
+          token_endpoint_auth_methods_supported: authMethods,
+          scopes_supported: scopes,
+          registration_endpoint: `${origin}/register`,
+        });
+      }),
+    ),
+    HttpRouter.add(
+      "GET",
+      "/v1/mcp/.well-known/openid-configuration",
+      Effect.sync(() => {
+        discoveryRequests.push("/v1/mcp/.well-known/openid-configuration");
+        return HttpServerResponse.empty({ status: 401, headers: { "www-authenticate": "Bearer" } });
+      }),
+    ),
     HttpRouter.add(
       "GET",
       "/.well-known/oauth-protected-resource/mcp",
@@ -301,6 +339,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       "/.well-known/oauth-authorization-server",
       Effect.gen(function* () {
         discoveries++;
+        discoveryRequests.push("/.well-known/oauth-authorization-server");
         if (discovery === "unavailable") return HttpServerResponse.empty({ status: 503 });
         if (discovery === "missing" || discovery === "no-oauth")
           return HttpServerResponse.empty({ status: 404 });
@@ -404,6 +443,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly mcpStatus?: 520 | null;
       readonly expiresAt?: number;
       readonly discovery?: typeof discovery;
+      readonly pathDiscovery?: typeof pathDiscovery;
       readonly scopes?: readonly string[];
       readonly authMethods?: readonly string[];
       readonly callbackIssuer?: string | null;
@@ -430,6 +470,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (input.registration !== undefined) registration = input.registration;
         if (input.expiresAt !== undefined) expiresAt = input.expiresAt;
         if (input.discovery !== undefined) discovery = input.discovery;
+        if (input.pathDiscovery !== undefined) pathDiscovery = input.pathDiscovery;
         if (input.scopes !== undefined) scopes = [...input.scopes];
         if (input.authMethods !== undefined) authMethods = [...input.authMethods];
         if (input.callbackIssuer !== undefined)
@@ -459,6 +500,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
     metrics: Effect.sync(() => ({
       registrations,
       discoveries,
+      discoveryRequests: [...discoveryRequests],
       lastRegistration,
       probes,
       tokenExchanges,
