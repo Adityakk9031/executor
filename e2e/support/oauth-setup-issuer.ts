@@ -33,7 +33,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   /** The ID token `iss`; Google names its sign-in host rather than the token endpoint origin. */
   let idTokenIssuer: string | undefined;
   /** Google signs RS256; a declared server advertises no algorithms, so RS256 is the only default. */
-  let idTokenAlgorithm: "ES256" | "RS256" = "ES256";
+  let idTokenAlgorithm: "ES256" | "RS256" | "none" = "ES256";
   let refreshTokens = false;
   let expiresIn = 3600;
   let tokenExchanges = 0;
@@ -46,6 +46,18 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let callbackIssuer: string | undefined;
   /** Origin of the browser page that relays a callback to the advertised redirect URI. */
   let browserReturn: string | undefined;
+  // Opt-in error and token variants. Defaults keep the standard behaviour above.
+  let tokenError:
+    | { readonly status: number; readonly body: object; readonly challenge?: string }
+    | undefined;
+  let tokenType = "Bearer";
+  let authorizeError: string | undefined;
+  let challengeScheme = "Bearer";
+  let bearerMethods: readonly string[] | undefined;
+  /** The ID-token subject issued on refresh. */
+  let refreshSubject = "synthetic-subject";
+  /** Lifetime of renewed tokens; unset, they last `expiresIn` like the first ones. */
+  let refreshedExpiresIn: number | undefined;
   const keyPair = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   let rsaKey: KeyObject | undefined;
   /** Refresh tokens issued for each client; like Google, refreshes do not rotate them. */
@@ -88,6 +100,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       resource: `${origin}/mcp`,
       authorization_servers: [discovery === "blocked" ? "http://blocked.internal:8081" : origin],
       scopes_supported: scopes,
+      ...(bearerMethods === undefined ? {} : { bearer_methods_supported: bearerMethods }),
     });
   });
   const routes = Layer.mergeAll(
@@ -124,9 +137,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           return HttpServerResponse.empty({ status: 400 });
         const code = randomUUID();
         nonceRequested = params.get("nonce") !== null;
-        codes.set(code, { clientId, redirect, challenge, nonce: params.get("nonce") });
         const callback = new URL(redirect);
-        callback.searchParams.set("code", code);
+        if (authorizeError === undefined) {
+          codes.set(code, { clientId, redirect, challenge, nonce: params.get("nonce") });
+          callback.searchParams.set("code", code);
+        } else callback.searchParams.set("error", authorizeError);
         callback.searchParams.set("state", params.get("state") ?? "");
         if (callbackIssuer !== undefined) callback.searchParams.set("iss", callbackIssuer);
         // The managed host advertises a separate callback relay; model its browser return.
@@ -146,6 +161,14 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         const refreshing = input.get("grant_type") === "refresh_token";
         if (refreshing) refreshes++;
         else tokenExchanges++;
+        if (tokenError !== undefined)
+          return yield* HttpServerResponse.json(tokenError.body, {
+            status: tokenError.status,
+            headers:
+              tokenError.challenge === undefined
+                ? {}
+                : { "www-authenticate": tokenError.challenge },
+          });
         const code = input.get("code"),
           verifier = input.get("code_verifier"),
           presentedRefresh = input.get("refresh_token");
@@ -214,7 +237,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           {
             iss: idTokenIssuer ?? origin,
             aud: clientId,
-            sub: "synthetic-subject",
+            sub: refreshing ? refreshSubject : "synthetic-subject",
             iat: now,
             exp: now + 3600,
             ...(nonce === null ? {} : { nonce: invalidNonce ? "wrong-nonce" : nonce }),
@@ -223,16 +246,18 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           .map((part) => Buffer.from(JSON.stringify(part)).toString("base64url"))
           .join(".");
         const signature =
-          idTokenAlgorithm === "ES256"
-            ? sign("sha256", Buffer.from(jwt), {
-                key: keyPair.privateKey,
-                dsaEncoding: "ieee-p1363",
-              }).toString("base64url")
-            : sign(
-                "sha256",
-                Buffer.from(jwt),
-                (rsaKey ??= generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey),
-              ).toString("base64url");
+          idTokenAlgorithm === "none"
+            ? ""
+            : idTokenAlgorithm === "ES256"
+              ? sign("sha256", Buffer.from(jwt), {
+                  key: keyPair.privateKey,
+                  dsaEncoding: "ieee-p1363",
+                }).toString("base64url")
+              : sign(
+                  "sha256",
+                  Buffer.from(jwt),
+                  (rsaKey ??= generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey),
+                ).toString("base64url");
         const accessToken = refreshing
           ? `synthetic-refreshed-token-${refreshes}`
           : "synthetic-access-token";
@@ -242,8 +267,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (refreshToken !== undefined) refreshGrants.set(refreshToken, clientId);
         return yield* HttpServerResponse.json({
           access_token: accessToken,
-          token_type: "Bearer",
-          expires_in: expiresIn,
+          token_type: tokenType,
+          expires_in: refreshing ? (refreshedExpiresIn ?? expiresIn) : expiresIn,
           ...(refreshToken === undefined ? {} : { refresh_token: refreshToken }),
           ...(includeIdToken ? { id_token: `${jwt}.${signature}` } : {}),
         });
@@ -254,8 +279,13 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       "/resource",
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
-        const token = request.headers.authorization?.replace(/^Bearer /, "") ?? "";
-        return yield* HttpServerResponse.json({ refreshed: refreshedAccessTokens.has(token) });
+        const authorization = request.headers.authorization ?? null;
+        const token = authorization?.replace(/^Bearer /, "") ?? "";
+        // Report whether a renewed token was presented, and echo the credential itself.
+        return yield* HttpServerResponse.json({
+          refreshed: refreshedAccessTokens.has(token),
+          authorization,
+        });
       }),
     ),
     HttpRouter.add(
@@ -270,7 +300,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         return HttpServerResponse.empty({
           status: 401,
           headers: {
-            "www-authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`,
+            "www-authenticate": `${challengeScheme} resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`,
           },
         });
       }),
@@ -286,7 +316,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           status: 401,
           headers: challenge
             ? {
-                "www-authenticate": `Bearer resource_metadata="${origin}/challenge-resource"`,
+                "www-authenticate": `${challengeScheme} resource_metadata="${origin}/challenge-resource"`,
               }
             : {},
         });
@@ -434,7 +464,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly idTokenAlgorithms?: readonly string[];
       readonly includeIdToken?: boolean;
       readonly idTokenIssuer?: string | null;
-      readonly idTokenAlgorithm?: "ES256" | "RS256";
+      readonly idTokenAlgorithm?: typeof idTokenAlgorithm;
       readonly refreshTokens?: boolean;
       readonly expiresIn?: number;
       readonly invalidNonce?: boolean;
@@ -448,6 +478,19 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly authMethods?: readonly string[];
       readonly callbackIssuer?: string | null;
       readonly browserReturn?: string | null;
+      /** Answer every token request with this body, status and optional challenge; null restores tokens. */
+      readonly tokenError?: typeof tokenError | null;
+      readonly tokenType?: string;
+      /** Return this RFC 6749 error code to the callback instead of a code; null restores codes. */
+      readonly authorizeError?: string | null;
+      /** The scheme of the resource's 401 challenge. */
+      readonly challengeScheme?: string;
+      /** RFC 9728 `bearer_methods_supported`; null omits it. */
+      readonly bearerMethods?: readonly string[] | null;
+      /** The ID-token subject issued on refresh. */
+      readonly refreshSubject?: string;
+      /** Lifetime of renewed tokens; null makes them last `expiresIn`. */
+      readonly refreshedExpiresIn?: number | null;
     }) =>
       Effect.sync(() => {
         if (input.mcpStatus !== undefined)
@@ -477,6 +520,18 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           callbackIssuer = input.callbackIssuer === null ? undefined : input.callbackIssuer;
         if (input.browserReturn !== undefined)
           browserReturn = input.browserReturn === null ? undefined : input.browserReturn;
+        if (input.tokenError !== undefined)
+          tokenError = input.tokenError === null ? undefined : input.tokenError;
+        if (input.tokenType !== undefined) tokenType = input.tokenType;
+        if (input.authorizeError !== undefined)
+          authorizeError = input.authorizeError === null ? undefined : input.authorizeError;
+        if (input.challengeScheme !== undefined) challengeScheme = input.challengeScheme;
+        if (input.bearerMethods !== undefined)
+          bearerMethods = input.bearerMethods === null ? undefined : input.bearerMethods;
+        if (input.refreshSubject !== undefined) refreshSubject = input.refreshSubject;
+        if (input.refreshedExpiresIn !== undefined)
+          refreshedExpiresIn =
+            input.refreshedExpiresIn === null ? undefined : input.refreshedExpiresIn;
       }),
     /**
      * Accept a client configured by hand at the service. One with a secret may authenticate with

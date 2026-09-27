@@ -52,7 +52,7 @@ import {
 } from "../contracts/shared.ts";
 import type { Credentials, StoredAccount } from "../contracts/storage.ts";
 import { query, transaction, type Query } from "./database.ts";
-import { makeOAuthProtocol, type OAuthProtocolFailed } from "./oauth-protocol.ts";
+import { idTokenSubject, makeOAuthProtocol, type OAuthProtocolFailed } from "./oauth-protocol.ts";
 import { ownedAccount } from "./accounts.ts";
 
 const decode = <A>(schema: Schema.Decoder<A>, value: unknown) =>
@@ -94,7 +94,8 @@ const causeOf = (
 
 /**
  * Classify a failed request by who must act. A 2xx response that failed validation is an
- * Executor compatibility problem; a 3xx or 4xx is the service refusing the request.
+ * Executor compatibility problem; a 3xx or 4xx, or an RFC 6749 error body with any status,
+ * is the service refusing the request.
  */
 const outcome = (error: OAuthProtocolFailed) =>
   error.reason === "destination_blocked"
@@ -103,9 +104,12 @@ const outcome = (error: OAuthProtocolFailed) =>
       ? error.reason === "request"
         ? "unavailable"
         : "unanswered"
-      : error.status === 429 || error.status >= 500
+      : error.status === 429 ||
+          error.status >= 500 ||
+          error.providerError === "server_error" ||
+          error.providerError === "temporarily_unavailable"
         ? "unavailable"
-        : error.status >= 300
+        : error.status >= 300 || error.code === "OAUTH_RESPONSE_BODY_ERROR"
           ? "rejected"
           : "incompatible";
 
@@ -135,8 +139,8 @@ const clientCredentialsFailed = (error: OAuthProtocolFailed) =>
   new OAuthSetupFailed({
     cause: causeOf("clientCredentials", error),
     reason:
-      error.reason === "invalid_client"
-        ? "invalid_client"
+      error.reason === "invalid_client" || error.reason === "unsupported"
+        ? error.reason
         : Match.value(outcome(error)).pipe(
             Match.when("unavailable", () => "service_unavailable" as const),
             Match.when("incompatible", () => "incompatible_response" as const),
@@ -149,8 +153,8 @@ const exchangeFailed = (error: OAuthProtocolFailed) =>
   new OAuthCompletionFailed({
     cause: causeOf("exchange", error),
     reason:
-      error.reason === "invalid_client"
-        ? "invalid_client"
+      error.reason === "invalid_client" || error.reason === "unsupported"
+        ? error.reason
         : error.reason === "invalid_grant"
           ? "sign_in_expired"
           : // The service identified itself differently from its declared issuer: a configuration mismatch.
@@ -173,6 +177,24 @@ const secretMethod = (supported: readonly string[] | undefined) =>
   !supported.includes("client_secret_post")
     ? ("client_secret_basic" as const)
     : ("client_secret_post" as const);
+
+/** An RFC 6749 §4.1.2.1 error on the callback, after its state and RFC 9207 issuer were validated. */
+const callbackFailed = (error: OAuthProtocolFailed) =>
+  new OAuthCompletionFailed({
+    cause: causeOf("authorize", error),
+    reason: Match.value(error.providerError).pipe(
+      Match.whenOr("invalid_client", "unauthorized_client", () => "invalid_client" as const),
+      Match.when("invalid_scope", () => "invalid_scope" as const),
+      Match.whenOr("server_error", "temporarily_unavailable", () => "service_unavailable" as const),
+      Match.whenOr(
+        "invalid_request",
+        "unsupported_response_type",
+        () => "incompatible_response" as const,
+      ),
+      // access_denied, and codes outside the recorded vocabulary.
+      Match.orElse(() => "denied" as const),
+    ),
+  });
 
 /** Compose persisted sign-in and refresh operations with the host's encryption and transport. */
 export const makeOAuth = (
@@ -239,6 +261,7 @@ export const makeOAuth = (
                 Match.when("metadata_missing", () => "discovery_missing" as const),
                 Match.when("destination_blocked", () => "discovery_blocked" as const),
                 Match.when("resource_mismatch", () => "resource_mismatch" as const),
+                Match.when("unsupported", () => "unsupported" as const),
                 Match.whenOr(
                   "invalid_response",
                   "invalid_client",
@@ -625,18 +648,17 @@ export const makeOAuth = (
       );
       if (claimed?.status !== claim)
         return yield* new OAuthCompletionFailed({ reason: "sign_in_expired" });
-      if (callback.searchParams.has("error"))
-        return yield* new OAuthCompletionFailed({
-          reason: ["invalid_client", "unauthorized_client"].includes(
-            callback.searchParams.get("error") ?? "",
-          )
-            ? "invalid_client"
-            : "denied",
-        });
       if (attempt.reconnect) yield* reconnectTarget(db, attempt);
+      // The exchange validates the callback's state and issuer before reading its `error`.
       const tokens = yield* protocol
         .exchange(attempt, callback)
-        .pipe(Effect.mapError(exchangeFailed));
+        .pipe(
+          Effect.mapError((error) =>
+            error.code === "OAUTH_AUTHORIZATION_RESPONSE_ERROR"
+              ? callbackFailed(error)
+              : exchangeFailed(error),
+          ),
+        );
       const fields = yield* project(attempt.response, tokens).pipe(
         Effect.mapError(
           () =>
@@ -647,11 +669,14 @@ export const makeOAuth = (
         ),
       );
       const completedAt = yield* Clock.currentTimeMillis;
+      const subject = idTokenSubject(tokens);
       const grant = yield* decode(OAuthGrant, {
         server: attempt.server,
         client: attempt.client,
         response: attempt.response,
         ...(attempt.resource === undefined ? {} : { resource: attempt.resource }),
+        ...(attempt.bearerResource === undefined ? {} : { bearerResource: true }),
+        ...(subject === undefined ? {} : { idTokenSubject: subject }),
         fields,
         ...(tokens.refresh_token === undefined ? {} : { refreshToken: tokens.refresh_token }),
         ...(tokens.expires_in === undefined

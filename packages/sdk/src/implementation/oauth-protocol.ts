@@ -55,9 +55,24 @@ export class OAuthProtocolFailed extends Schema.TaggedError<OAuthProtocolFailed>
       "metadata_missing",
       "destination_blocked",
       "resource_mismatch",
+      "unsupported",
     ]),
   },
 ) {}
+
+/** RFC 6749 §5.2 error codes map to reasons; unknown codes are dropped from the recorded evidence. */
+const errorResponse = (status: number, error: string) =>
+  new OAuthProtocolFailed({
+    code: oauth.RESPONSE_BODY_ERROR,
+    status,
+    ...(Schema.is(OAuthProviderErrorCode)(error) ? { providerError: error } : {}),
+    reason:
+      error === "invalid_grant"
+        ? "invalid_grant"
+        : error === "invalid_client"
+          ? "invalid_client"
+          : "request",
+  });
 
 const failure = (error: unknown): OAuthProtocolFailed => {
   if (Schema.is(OAuthProtocolFailed)(error)) return error;
@@ -75,7 +90,9 @@ const failure = (error: unknown): OAuthProtocolFailed => {
         ? error.cause.status
         : undefined;
   const providerError =
-    error instanceof oauth.ResponseBodyError && Schema.is(OAuthProviderErrorCode)(error.error)
+    (error instanceof oauth.ResponseBodyError ||
+      error instanceof oauth.AuthorizationResponseError) &&
+    Schema.is(OAuthProviderErrorCode)(error.error)
       ? error.error
       : undefined;
   // Match library-owned validation labels; never record its message, cause, expected value or body.
@@ -130,10 +147,14 @@ const metadata = (server: OAuthTokenServer): oauth.AuthorizationServer => ({
     : { authorization_endpoint: server.authorization_endpoint }),
   token_endpoint: server.token_endpoint,
   ...(server.jwks_uri === undefined ? {} : { jwks_uri: server.jwks_uri }),
+  // Unsigned ID tokens are never accepted, even when advertised. Without metadata, oauth4webapi
+  // requires OIDC Registration's RS256 default.
   ...(server.id_token_signing_alg_values_supported === undefined
     ? {}
     : {
-        id_token_signing_alg_values_supported: [...server.id_token_signing_alg_values_supported],
+        id_token_signing_alg_values_supported: server.id_token_signing_alg_values_supported.filter(
+          (alg) => alg.toLowerCase() !== "none",
+        ),
       }),
   ...(server.registration_endpoint === undefined
     ? {}
@@ -213,6 +234,64 @@ const withoutIdToken = async (response: Response) => {
     ),
     { status: response.status, headers: response.headers },
   );
+};
+
+/** Read a copy of a JSON object response body, or undefined when it is not one. */
+const jsonObject = async (response: Response) => {
+  try {
+    const body: unknown = await response.clone().json();
+    return typeof body === "object" && body !== null && !Array.isArray(body) ? body : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * RFC 6749 §5.2: a JSON object with an `error` code and no access token is an error response,
+ * whatever its HTTP status. Some services send it with HTTP 200; with a 401 WWW-Authenticate
+ * challenge, oauth4webapi reports the challenge before reading the body.
+ */
+const tokenResponse = async (response: Response) => {
+  const body = await jsonObject(response);
+  const error = body === undefined ? undefined : Reflect.get(body, "error");
+  if (
+    body === undefined ||
+    typeof error !== "string" ||
+    error === "" ||
+    Reflect.get(body, "access_token") !== undefined
+  )
+    return response;
+  throw errorResponse(response.status, error);
+};
+
+const isLowercase = (value: string): value is Lowercase<string> => value === value.toLowerCase();
+
+/**
+ * Executor sends every access token as a Bearer token and never creates DPoP proofs (RFC 9449).
+ * A resource that advertised Bearer accepts its tokens as Bearer whatever `token_type` says;
+ * without that advertisement, oauth4webapi accepts only `bearer`.
+ */
+const tokenTypes = async (
+  response: Response,
+  bearerResource: boolean | undefined,
+): Promise<oauth.RecognizedTokenTypes> => {
+  const body = bearerResource === true ? await jsonObject(response) : undefined;
+  const received = body === undefined ? undefined : Reflect.get(body, "token_type");
+  const type = typeof received === "string" ? received.toLowerCase() : undefined;
+  return {
+    dpop: () => {
+      throw new OAuthProtocolFailed({ reason: "unsupported", field: "token_type" });
+    },
+    ...(type === undefined || type === "bearer" || type === "dpop" || !isLowercase(type)
+      ? {}
+      : { [type]: () => undefined }),
+  };
+};
+
+/** The validated ID token's subject, when the token response carried one. */
+export const idTokenSubject = (tokens: oauth.TokenEndpointResponse) => {
+  const subject = oauth.getValidatedIdTokenClaims(tokens)?.sub;
+  return subject === "" ? undefined : subject;
 };
 
 /** Resolve protocol operations against one host-supplied Effect HTTP client. */
@@ -348,14 +427,15 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
   const discoverResource = (endpoint: URL) =>
     Effect.gen(function* () {
       // Inspect only headers: a successful MCP GET may open an endless SSE stream.
-      const advertised = yield* probeOAuthChallenge(endpoint, options.httpClient).pipe(
+      const challenge = yield* probeOAuthChallenge(endpoint, options.httpClient).pipe(
         Effect.flatMap((response) =>
           response.status === 429 || response.status >= 500
             ? Effect.fail(new OAuthProtocolFailed({ reason: "request" }))
-            : Effect.succeed(response.resourceMetadata),
+            : Effect.succeed(response),
         ),
         Effect.mapError(failure),
       );
+      const advertised = challenge.resourceMetadata;
       const metadataUrl = advertised === undefined ? undefined : yield* secureUrl(advertised);
       const document = yield* request(async (settings) => {
         let response =
@@ -384,7 +464,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
         const document: unknown = await discoveryResponse(response).json();
         return document;
       });
-      if (document === undefined) return undefined;
+      if (document === undefined) return { found: undefined, bearer: challenge.bearer };
       const found = yield* decode(OAuthResource, document);
       const resource = yield* secureUrl(found.resource);
       // A resource can cover /mcp from the origin root, but cannot name a sibling
@@ -396,7 +476,10 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
       ) {
         return yield* new OAuthProtocolFailed({ reason: "resource_mismatch" });
       }
-      return found;
+      return {
+        found,
+        bearer: challenge.bearer || (found.bearer_methods_supported?.length ?? 0) > 0,
+      };
     });
 
   return {
@@ -420,7 +503,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
               ...(method.resource == null ? {} : { resource: method.resource }),
             };
           const resource = yield* secureUrl(method.discover);
-          const found = yield* discoverResource(resource);
+          const { found, bearer } = yield* discoverResource(resource);
           const issuer = found === undefined ? resource.href : found.authorization_servers[0];
           if (issuer === undefined)
             return yield* new OAuthProtocolFailed({ reason: "invalid_response" });
@@ -464,6 +547,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
                   ),
                 }),
             ...(resourceIndicator == null ? {} : { resource: resourceIndicator }),
+            ...(bearer ? { bearerResource: true as const } : {}),
           };
         });
         if (method.grant === "client_credentials")
@@ -568,6 +652,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
         verifier: string;
         resource?: string | undefined;
         nonce?: string | undefined;
+        bearerResource?: boolean | undefined;
       },
       callback: URL,
     ) =>
@@ -578,77 +663,99 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
         const received = new URL(callback);
         if (input.server.issuer_derived === true) received.searchParams.delete("iss");
         const parameters = oauth.validateAuthResponse(server, input.client, received, input.state);
-        const sent = await oauth.authorizationCodeGrantRequest(
-          server,
-          input.client,
-          clientAuth(input.client),
-          parameters,
-          input.redirectUri,
-          input.verifier,
-          {
-            ...settings,
-            ...(input.resource === undefined
-              ? {}
-              : { additionalParameters: { resource: input.resource } }),
-          },
+        const sent = await tokenResponse(
+          await oauth.authorizationCodeGrantRequest(
+            server,
+            input.client,
+            clientAuth(input.client),
+            parameters,
+            input.redirectUri,
+            input.verifier,
+            {
+              ...settings,
+              ...(input.resource === undefined
+                ? {}
+                : { additionalParameters: { resource: input.resource } }),
+            },
+          ),
         );
         const response = input.server.issuer_derived === true ? await withoutIdToken(sent) : sent;
         // Executor never uses the ID token, so it is optional even after requesting `openid`.
         // When one is returned, its nonce and claims are still validated.
         const nonce =
           input.nonce !== undefined && (await hasIdToken(response)) ? input.nonce : undefined;
-        return oauth.processAuthorizationCodeResponse(
-          server,
-          input.client,
-          response,
-          nonce === undefined ? {} : { expectedNonce: nonce, requireIdToken: true },
-        );
+        return oauth.processAuthorizationCodeResponse(server, input.client, response, {
+          recognizedTokenTypes: await tokenTypes(response, input.bearerResource),
+          ...(nonce === undefined ? {} : { expectedNonce: nonce, requireIdToken: true }),
+        });
       }).pipe(protocolStage("exchange")),
     clientCredentials: (input: {
       server: OAuthTokenServer;
       client: OAuthConfidentialRegistration;
       scopes: readonly string[];
       resource?: string | undefined;
+      bearerResource?: boolean | undefined;
     }) =>
       request(async (settings) => {
         const server = metadata(input.server);
         const parameters = new URLSearchParams();
         if (input.scopes.length > 0) parameters.set("scope", input.scopes.join(" "));
         if (input.resource !== undefined) parameters.set("resource", input.resource);
-        const response = await oauth.clientCredentialsGrantRequest(
-          server,
-          input.client,
-          clientAuth(input.client),
-          parameters,
-          settings,
+        const response = await tokenResponse(
+          await oauth.clientCredentialsGrantRequest(
+            server,
+            input.client,
+            clientAuth(input.client),
+            parameters,
+            settings,
+          ),
         );
-        return oauth.processClientCredentialsResponse(server, input.client, response);
+        return oauth.processClientCredentialsResponse(server, input.client, response, {
+          recognizedTokenTypes: await tokenTypes(response, input.bearerResource),
+        });
       }).pipe(protocolStage("clientCredentials")),
     refresh: (input: {
       server: OAuthServer;
       client: OAuthRegistration;
       refreshToken: string;
       resource?: string | undefined;
+      bearerResource?: boolean | undefined;
+      idTokenSubject?: string | undefined;
     }) =>
       request(async (settings) => {
         const server = metadata(input.server);
-        const sent = await oauth.refreshTokenGrantRequest(
-          server,
-          input.client,
-          clientAuth(input.client),
-          input.refreshToken,
-          {
-            ...settings,
-            ...(input.resource === undefined
-              ? {}
-              : { additionalParameters: { resource: input.resource } }),
-          },
+        const response = await tokenResponse(
+          await oauth.refreshTokenGrantRequest(
+            server,
+            input.client,
+            clientAuth(input.client),
+            input.refreshToken,
+            {
+              ...settings,
+              ...(input.resource === undefined
+                ? {}
+                : { additionalParameters: { resource: input.resource } }),
+            },
+          ),
         );
-        return oauth.processRefreshTokenResponse(
-          server,
-          input.client,
-          input.server.issuer_derived === true ? await withoutIdToken(sent) : sent,
-        );
+        const usable =
+          input.server.issuer_derived === true ? await withoutIdToken(response) : response;
+        const tokens = await oauth.processRefreshTokenResponse(server, input.client, usable, {
+          recognizedTokenTypes: await tokenTypes(usable, input.bearerResource),
+        });
+        // OIDC Core §12.2: a refreshed ID token must identify the same end user.
+        const subject = oauth.getValidatedIdTokenClaims(tokens)?.sub;
+        if (
+          input.idTokenSubject !== undefined &&
+          subject !== undefined &&
+          subject !== input.idTokenSubject
+        )
+          throw new OAuthProtocolFailed({
+            reason: "invalid_response",
+            code: oauth.JWT_CLAIM_COMPARISON,
+            field: "id_token",
+          });
+        return tokens;
       }).pipe(protocolStage("refresh")),
   };
 };

@@ -73,6 +73,7 @@ export const OAuthProviderErrorCode = Schema.Literals([
   "invalid_redirect_uri",
   "invalid_client_metadata",
   "access_denied",
+  "unsupported_response_type",
   "server_error",
   "temporarily_unavailable",
 ]);
@@ -93,7 +94,7 @@ export const OAuthResponseField = Schema.Literals([
 ]);
 /** Safe protocol evidence for diagnosis. Fixed vocabularies only; never a body, message, or URL. */
 export const OAuthFailureCause = Schema.Struct({
-  stage: Schema.Literals(["discover", "register", "exchange", "clientCredentials"]),
+  stage: Schema.Literals(["discover", "register", "authorize", "exchange", "clientCredentials"]),
   status: Schema.optional(Schema.Int),
   providerError: Schema.optional(OAuthProviderErrorCode),
   field: Schema.optional(OAuthResponseField),
@@ -329,6 +330,8 @@ export const OAuthCompletionFailed = UserFacingError.define({
       "account_unavailable",
       "service_unavailable",
       "incompatible_response",
+      "invalid_scope",
+      "unsupported",
     ]),
     cause: Schema.optional(OAuthFailureCause),
   },
@@ -351,7 +354,7 @@ export const OAuthCompletionFailed = UserFacingError.define({
             recovery: {
               action: "Start the connection again and approve access.",
               instructions:
-                "Check whether the user cancelled consent or the service refused the requested scopes or account. Start a fresh sign-in after resolving the refusal.",
+                "Check whether the user cancelled consent or the service refused access for this account. Start a fresh sign-in after resolving the refusal.",
             },
           },
           sign_in_expired: {
@@ -401,6 +404,27 @@ export const OAuthCompletionFailed = UserFacingError.define({
             retryable: false,
           },
           incompatible_response: incompatibleResponse,
+          invalid_scope: {
+            title: "Requested access not accepted",
+            description: "The service refused the permissions this app requested.",
+            recovery: {
+              action:
+                "Check the app’s requested scopes. Copy the fix prompt into your agent to correct them.",
+              instructions:
+                "Compare the scopes the app’s provider definition requests with the scopes the service documents and advertises for this client. Remove or correct unknown or unavailable scopes, then start a fresh sign-in. Do not request broader access to work around the refusal.",
+            },
+          },
+          unsupported: {
+            title: "Sign-in method unavailable",
+            description: "The service issued a kind of access token that Executor cannot use.",
+            recovery: {
+              action:
+                "Retrying will not help. Copy the fix prompt into your agent to find a supported configuration.",
+              instructions:
+                "Check the recorded response field. Executor sends access tokens as Bearer tokens and cannot create DPoP proofs (RFC 9449). Determine whether the service can issue Bearer tokens for this client, and configure that if it can. Do not strip sender constraints from tokens to work around it.",
+            },
+            agentFixable: false,
+          },
         } satisfies Record<typeof reason, ErrorPresentation>
       )[reason],
       cause,
@@ -462,6 +486,7 @@ export const OAuthResource = Schema.Struct({
   resource: HttpUrl,
   authorization_servers: Schema.Array(HttpUrl),
   scopes_supported: Schema.optional(Schema.Array(Schema.String)),
+  bearer_methods_supported: Schema.optional(Schema.Array(Schema.String)),
 });
 /** This record is only read inside encrypted host state; never return it to app code. */
 const registration = {
@@ -498,12 +523,20 @@ export const OAuthAttempt = Schema.Struct({
   /** User-entered clients become reusable only when this attempt completes successfully. */
   clientKey: Schema.optionalKey(OAuthClientId),
   resource: Schema.optional(HttpUrl),
+  /** The protected resource advertised Bearer tokens; see `grantFields.bearerResource`. */
+  bearerResource: Schema.optional(Schema.Literal(true)),
   response: JsonObject,
 });
 export type OAuthAttempt = typeof OAuthAttempt.Type;
 /** Private refresh context. Access-token projections are stored separately on the account. */
 const grantFields = {
   resource: Schema.optional(HttpUrl),
+  /**
+   * The protected resource advertised Bearer tokens during discovery, through RFC 9728
+   * `bearer_methods_supported` or an RFC 6750 Bearer challenge. Its tokens are then used as
+   * Bearer tokens even when the service labels them with a nonstandard `token_type`.
+   */
+  bearerResource: Schema.optional(Schema.Literal(true)),
   response: JsonObject,
   expiresAt: Schema.optional(Schema.Number),
   fields: JsonObject,
@@ -516,6 +549,8 @@ export const OAuthGrant = Schema.Union([
     server: OAuthServer,
     client: OAuthRegistration,
     refreshToken: Schema.optional(Schema.NonEmptyString),
+    /** The first validated ID token's `sub`. A refreshed ID token must keep it (OIDC Core §12.2). */
+    idTokenSubject: Schema.optional(Schema.NonEmptyString),
   }),
   Schema.Struct({
     ...grantFields,

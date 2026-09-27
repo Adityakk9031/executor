@@ -801,6 +801,17 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  oauthErrorResponses: {
+    fixtures: "actors",
+    file: "oauth-error-responses.spec.ts",
+    title:
+      "OAuth classifies token and callback error responses, accepts Bearer resources' token types, and rejects DPoP, unsigned and mismatched ID tokens",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer with controlled wire responses."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
   importDiagnostics: {
     fixtures: "actors",
     managementProfiles: ["owner"],
