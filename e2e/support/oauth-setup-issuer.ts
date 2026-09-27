@@ -1,5 +1,6 @@
 /** A scoped external OAuth issuer for setup checks; Executor still uses its real HTTP and storage paths. */
 import { createServer } from "node:http";
+import { Socket } from "node:net";
 import { createHash, generateKeyPairSync, type KeyObject, randomUUID, sign } from "node:crypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Deferred, Effect, Layer, Schema } from "effect";
@@ -36,7 +37,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   /** Google signs RS256; a declared server advertises no algorithms, so RS256 is the only default. */
   let idTokenAlgorithm: "ES256" | "RS256" | "none" = "ES256";
   let refreshTokens = false;
-  let expiresIn = 3600;
+  /** The `expires_in` of issued tokens; undefined omits it. */
+  let expiresIn: number | undefined = 3600;
   let tokenExchanges = 0;
   let tokenChecks: Readonly<Record<string, boolean>> = {};
   let refreshes = 0;
@@ -48,8 +50,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   /** Origin of the browser page that relays a callback to the advertised redirect URI. */
   let browserReturn: string | undefined;
   // Opt-in error and token variants. Defaults keep the standard behaviour above.
+  // "reset" drops the connection without a response, as a failing proxy or network would.
   let tokenError:
     | { readonly status: number; readonly body: object; readonly challenge?: string }
+    | "reset"
     | undefined;
   let tokenType = "Bearer";
   let authorizeError: string | undefined;
@@ -196,6 +200,13 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         const refreshing = input.get("grant_type") === "refresh_token";
         if (refreshing) refreshes++;
         else tokenExchanges++;
+        if (tokenError === "reset") {
+          const source = request.source;
+          if (!("socket" in source) || !(source.socket instanceof Socket))
+            return yield* Effect.die("OAuth fixture needs the Node request socket");
+          source.socket.destroy();
+          return HttpServerResponse.empty({ status: 500 });
+        }
         if (tokenError !== undefined)
           return yield* HttpServerResponse.json(tokenError.body, {
             status: tokenError.status,
@@ -280,10 +291,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         const refreshToken =
           refreshTokens && !refreshing ? `synthetic-refresh-${randomUUID()}` : undefined;
         if (refreshToken !== undefined) refreshGrants.set(refreshToken, clientId);
+        const lifetime = refreshing ? (refreshedExpiresIn ?? expiresIn) : expiresIn;
         return yield* HttpServerResponse.json({
           access_token: accessToken,
           token_type: tokenType,
-          expires_in: refreshing ? (refreshedExpiresIn ?? expiresIn) : expiresIn,
+          ...(lifetime === undefined ? {} : { expires_in: lifetime }),
           ...(refreshToken === undefined ? {} : { refresh_token: refreshToken }),
           ...(includeIdToken ? { id_token: `${jwt}.${signature}` } : {}),
         });
@@ -517,7 +529,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly idTokenIssuer?: string | null;
       readonly idTokenAlgorithm?: typeof idTokenAlgorithm;
       readonly refreshTokens?: boolean;
-      readonly expiresIn?: number;
+      /** The `expires_in` of issued tokens; null omits it. */
+      readonly expiresIn?: number | null;
       readonly invalidNonce?: boolean;
       readonly postChallenge?: boolean;
       readonly challenge?: boolean;
@@ -529,7 +542,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly authMethods?: readonly string[];
       readonly callbackIssuer?: string | null;
       readonly browserReturn?: string | null;
-      /** Answer every token request with this body, status and optional challenge; null restores tokens. */
+      /**
+       * Answer every token request with this body, status and optional challenge, or drop the
+       * connection with "reset"; null restores tokens.
+       */
       readonly tokenError?: typeof tokenError | null;
       readonly tokenType?: string;
       /** Return this RFC 6749 error code to the callback instead of a code; null restores codes. */
@@ -556,7 +572,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           idTokenIssuer = input.idTokenIssuer === null ? undefined : input.idTokenIssuer;
         if (input.idTokenAlgorithm !== undefined) idTokenAlgorithm = input.idTokenAlgorithm;
         if (input.refreshTokens !== undefined) refreshTokens = input.refreshTokens;
-        if (input.expiresIn !== undefined) expiresIn = input.expiresIn;
+        if (input.expiresIn !== undefined)
+          expiresIn = input.expiresIn === null ? undefined : input.expiresIn;
         if (input.invalidNonce !== undefined) invalidNonce = input.invalidNonce;
         if (input.registrationStatus !== undefined) registrationStatus = input.registrationStatus;
         if (input.malformedRegistration !== undefined)

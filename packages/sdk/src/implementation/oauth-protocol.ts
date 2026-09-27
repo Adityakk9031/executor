@@ -56,6 +56,7 @@ export class OAuthProtocolFailed extends Schema.TaggedError<OAuthProtocolFailed>
       "destination_blocked",
       "resource_mismatch",
       "unsupported",
+      "subject_changed",
     ]),
   },
 ) {}
@@ -120,6 +121,13 @@ const failure = (error: unknown): OAuthProtocolFailed => {
             : "request",
   });
 };
+
+/**
+ * The endpoint answered with an OAuth error: an error body (RFC 6749 §5.2) or a client
+ * authentication challenge. Other failures carry no statement about the grant.
+ */
+export const isOAuthErrorResponse = (error: OAuthProtocolFailed) =>
+  error.code === oauth.RESPONSE_BODY_ERROR || error.code === oauth.WWW_AUTHENTICATE_CHALLENGE;
 
 const observeFailure = (error: OAuthProtocolFailed) =>
   Effect.annotateCurrentSpan({
@@ -786,7 +794,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
           subject !== input.idTokenSubject
         )
           throw new OAuthProtocolFailed({
-            reason: "invalid_response",
+            reason: "subject_changed",
             code: oauth.JWT_CLAIM_COMPARISON,
             field: "id_token",
           });

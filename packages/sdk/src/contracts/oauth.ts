@@ -94,7 +94,14 @@ export const OAuthResponseField = Schema.Literals([
 ]);
 /** Safe protocol evidence for diagnosis. Fixed vocabularies only; never a body, message, or URL. */
 export const OAuthFailureCause = Schema.Struct({
-  stage: Schema.Literals(["discover", "register", "authorize", "exchange", "clientCredentials"]),
+  stage: Schema.Literals([
+    "discover",
+    "register",
+    "authorize",
+    "exchange",
+    "clientCredentials",
+    "refresh",
+  ]),
   status: Schema.optional(Schema.Int),
   providerError: Schema.optional(OAuthProviderErrorCode),
   field: Schema.optional(OAuthResponseField),
@@ -584,21 +591,70 @@ export const oauthCompletionRecovery = {
 /** Parsed OAuthCompletionFailed failure. */
 export type OAuthCompletionFailed = typeof OAuthCompletionFailed.Type;
 
-/** The saved grant cannot supply a fresh token. Its account identity remains available for reconnection. */
+/**
+ * The saved grant cannot supply a fresh token. Its account identity remains available for
+ * reconnection. `cause` is present when the token endpoint refused a renewal.
+ */
 export const OAuthReconnectRequired = UserFacingError.define({
   tag: "OAuthReconnectRequired",
   status: 409,
-  fields: { account: AccountId },
-  title: "An account needs to reconnect",
-  description: "The saved sign-in can no longer be used for this account.",
-  recovery: {
-    action: "Open Accounts and reconnect the affected account, then return to Tools.",
-    instructions:
-      "Identify the selected account whose OAuth grant needs renewal. Guide the user through the supported reconnect flow for that same account. Preserve its identity and profile bindings, then verify tool discovery. Do not replace the account or switch authentication methods as a workaround.",
-  },
+  fields: { account: AccountId, cause: Schema.optional(OAuthFailureCause) },
+  presentation: ({ cause }) =>
+    withCause(
+      {
+        title: "An account needs to reconnect",
+        description: "The saved sign-in can no longer be used for this account.",
+        recovery: {
+          action: "Open Accounts and reconnect the affected account, then return to Tools.",
+          instructions:
+            "Identify the selected account whose OAuth grant needs renewal. Guide the user through the supported reconnect flow for that same account. Preserve its identity and profile bindings, then verify tool discovery. Do not replace the account or switch authentication methods as a workaround.",
+        },
+      },
+      cause,
+    ),
 });
 /** Parsed expired or revoked account sign-in. */
 export type OAuthReconnectRequired = typeof OAuthReconnectRequired.Type;
+
+/**
+ * Renewing a saved grant failed without the service refusing it. The grant, including its
+ * refresh token, is kept unchanged, so the account does not need to reconnect.
+ */
+export const OAuthRenewalFailed = UserFacingError.define({
+  tag: "OAuthRenewalFailed",
+  status: 502,
+  fields: {
+    account: AccountId,
+    /** An outage or temporary refusal, or a successful response Executor could not use. */
+    reason: Schema.Literals(["service_unavailable", "incompatible_response"]),
+    cause: Schema.optional(OAuthFailureCause),
+  },
+  presentation: ({ reason, cause }) =>
+    withCause(
+      (
+        {
+          service_unavailable: {
+            ...serviceUnavailable,
+            description:
+              "Executor could not renew this account’s access because the service’s sign-in is down, busy, or unreachable. The saved sign-in is kept, so the account does not need to reconnect.",
+            recovery: {
+              action: "Try again in a moment. If this continues, check the service’s status.",
+              instructions:
+                "The account’s saved OAuth grant is intact; do not reconnect or replace the account for this failure. Check the service’s status and the reachability of the token endpoint recorded in the app’s provider definition, and distinguish a temporary outage from an incorrect endpoint. Retry a temporary failure; fix incorrect configuration only when the evidence supports it.",
+            },
+          },
+          incompatible_response: {
+            ...incompatibleResponse,
+            description:
+              "The service answered Executor’s request to renew this account’s access, but its response did not match what Executor expects. The saved sign-in is kept; this is a compatibility problem, not a problem with your account.",
+          },
+        } satisfies Record<typeof reason, ErrorPresentation>
+      )[reason],
+      cause,
+    ),
+});
+/** Parsed failed renewal that kept the saved grant. */
+export type OAuthRenewalFailed = typeof OAuthRenewalFailed.Type;
 
 /** Registration and attempt IDs also bind encrypted data to the record which owns it. */
 export const OAuthClientId = Schema.NonEmptyString.pipe(Schema.brand("OAuthClientId"));

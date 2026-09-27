@@ -59,6 +59,7 @@ import {
   OAuthCompletionFailed,
   OAuthSetupFailed,
   OAuthReconnectRequired,
+  OAuthRenewalFailed,
   HttpUrl,
   Provider,
   AccountId,
@@ -273,6 +274,7 @@ const toolErrors = [
   AccountSelectionInvalid,
   ToolDiscoveryTimedOut,
   OAuthReconnectRequired,
+  OAuthRenewalFailed,
 ] as const;
 
 /** Product operations share typed session protection; programmatic SDK routes remain separate. */
@@ -397,6 +399,7 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
           AccountSelectionInvalid,
           ToolDiscoveryTimedOut,
           OAuthReconnectRequired,
+          OAuthRenewalFailed,
         ],
       }),
     )

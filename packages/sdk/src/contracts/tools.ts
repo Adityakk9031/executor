@@ -29,7 +29,7 @@ import {
 import { AccountNotFound } from "./account.ts";
 import { AccountRequired, AccountSelectionInvalid, AppNotFound, AppNotDeployed } from "./apps.ts";
 import { DeploymentNotFound } from "./deployment.ts";
-import { OAuthReconnectRequired } from "./oauth.ts";
+import { OAuthReconnectRequired, OAuthRenewalFailed } from "./oauth.ts";
 
 /** Retention bound for a pending SDK approval and its consumed marker. */
 export const ToolApprovalLimits = Schema.Struct({
@@ -533,6 +533,7 @@ export const ToolsGroup = HttpApiGroup.make("tools")
         AccountRequired,
         AccountSelectionInvalid,
         OAuthReconnectRequired,
+        OAuthRenewalFailed,
       ],
     }).annotate(
       OpenApi.Description,
@@ -556,6 +557,7 @@ export const ToolsGroup = HttpApiGroup.make("tools")
         AccountRequired,
         AccountSelectionInvalid,
         OAuthReconnectRequired,
+        OAuthRenewalFailed,
       ],
     }).annotate(
       OpenApi.Description,
@@ -579,6 +581,7 @@ export const ToolsGroup = HttpApiGroup.make("tools")
         AccountRequired,
         AccountSelectionInvalid,
         OAuthReconnectRequired,
+        OAuthRenewalFailed,
         ToolNotFound,
       ],
     }).annotate(
@@ -606,6 +609,7 @@ export const ToolsGroup = HttpApiGroup.make("tools")
         InputInvalid,
         ToolCallFailed,
         OAuthReconnectRequired,
+        OAuthRenewalFailed,
         ToolBlocked,
         ToolApprovalRequired,
         ToolPolicyFailed,

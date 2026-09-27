@@ -164,9 +164,19 @@ export function resolve(
     if (state.profile !== undefined && lifecycle?.profileResolving)
       yield* lifecycle.profileResolving(state.profile);
     const selections = new Map<string, ResolvedAccounts[string]>();
+    // An account selected for several slots is resolved once per invocation. A token renewed
+    // for one slot is the token every slot uses, even when it already falls inside the
+    // refresh-ahead window, so one invocation never renews the same grant twice.
+    const credentials = new Map<string, Effect.Success<ReturnType<typeof resolveAccount>>>();
     for (const { slot, required, accounts } of state.selections) {
       const resolved = yield* Effect.forEach(accounts, (account) =>
-        resolveAccount(account, required.definition).pipe(
+        Effect.gen(function* () {
+          const known = credentials.get(account.id);
+          if (known !== undefined) return known;
+          const fields = yield* resolveAccount(account, required.definition);
+          credentials.set(account.id, fields);
+          return fields;
+        }).pipe(
           Effect.map((fields) => ({
             id: account.id,
             provider: required.definition,

@@ -812,6 +812,17 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  oauthRefreshResilience: {
+    fixtures: "actors",
+    file: "oauth-refresh-resilience.spec.ts",
+    title:
+      "OAuth renewal keeps the grant through outages and unreadable responses, reconnects only when refused, and traces the cause",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer with controlled token endpoint failures."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
   importDiagnostics: {
     fixtures: "actors",
     managementProfiles: ["owner"],

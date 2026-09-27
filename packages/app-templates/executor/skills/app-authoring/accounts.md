@@ -96,6 +96,15 @@ provider stops honoring the saved token. Revocation is best effort and never
 blocks the deletion. Discovered methods use the server's advertised
 `revocation_endpoint` and do not accept `revocationUrl`.
 
+Executor renews tokens before they expire. An `expires_in` of zero is treated
+like an omitted one: the token is used until the service rejects it. A tool call
+fails with `OAuthReconnectRequired` only when the token endpoint refuses the
+renewal, such as with `invalid_grant`, or a renewed ID token names a different
+user; reconnect that same account. During a
+service outage, or when its response cannot be used, the call fails with the
+retryable `OAuthRenewalFailed` and the saved sign-in is kept, so retry later
+instead of reconnecting or changing the provider.
+
 Deploy the source, create a profile, then request a connection for its account requirement.
 The management examples below use the **local** API. For hosted calls, use
 `profiles_create` and `accounts_connect` with `path.organization`, as shown in
