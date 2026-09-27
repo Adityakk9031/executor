@@ -12,6 +12,7 @@ import { ProfileId, ProfileRevision } from "@executor-js/sdk/core";
 import { ProfileErrors } from "@executor-js/sdk/core";
 import { AppWorkflowsActive, AccountWorkflowsActive } from "@executor-js/sdk/core";
 import { DashboardSchedules } from "./schedules.ts";
+import { DashboardMcpConnections } from "./mcp-connections.ts";
 import { AccountWebhooksActive } from "@executor-js/sdk/core";
 import { AppWebhooksActive } from "@executor-js/sdk/core";
 /** Browser-safe read contracts for inspecting the local Executor instance. */
@@ -611,4 +612,5 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
   DashboardProfiles.middleware(DashboardAccess),
   DashboardWorkflows.middleware(DashboardAccess),
   DashboardWebhooks.middleware(DashboardAccess),
+  DashboardMcpConnections.middleware(DashboardAccess),
 );

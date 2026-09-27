@@ -250,6 +250,7 @@ export default Api.make(
       HttpRouter.provideRequest(executor),
       Layer.provide(auth.identity),
       Layer.provide(auth.apiIdentity),
+      Layer.provide(auth.mcpIdentity),
     );
     const mcpRoutes = Layer.mergeAll(
       HttpRouter.add("*", "/mcp", mcp.http),

@@ -34,6 +34,15 @@ const errorMessage = Match.type<HostedError>().pipe(
           "Personal accounts stay private. Connect a shared account to give your team access.",
       })[reason],
     ScheduleNotFound: () => "This schedule or run is no longer available.",
+    ConnectionNotFound: () => "This connection was revoked or no longer exists.",
+    ConnectionIdTaken: () => "This connection could not be created. Close the form and try again.",
+    ConnectionAccessInvalid: ({ reason }) =>
+      ({
+        app: "An included app is no longer available to you. Remove it and try again.",
+        profile: "A selected profile is no longer available. Choose how the app runs again.",
+        account: "A selected account is no longer available for this app. Choose another one.",
+        target: "Choose how each included app runs.",
+      })[reason],
     ScheduleConflict: () =>
       "The schedule is busy or changed. Check its current status and try again.",
     ScheduleInvalid: () => "Update the interval or calendar timing in the app source.",

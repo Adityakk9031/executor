@@ -24,6 +24,7 @@ import {
   lookupOrganizationSlug,
   resolveOrganizationReference,
   mcpAuthenticationError,
+  mcpConnectionStore,
   ApiAuthentication,
   apiAuthenticationError,
 } from "@executor-js/hosted-server";
@@ -230,6 +231,19 @@ export const cloudAuth = (send: SendAuthEmail) =>
           metadata: auth.api.getOAuthServerConfig().pipe(
             Effect.provide(RuntimeContext.phantom),
             Effect.mapError(() => new AuthenticationUnavailable()),
+          ),
+          connections: mcpConnectionStore((run) =>
+            auth.auth.pipe(
+              Effect.provide(RuntimeContext.phantom),
+              Effect.flatMap((native) =>
+                Effect.flatMap(bindAuthQueries, (bind) =>
+                  Effect.tryPromise({
+                    try: () => bind(() => run(native.api)),
+                    catch: (cause) => cause,
+                  }),
+                ),
+              ),
+            ),
           ),
         });
       }),

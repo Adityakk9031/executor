@@ -46,7 +46,7 @@ export const mcpClientAtom = Atom.family((clientId: string) =>
 
 /** The chosen organization belongs to this consent POST, not a shared browser preference. */
 export const mcpConsentAtom = BrowserAtoms.fn(
-  (input: { accept: boolean; organization: string; query: string }) =>
+  (input: { accept: boolean; organization: string | undefined; query: string }) =>
     request("consent", (options) => mcpAuthorization(options).consent(input)),
 );
 

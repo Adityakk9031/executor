@@ -88,6 +88,7 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
       HttpRouter.provideRequest(executorServices),
       Layer.provide(auth.identity),
       Layer.provide(auth.apiIdentity),
+      Layer.provide(auth.mcpIdentity),
     );
     const mcpRoutes = Layer.mergeAll(
       HttpRouter.add("*", "/mcp", mcp.http),

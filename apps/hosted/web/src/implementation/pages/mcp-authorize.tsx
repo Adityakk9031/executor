@@ -38,11 +38,17 @@ export function McpAuthorizePage() {
   const [error, setError] = useState<string | null>(null);
   const available = AsyncResult.isSuccess(organizations) ? organizations.value : [];
   const organization = selected || available[0]?.id || "";
+  // A scoped connection belongs to one organization; the server binds consent to it.
+  const scoped = target?.kind === "mcp" && target.connection !== undefined;
   const decide = async (accept: boolean) => {
     const action = accept ? "approve_connection" : "decline_connection";
     reportBrowserUsage({ area: "mcp", action, outcome: "started" });
     setError(null);
-    const result = await consent({ accept, organization, query });
+    const result = await consent({
+      accept,
+      organization: scoped ? undefined : organization,
+      query,
+    });
     reportBrowserUsage({
       area: "mcp",
       action,
@@ -79,7 +85,7 @@ export function McpAuthorizePage() {
         </p>
       }
     >
-      {available.length > 0 && (
+      {available.length > 0 && !scoped && (
         <div className="mcp-consent-organization grid gap-2 text-[13px] [font-weight:550] [&_[data-slot='select-trigger']]:w-full">
           <label htmlFor="mcp-organization">Organization</label>
           <Select value={organization} onValueChange={setSelected} disabled={state.waiting}>
@@ -114,7 +120,7 @@ export function McpAuthorizePage() {
         </Button>
         {available.length > 0 && (
           <Button
-            disabled={organization === "" || state.waiting}
+            disabled={(!scoped && organization === "") || state.waiting}
             loading={state.waiting}
             onClick={() => decide(true)}
           >

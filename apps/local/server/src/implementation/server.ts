@@ -5,6 +5,7 @@ import { startScheduleWorker, defaultScheduleWorkerOptions } from "@executor-js/
 import { localScheduleHandlers } from "./schedules.ts";
 import { localMcpApproval } from "./mcp-approvals.ts";
 import { makeLocalMcpOAuth } from "./mcp-oauth.ts";
+import { localMcpConnectionHandlers } from "./mcp-connections.ts";
 import { hostedExecutorOrigin, remoteRegistry } from "@executor-js/app-registry";
 import { localAppManagement } from "./app-management.ts";
 
@@ -299,6 +300,7 @@ export const localApi = (
           Layer.provide(dashboardApi.handlers),
           Layer.provide(localScheduleHandlers(executor, config, auth)),
           Layer.provide(localAppBrowserHandlers(executor)),
+          Layer.provide(localMcpConnectionHandlers(executor, oauth)),
           Layer.provide(dashboardApi.access),
         ),
         HttpApiBuilder.layer(LocalAuthApi).pipe(

@@ -87,10 +87,13 @@ export const hostedMcpBackend = Effect.gen(function* () {
     readSkill: (input) => observe("readSkill", readAppSkill(input)),
     authorizeElicitation: (input) =>
       Effect.gen(function* () {
-        yield* authorizeTool(input.app, input.tool);
         const owner = yield* currentOwner;
         const executor = yield* sdk;
         yield* selectedApp(executor, owner, input.app, input.profile);
+        // A tool whose permission cannot be confirmed cannot receive input.
+        yield* authorizeTool(input).pipe(
+          Effect.mapError(() => new ElicitationFailed({ reason: "forbidden" })),
+        );
         if (input.profile !== undefined && input.expectedProfileRevision !== undefined) {
           const profile = yield* ownProfile(executor, owner, input.app, input.profile);
           if (profile.revision !== input.expectedProfileRevision)
@@ -127,15 +130,18 @@ export const hostedMcpBackend = Effect.gen(function* () {
     listTools: (input) => observe("listTools", listTools(input)),
     callTool: (input, options?: ToolInvocationOptions) =>
       Effect.gen(function* () {
-        yield* authorizeTool(input.app, input.tool);
         const owner = yield* currentOwner;
         const executor = yield* sdk;
         const deployment = yield* selectedActiveDeployment(executor, owner, input);
+        yield* authorizeTool({ ...input, deployment });
         return yield* executor.tools.call({ ...input, deployment }, options);
       }).pipe((work) => observe("callTool", work)),
     resumeInvocation: (request, response, options?: ToolInvocationOptions) =>
       Effect.gen(function* () {
-        yield* authorizeTool(request.invocation.app, request.invocation.tool);
+        yield* authorizeTool({
+          ...request.invocation,
+          expectedProfileRevision: request.invocation.profileRevision,
+        });
         const owner = yield* currentOwner;
         yield* requireAppAccess(request.invocation.app, "use");
         const executor = yield* sdk;

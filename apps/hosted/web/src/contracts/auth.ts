@@ -199,9 +199,10 @@ export const organizationOperations = (options: { headers: Readonly<Record<strin
 export const mcpAuthorization = (options: { headers: Readonly<Record<string, string>> }) => ({
   client: (clientId: string) =>
     authClient.oauth2.publicClient({ query: { client_id: clientId } }, options),
+  /** A scoped connection already names its organization, so its consent omits the choice. */
   consent: (input: {
     readonly accept: boolean;
-    readonly organization: string;
+    readonly organization: string | undefined;
     readonly query: string;
   }) =>
     authClient.oauth2.consent(
@@ -209,7 +210,9 @@ export const mcpAuthorization = (options: { headers: Readonly<Record<string, str
       {
         headers: {
           ...options.headers,
-          "x-executor-organization": input.organization,
+          ...(input.organization === undefined
+            ? {}
+            : { "x-executor-organization": input.organization }),
         },
       },
     ),

@@ -5,6 +5,9 @@ import { protectedQuery } from "./protected-query.ts";
 /** Organization-specific app queries and mutations use the shared hosted API. */
 import {
   AppId,
+  AppEvaluationFailed,
+  type Tool,
+  type Cursor,
   ProfileId,
   DeploymentId,
   AccountConnectionId,
@@ -501,3 +504,44 @@ const toolDetails = Atom.family((key: ToolDetailKey) =>
 /** One tool's schemas for the same catalog identity as the list. */
 export const toolDetailAtom = (key: ConstructorParameters<typeof ToolDetailKey>[0]) =>
   toolDetails(new ToolDetailKey(key));
+
+const connectionToolLists = Atom.family((key: ToolKey) =>
+  HostedClient.runtime
+    .atom(
+      Effect.gen(function* () {
+        const client = yield* HostedClient;
+        const tools: Tool[] = [];
+        const cursors = new Set<Cursor>();
+        let cursor: Cursor | undefined;
+        let deployment = key.deployment;
+        let revision = key.expectedProfileRevision;
+        do {
+          const page = yield* client.tools.list({
+            params: { organization: key.organization, app: key.app },
+            query: { profile: key.profile, expectedProfileRevision: revision, deployment, cursor },
+          });
+          if (
+            (deployment !== undefined && deployment !== page.deployment) ||
+            (revision !== undefined && revision !== page.profileRevision) ||
+            (page.next !== undefined && cursors.has(page.next))
+          ) {
+            return yield* new AppEvaluationFailed({
+              app: key.app,
+              deployment: page.deployment,
+              reason: "The tool catalog changed while loading. Try again.",
+            });
+          }
+          deployment = page.deployment;
+          revision = page.profileRevision;
+          tools.push(...page.items);
+          cursor = page.next;
+          if (cursor !== undefined) cursors.add(cursor);
+        } while (cursor !== undefined);
+        return tools;
+      }),
+    )
+    .pipe(currentQuery),
+);
+/** Load the complete selected catalog on demand so connection search includes every tool. */
+export const connectionToolListAtom = (key: ConstructorParameters<typeof ToolKey>[0]) =>
+  connectionToolLists(new ToolKey(key));
