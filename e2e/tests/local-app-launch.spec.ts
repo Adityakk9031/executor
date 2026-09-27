@@ -104,6 +104,10 @@ layer(TestLive, { excludeTestServices: true })("Local app launch", (it) => {
           page.locator("#identity").filter({ hasText: personal.account }).waitFor(),
         );
         const appOrigin = new URL(ui).origin;
+        // Chromium maps *.localhost to loopback itself; Node relies on the OS resolver,
+        // which does not on every platform. Local listens on 127.0.0.1.
+        const appLoopback = new URL(ui);
+        appLoopback.hostname = "127.0.0.1";
         expect(
           yield* browser.use("Reserved host roots are not app pages", (page) =>
             Promise.all(
@@ -120,9 +124,9 @@ layer(TestLive, { excludeTestServices: true })("Local app launch", (it) => {
               ).map(([method, path]) =>
                 page
                   .context()
-                  .request.fetch(`${appOrigin}${path}`, {
+                  .request.fetch(`${appLoopback.origin}${path}`, {
                     method,
-                    headers: { origin: appOrigin },
+                    headers: { host: new URL(ui).host, origin: appOrigin },
                     maxRedirects: 0,
                   })
                   .then((response) => [method, path, response.status()] as const),
