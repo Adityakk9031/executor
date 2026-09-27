@@ -1173,6 +1173,16 @@ export const scenarios = {
       local: na("Hosted account dialogs and saved-client management."),
     },
   },
+  oauthAuthorizationParams: {
+    fixtures: "actors",
+    file: "oauth-authorization-params.spec.ts",
+    title: "OAuth authorization parameters reach sign-in without replacing protocol parameters",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises shared OAuth through the hosted API."),
+    },
+  },
   oauthClientSetup: {
     fixtures: "actors",
     file: "oauth-client-setup.spec.ts",

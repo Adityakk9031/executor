@@ -25,8 +25,37 @@ export const OAuthSecretClientAuth = Schema.Literals([
   "client_secret_basic_raw",
 ]);
 
+/** Parameters the host sets on every authorization request; a declaration cannot replace them. */
+const reservedAuthorizationParams = new Set([
+  "response_type",
+  "client_id",
+  "redirect_uri",
+  "state",
+  "scope",
+  "code_challenge",
+  "code_challenge_method",
+  "nonce",
+  "resource",
+  "request",
+  "request_uri",
+]);
+/**
+ * Extra authorization request parameters, such as `access_type: "offline"`. RFC 6749 §3.1
+ * lets services define their own; the protocol and security parameters stay host-owned.
+ */
+export const OAuthAuthorizationParams = Schema.Record(Schema.String, Schema.String).check(
+  Schema.makeFilter(
+    (params) => Object.keys(params).every((key) => !reservedAuthorizationParams.has(key)),
+    {
+      message:
+        "Authorization parameters cannot replace protocol parameters such as state or scope.",
+    },
+  ),
+);
+
 const oauthOptions = {
   grant: Schema.optionalKey(Schema.Literal("authorization_code")),
+  authorizationParams: Schema.optionalKey(OAuthAuthorizationParams),
   tokenEndpointAuthMethod: Schema.optionalKey(OAuthClientAuth),
   /** Omitted uses discovery; null explicitly suppresses the resource parameter. */
   resource: Schema.optionalKey(Schema.NullOr(HttpUrl)),

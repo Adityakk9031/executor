@@ -472,6 +472,9 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
           ...resolved,
           grant: "authorization_code" as const,
           server: yield* decode(OAuthServer, resolved.server),
+          ...(method.authorizationParams === undefined
+            ? {}
+            : { authorizationParams: method.authorizationParams }),
         };
       }).pipe(protocolStage("discover")),
     register: (
@@ -524,6 +527,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
       redirectUri: string;
       scopes: readonly string[];
       resource?: string;
+      authorizationParams?: Readonly<Record<string, string>>;
     }) =>
       Effect.gen(function* () {
         const state = yield* Effect.sync(oauth.generateRandomState);
@@ -533,6 +537,9 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
           : undefined;
         const challenge = yield* request(() => oauth.calculatePKCECodeChallenge(verifier));
         const url = new URL(input.server.authorization_endpoint);
+        // Declared extras go first so the protocol parameters below always win.
+        for (const [key, value] of Object.entries(input.authorizationParams ?? {}))
+          url.searchParams.set(key, value);
         for (const [key, value] of Object.entries({
           response_type: "code",
           client_id: input.client.client_id,

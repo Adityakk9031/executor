@@ -59,6 +59,8 @@ const searchConsole = defineProvider({
     oauth: oauth2({
       discover: "https://accounts.google.com",
       scopes: ["https://www.googleapis.com/auth/webmasters"],
+      // Google issues refresh tokens only when asked for offline access.
+      authorizationParams: { access_type: "offline", prompt: "consent" },
     }),
   },
 });
@@ -70,13 +72,23 @@ sign-in page, not the token URL: Google signs in at `accounts.google.com` and
 issues tokens from `oauth2.googleapis.com`. List the scopes the app needs;
 discovery only fills them in when the service advertises scopes for the resource.
 
+Discovery requires the metadata's `issuer` to equal the URL it was fetched from.
+Multi-tenant endpoints that publish a template instead, such as Microsoft's
+`common` endpoint (`https://login.microsoftonline.com/{tenantid}/v2.0`), cannot
+pass that check: use a tenant-specific issuer URL, or declare the endpoints
+without `issuer`.
+
+`authorizationParams` adds service-defined parameters to the sign-in request,
+from the service's docs. Use it for settings such as offline access. It cannot
+replace protocol parameters such as `state`, `scope` or `redirect_uri`.
+
 Declare `authorizationUrl`, `tokenUrl` and `scopes` only when the service
 publishes no metadata. Then set `tokenEndpointAuthMethod` to what its docs say
 the token endpoint accepts (`client_secret_basic`, `client_secret_post`, or `none`
 for public PKCE clients), and `issuer` when the docs name one, so Executor can
-check the service's `iss` responses. Without `issuer` those checks are skipped. Do not copy endpoints from an OpenAPI `oauth2` scheme
-without checking the service's docs; those schemes carry no issuer or client
-authentication.
+check the service's `iss` responses. Without `issuer` those checks are skipped.
+Do not copy endpoints from an OpenAPI `oauth2` scheme without checking the
+service's docs; those schemes carry no issuer or client authentication.
 
 Deploy the source, create a profile, then request a connection for its account requirement.
 The management examples below use the **local** API. For hosted calls, use
