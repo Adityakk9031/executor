@@ -511,7 +511,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "resource-access.spec.ts",
     appOrigin: true,
-    title: "Groups protect app drafts and independent copies",
+    title: "Groups protect undeployed apps and independent copies",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
