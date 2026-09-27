@@ -1,4 +1,5 @@
 import type { ResourceLifecycle } from "../contracts/executor.ts";
+import type { BackgroundWork } from "../contracts/declarations.ts";
 /** Trusted OAuth lifecycle. Provider definitions never contain client secrets or saved grants. */
 import { parseDestination, parseEndpoint, httpsOnlyUrlPolicy } from "@executor-js/utils/url-policy";
 import {
@@ -122,11 +123,13 @@ const registrationFailed = (error: OAuthProtocolFailed, callbackUrl: typeof Http
       Match.when("blocked", () => "discovery_blocked" as const),
       Match.when("unavailable", () => "service_unavailable" as const),
       Match.when("rejected", () =>
-        error.providerError === "invalid_redirect_uri" ||
-        error.status === 401 ||
-        error.status === 403
+        error.providerError === "invalid_redirect_uri"
           ? ("client_not_approved" as const)
-          : ("registration_rejected" as const),
+          : // RFC 7591 section 3: the endpoint requires an initial access token, which Executor
+            // never holds. The service only accepts clients registered by hand.
+            error.status === 401 || error.status === 403
+            ? ("client_registration_required" as const)
+            : ("registration_rejected" as const),
       ),
       // Checks after a successful response, such as a changed auth method, carry no status.
       Match.whenOr("incompatible", "unanswered", () => "incompatible_response" as const),
@@ -203,6 +206,7 @@ export const makeOAuth = (
   crypto: Crypto.Crypto,
   options?: OAuthOptions,
   lifecycle?: ResourceLifecycle,
+  background?: BackgroundWork,
 ) => {
   const hash = (value: string) =>
     crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(
@@ -273,6 +277,8 @@ export const makeOAuth = (
             }),
         ),
       );
+      // The optional revocation endpoint is not required to connect; the transport still
+      // enforces this policy when revocation calls it.
       for (const address of [
         discovered.server.issuer,
         discovered.server.authorization_endpoint,
@@ -905,5 +911,57 @@ export const makeOAuth = (
       if (lifecycle) yield* lifecycle.accountResolving(account);
       return fields;
     });
-  return { connections: { oauthSetup, startOAuth, completeOAuth }, resolve, usable };
+  /**
+   * Best-effort RFC 7009 revocation of a grant whose account was already deleted. The refresh
+   * token is revoked when present, since that also ends its access tokens at most services;
+   * otherwise the access token. Nothing here can fail or undo the deletion. The outcome and
+   * safe protocol evidence are recorded on the span; token values never are.
+   */
+  const revokeGrant = (removed: {
+    readonly account: AccountId;
+    readonly provider: string;
+    readonly encrypted: Uint8Array;
+  }) =>
+    Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan("oauth.provider.id", removed.provider);
+      if (protocol === undefined) return "unsupported" as const;
+      const grant = yield* decrypt(removed.account, removed.encrypted, OAuthGrant);
+      if (grant.server.revocation_endpoint === undefined) return "unsupported" as const;
+      const accessToken = grant.fields["access_token"];
+      const token =
+        grant.grant !== "client_credentials" && grant.refreshToken !== undefined
+          ? { token: grant.refreshToken, tokenTypeHint: "refresh_token" as const }
+          : typeof accessToken === "string" && accessToken !== ""
+            ? { token: accessToken, tokenTypeHint: "access_token" as const }
+            : undefined;
+      if (token === undefined) return "no_token" as const;
+      yield* Effect.annotateCurrentSpan("oauth.revocation.token_type_hint", token.tokenTypeHint);
+      yield* protocol.revoke({ server: grant.server, client: grant.client, ...token });
+      return "revoked" as const;
+    }).pipe(
+      Effect.catch(() => Effect.succeed("failed" as const)),
+      Effect.catchDefect(() => Effect.succeed("failed" as const)),
+      Effect.tap((outcome) => Effect.annotateCurrentSpan("oauth.revocation.outcome", outcome)),
+      Effect.asVoid,
+      Effect.withSpan("oauth.revokeGrant"),
+    );
+
+  /**
+   * Revoke after the deletion commits, beside the response when the host accepts background
+   * work (the same hand-off stale declarations use); otherwise inline, bounded by the protocol's
+   * request timeout.
+   */
+  const revokeRemoved = (removed: Parameters<typeof revokeGrant>[0]) =>
+    background === undefined
+      ? revokeGrant(removed)
+      : background(revokeGrant(removed)).pipe(
+          Effect.flatMap((accepted) => (accepted ? Effect.void : revokeGrant(removed))),
+        );
+
+  return {
+    connections: { oauthSetup, startOAuth, completeOAuth },
+    resolve,
+    usable,
+    revokeRemoved,
+  };
 };

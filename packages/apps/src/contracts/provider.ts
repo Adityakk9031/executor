@@ -61,19 +61,25 @@ const oauthOptions = {
   resource: Schema.optionalKey(Schema.NullOr(HttpUrl)),
 };
 
-/** OAuth endpoints and protocol choices. Omitted grant means authorization code; clients remain host-owned. */
+/**
+ * OAuth endpoints and protocol choices. Omitted grant means authorization code; clients remain
+ * host-owned. Declared endpoints may name an RFC 7009 `revocationUrl`; discovery reads the
+ * server's `revocation_endpoint` metadata instead.
+ */
 export const OAuth2Config = Schema.Union([
   Schema.Struct({
     ...oauthOptions,
     discover: HttpUrl,
     authorizationUrl: Schema.optionalKey(Schema.Never),
     tokenUrl: Schema.optionalKey(Schema.Never),
+    revocationUrl: Schema.optionalKey(Schema.Never),
     scopes: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
   Schema.Struct({
     ...oauthOptions,
     authorizationUrl: HttpUrl,
     tokenUrl: HttpUrl,
+    revocationUrl: Schema.optionalKey(HttpUrl),
     scopes: Schema.Array(Schema.String),
     /** RFC 8414 issuer identifier. Declared issuers are checked against the callback's `iss`. */
     issuer: Schema.optionalKey(HttpUrl),
@@ -84,6 +90,7 @@ export const OAuth2Config = Schema.Union([
     discover: HttpUrl,
     authorizationUrl: Schema.optionalKey(Schema.Never),
     tokenUrl: Schema.optionalKey(Schema.Never),
+    revocationUrl: Schema.optionalKey(Schema.Never),
     scopes: Schema.optionalKey(Schema.Array(Schema.String)),
     tokenEndpointAuthMethod: OAuthSecretClientAuth,
     resource: Schema.optionalKey(Schema.NullOr(HttpUrl)),
@@ -91,6 +98,7 @@ export const OAuth2Config = Schema.Union([
   Schema.Struct({
     grant: Schema.Literal("client_credentials"),
     tokenUrl: HttpUrl,
+    revocationUrl: Schema.optionalKey(HttpUrl),
     scopes: Schema.Array(Schema.String),
     tokenEndpointAuthMethod: OAuthSecretClientAuth,
     resource: Schema.optionalKey(Schema.NullOr(HttpUrl)),

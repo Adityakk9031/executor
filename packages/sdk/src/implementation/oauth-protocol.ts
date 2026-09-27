@@ -132,7 +132,16 @@ const observeFailure = (error: OAuthProtocolFailed) =>
     ...(error.field === undefined ? {} : { "oauth.error.field": error.field }),
   });
 const protocolStage =
-  (stage: "discover" | "register" | "authorize" | "exchange" | "clientCredentials" | "refresh") =>
+  (
+    stage:
+      | "discover"
+      | "register"
+      | "authorize"
+      | "exchange"
+      | "clientCredentials"
+      | "refresh"
+      | "revoke",
+  ) =>
   <A, R>(program: Effect.Effect<A, OAuthProtocolFailed, R>) =>
     program.pipe(
       Effect.tapError(observeFailure),
@@ -159,6 +168,9 @@ const metadata = (server: OAuthTokenServer): oauth.AuthorizationServer => ({
   ...(server.registration_endpoint === undefined
     ? {}
     : { registration_endpoint: server.registration_endpoint }),
+  ...(server.revocation_endpoint === undefined
+    ? {}
+    : { revocation_endpoint: server.revocation_endpoint }),
   ...(server.authorization_response_iss_parameter_supported === undefined
     ? {}
     : {
@@ -496,6 +508,9 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
                   ? {}
                   : { authorization_endpoint: method.authorizationUrl }),
                 token_endpoint: method.tokenUrl,
+                ...(method.revocationUrl === undefined
+                  ? {}
+                  : { revocation_endpoint: method.revocationUrl }),
               }),
               scopes: [...method.scopes],
               // Undeclared means the client decides: a secret uses RFC 7591's client_secret_basic default.
@@ -757,6 +772,24 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
           });
         return tokens;
       }).pipe(protocolStage("refresh")),
+    /** RFC 7009 revocation with the grant's own client authentication. */
+    revoke: (input: {
+      server: OAuthTokenServer;
+      client: OAuthRegistration;
+      token: string;
+      tokenTypeHint: "refresh_token" | "access_token";
+    }) =>
+      request(async (settings) =>
+        oauth.processRevocationResponse(
+          await oauth.revocationRequest(
+            metadata(input.server),
+            input.client,
+            clientAuth(input.client),
+            input.token,
+            { ...settings, additionalParameters: { token_type_hint: input.tokenTypeHint } },
+          ),
+        ),
+      ).pipe(protocolStage("revoke")),
   };
 };
 

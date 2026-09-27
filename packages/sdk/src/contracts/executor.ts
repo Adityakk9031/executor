@@ -52,7 +52,10 @@ export interface ExecutorOptions {
   readonly oauth?: OAuthOptions;
   /** Evaluated skills, workflows and webhooks, shared per process or isolate. Defaults to this executor. */
   readonly declarations?: import("./declarations.ts").DeclarationCache;
-  /** Revalidates stale declarations after the response. Without it, stale ones revalidate first. */
+  /**
+   * Revalidates stale declarations and revokes deleted accounts' OAuth grants after the response.
+   * Without it, stale declarations revalidate first and revocation runs inline.
+   */
   readonly background?: import("./declarations.ts").BackgroundWork;
 }
 

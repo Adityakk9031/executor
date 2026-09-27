@@ -823,6 +823,16 @@ export const scenarios = {
       local: na("The shared importer is exercised through the hosted import route."),
     },
   },
+  oauthRevocation: {
+    fixtures: "actors",
+    file: "oauth-revocation.spec.ts",
+    title: "OAuth account deletion revokes the refresh token and succeeds when revocation fails",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer that records revocation requests."),
+      local: na("Exercises the shared SDK account deletion through hosted APIs."),
+    },
+  },
   setupDiagnostics: {
     fixtures: "actors",
     file: "setup-diagnostics.spec.ts",

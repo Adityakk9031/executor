@@ -90,6 +90,12 @@ check the service's `iss` responses. Without `issuer` those checks are skipped.
 Do not copy endpoints from an OpenAPI `oauth2` scheme without checking the
 service's docs; those schemes carry no issuer or client authentication.
 
+When the service documents an RFC 7009 token revocation endpoint, also declare
+`revocationUrl`. Executor calls it when a user deletes the account, so the
+provider stops honoring the saved token. Revocation is best effort and never
+blocks the deletion. Discovered methods use the server's advertised
+`revocation_endpoint` and do not accept `revocationUrl`.
+
 Deploy the source, create a profile, then request a connection for its account requirement.
 The management examples below use the **local** API. For hosted calls, use
 `profiles_create` and `accounts_connect` with `path.organization`, as shown in

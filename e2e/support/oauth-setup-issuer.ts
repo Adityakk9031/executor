@@ -21,7 +21,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let probes = 0;
   let mcpStatus: 520 | undefined;
   let expiresAt = 0;
-  let registrationStatus: 200 | 201 | 400 = 201;
+  // 401 models RFC 7591 registration that requires an initial access token Executor lacks.
+  let registrationStatus: 200 | 201 | 400 | 401 = 201;
   let malformedRegistration = false;
   let registrationError: "invalid_client_metadata" | "invalid_redirect_uri" =
     "invalid_client_metadata";
@@ -58,6 +59,13 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let refreshSubject = "synthetic-subject";
   /** Lifetime of renewed tokens; unset, they last `expiresIn` like the first ones. */
   let refreshedExpiresIn: number | undefined;
+  /** An RFC 7009 endpoint that records calls, or one that always fails. */
+  let revocation: "none" | "recorded" | "failing" = "none";
+  const revocations: Array<{
+    readonly token: "refresh" | "access" | "unknown";
+    readonly hint: string | null;
+    readonly clientAuthenticated: boolean;
+  }> = [];
   const keyPair = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   let rsaKey: KeyObject | undefined;
   /** Refresh tokens issued for each client; like Google, refreshes do not rotate them. */
@@ -92,6 +100,33 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let discoveries = 0;
   let authMethods = ["client_secret_basic"];
   let lastRegistration: { scope: string; method: string } | undefined;
+  /** RFC 6749 section 2.3.1 client authentication presented at the token or revocation endpoint. */
+  const presentedClient = (authorization: string | undefined, input: URLSearchParams) => {
+    const decoded = authorization?.startsWith("Basic ")
+      ? Buffer.from(authorization.slice(6), "base64").toString("utf8")
+      : "";
+    const separator = decoded.indexOf(":");
+    const username =
+      separator < 0
+        ? undefined
+        : decodeURIComponent(decoded.slice(0, separator).replace(/\+/g, " "));
+    const password =
+      separator < 0
+        ? undefined
+        : decodeURIComponent(decoded.slice(separator + 1).replace(/\+/g, " "));
+    const method: TokenAuth =
+      authorization !== undefined
+        ? "client_secret_basic"
+        : input.has("client_secret")
+          ? "client_secret_post"
+          : "none";
+    return {
+      method,
+      ...(method === "client_secret_basic"
+        ? { clientId: username, secret: password }
+        : { clientId: input.get("client_id"), secret: input.get("client_secret") }),
+    };
+  };
   const resource = Effect.gen(function* () {
     if (discovery === "missing" || discovery === "no-oauth")
       return HttpServerResponse.empty({ status: 404 });
@@ -177,30 +212,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           refreshing && presentedRefresh !== null ? refreshGrants.get(presentedRefresh) : undefined;
         const clientId = refreshing ? refreshClient : issued?.clientId;
         const authorization = request.headers.authorization;
-        const decoded = authorization?.startsWith("Basic ")
-          ? Buffer.from(authorization.slice(6), "base64").toString("utf8")
-          : "";
-        const separator = decoded.indexOf(":");
-        const username =
-          separator < 0
-            ? undefined
-            : decodeURIComponent(decoded.slice(0, separator).replace(/\+/g, " "));
-        const password =
-          separator < 0
-            ? undefined
-            : decodeURIComponent(decoded.slice(separator + 1).replace(/\+/g, " "));
-        const method: TokenAuth =
-          authorization !== undefined
-            ? "client_secret_basic"
-            : input.has("client_secret")
-              ? "client_secret_post"
-              : "none";
+        const presented = presentedClient(authorization, input);
+        const method = presented.method;
         if (!refreshing) lastExchangeAuth = method;
         const client = clientId === undefined ? undefined : clients.get(clientId);
-        const presented =
-          method === "client_secret_basic"
-            ? { clientId: username, secret: password }
-            : { clientId: input.get("client_id"), secret: input.get("client_secret") };
         const authChecks = {
           authScheme:
             method !== "client_secret_basic" || authorization?.startsWith("Basic ") === true,
@@ -392,7 +407,38 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           ...(registration
             ? { registration_endpoint: `${origin}/register?fixture=PRIVATE_QUERY` }
             : {}),
+          ...(revocation === "none" ? {} : { revocation_endpoint: `${origin}/revoke` }),
         });
+      }),
+    ),
+    HttpRouter.add(
+      "POST",
+      "/revoke",
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const input = new URLSearchParams(yield* request.text);
+        const presented = presentedClient(request.headers.authorization, input);
+        const client =
+          typeof presented.clientId === "string" ? clients.get(presented.clientId) : undefined;
+        const token = input.get("token");
+        revocations.push({
+          token:
+            token !== null && refreshGrants.has(token)
+              ? "refresh"
+              : token === "synthetic-access-token" ||
+                  (token !== null && refreshedAccessTokens.has(token))
+                ? "access"
+                : "unknown",
+          hint: input.get("token_type_hint"),
+          clientAuthenticated:
+            client !== undefined &&
+            client.methods.includes(presented.method) &&
+            client.secret !== null &&
+            presented.secret === client.secret,
+        });
+        return revocation === "failing"
+          ? HttpServerResponse.empty({ status: 503 })
+          : HttpServerResponse.empty({ status: 200 });
       }),
     ),
     HttpRouter.add(
@@ -413,6 +459,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           ),
         );
         lastRegistration = { scope: input.scope ?? "", method: input.token_endpoint_auth_method };
+        if (registrationStatus === 401)
+          return yield* HttpServerResponse.json(
+            { error: "invalid_client", error_description: "PRIVATE_PROVIDER_ERROR" },
+            { status: 401 },
+          );
         if (registrationStatus === 400)
           return yield* HttpServerResponse.json(
             {
@@ -491,6 +542,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly refreshSubject?: string;
       /** Lifetime of renewed tokens; null makes them last `expiresIn`. */
       readonly refreshedExpiresIn?: number | null;
+      /** Advertise an RFC 7009 endpoint that records calls, or one that always fails. */
+      readonly revocation?: typeof revocation;
     }) =>
       Effect.sync(() => {
         if (input.mcpStatus !== undefined)
@@ -532,6 +585,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (input.refreshedExpiresIn !== undefined)
           refreshedExpiresIn =
             input.refreshedExpiresIn === null ? undefined : input.refreshedExpiresIn;
+        if (input.revocation !== undefined) revocation = input.revocation;
       }),
     /**
      * Accept a client configured by hand at the service. One with a secret may authenticate with
@@ -564,6 +618,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       refreshChecks,
       lastExchangeAuth,
       nonceRequested,
+      revocations: [...revocations],
     })),
   };
 });

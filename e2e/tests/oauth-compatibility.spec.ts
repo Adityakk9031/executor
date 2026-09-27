@@ -43,7 +43,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
         } as const;
         const cases: ReadonlyArray<{
           readonly name: string;
-          readonly registrationStatus: 200 | 201 | 400;
+          readonly registrationStatus: 200 | 201 | 400 | 401;
           readonly registrationError: "invalid_client_metadata" | "invalid_redirect_uri";
           readonly omitSecretExpiry: boolean;
           readonly malformedRegistration: boolean;
@@ -102,6 +102,13 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
             registrationStatus: 400,
             registrationError: "invalid_redirect_uri",
             setupFailure: "client_not_approved",
+          },
+          // RFC 7591 registration that needs an initial access token: a manual client is required.
+          {
+            ...valid,
+            name: "Protected registration",
+            registrationStatus: 401,
+            setupFailure: "client_registration_required",
           },
         ];
         for (const scenario of cases) {

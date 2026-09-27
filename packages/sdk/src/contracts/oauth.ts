@@ -172,6 +172,7 @@ export const OAuthSetupFailed = UserFacingError.define({
       "discovery_blocked",
       "resource_mismatch",
       "client_not_approved",
+      "client_registration_required",
       "registration_rejected",
       "incompatible_response",
       "invalid_client",
@@ -247,6 +248,21 @@ export const OAuthSetupFailed = UserFacingError.define({
             },
             agentFixable: false,
           },
+          // RFC 7591 lets a registration endpoint require an initial access token. Executor has
+          // none, so a 401 or 403 there means the service registers clients only by hand.
+          client_registration_required: {
+            title: "Register an OAuth client with the service",
+            description:
+              "This service does not let Executor register itself for sign-in. Its OAuth clients must be registered manually.",
+            recovery: {
+              action:
+                "Create an OAuth app in the service’s developer settings with Executor’s callback URL, then enter its client details.",
+              instructions:
+                "The service’s dynamic client registration endpoint requires authorization, such as an RFC 7591 initial access token, which Executor does not have. Explain how to create an OAuth client in the service’s developer settings with Executor’s callback URL, then enter its client ID and secret in Executor. Do not repeatedly register clients or ask for the service’s registration credentials." +
+                callback,
+            },
+            agentFixable: false,
+          },
           registration_rejected: {
             title: "Service rejected Executor’s registration",
             description: "The service refused Executor’s request to register as an OAuth client.",
@@ -311,6 +327,7 @@ export const OAuthSetupFailed = UserFacingError.define({
 export const oauthClientEntryReasons: ReadonlySet<OAuthSetupFailed["reason"]> = new Set([
   "invalid_client",
   "client_not_approved",
+  "client_registration_required",
   "registration_rejected",
 ]);
 /** Parsed OAuthSetupFailed failure. */
@@ -466,6 +483,8 @@ export const OAuthTokenServer = Schema.Struct({
   authorization_endpoint: Schema.optional(HttpUrl),
   token_endpoint: HttpUrl,
   registration_endpoint: Schema.optional(HttpUrl),
+  /** RFC 7009 endpoint. Optional so grants saved before it was retained still decode. */
+  revocation_endpoint: Schema.optional(HttpUrl),
   jwks_uri: Schema.optional(HttpUrl),
   id_token_signing_alg_values_supported: Schema.optional(Schema.Array(Schema.String)),
   authorization_response_iss_parameter_supported: Schema.optional(Schema.Boolean),
