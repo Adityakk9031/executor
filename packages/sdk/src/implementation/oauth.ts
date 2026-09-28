@@ -825,7 +825,6 @@ export const makeOAuth = (
         client: attempt.client,
         response: attempt.response,
         ...(attempt.resource === undefined ? {} : { resource: attempt.resource }),
-        ...(attempt.bearerResource === undefined ? {} : { bearerResource: true }),
         ...(subject === undefined ? {} : { idTokenSubject: subject }),
         fields,
         ...(tokens.refresh_token === undefined ? {} : { refreshToken: tokens.refresh_token }),

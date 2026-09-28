@@ -277,36 +277,64 @@ const jsonObject = async (response: Response) => {
   }
 };
 
+/** Token response members some services send as null when they issued none. */
+const optionalTokenMembers = new Set([
+  "token_type",
+  "expires_in",
+  "refresh_token",
+  "scope",
+  "id_token",
+]);
+
+/**
+ * Normalize a successful token response once, before validation. Null optional members are
+ * absent (Mailchimp sends `scope: null`), and so are empty ones except `scope`: an empty scope
+ * is a granted scope and replaces the previous one on renewal. A scope array becomes RFC 6749's
+ * space-delimited string. A missing `token_type` is Bearer: Shopify, ClickUp and Mailchimp omit
+ * it, and Executor sends every access token as a Bearer token.
+ */
+const normalizedTokens = (body: object) => {
+  const tokens: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (optionalTokenMembers.has(key) && (value === null || (value === "" && key !== "scope")))
+      continue;
+    tokens[key] =
+      key === "scope" && Array.isArray(value) && value.every((item) => typeof item === "string")
+        ? value.join(" ")
+        : value;
+  }
+  if (tokens.token_type === undefined) tokens.token_type = "bearer";
+  return tokens;
+};
+
 /**
  * RFC 6749 §5.2: a JSON object with an `error` code and no access token is an error response,
  * whatever its HTTP status. Some services send it with HTTP 200; with a 401 WWW-Authenticate
- * challenge, oauth4webapi reports the challenge before reading the body.
+ * challenge, oauth4webapi reports the challenge before reading the body. Other HTTP 200 JSON
+ * objects are normalized for validation.
  */
 const tokenResponse = async (response: Response) => {
   const body = await jsonObject(response);
-  const error = body === undefined ? undefined : Reflect.get(body, "error");
-  if (
-    body === undefined ||
-    typeof error !== "string" ||
-    error === "" ||
-    Reflect.get(body, "access_token") !== undefined
-  )
-    return response;
-  throw errorResponse(response.status, error);
+  if (body === undefined) return response;
+  const error = Reflect.get(body, "error");
+  if (typeof error === "string" && error !== "" && Reflect.get(body, "access_token") === undefined)
+    throw errorResponse(response.status, error);
+  if (response.status !== 200) return response;
+  return new Response(JSON.stringify(normalizedTokens(body)), {
+    status: response.status,
+    headers: response.headers,
+  });
 };
 
 const isLowercase = (value: string): value is Lowercase<string> => value === value.toLowerCase();
 
 /**
- * Executor sends every access token as a Bearer token and never creates DPoP proofs (RFC 9449).
- * A resource that advertised Bearer accepts its tokens as Bearer whatever `token_type` says;
- * without that advertisement, oauth4webapi accepts only `bearer`.
+ * Executor sends every access token as a Bearer token (RFC 6750) and never creates DPoP proofs
+ * (RFC 9449). Services label Bearer tokens with their own types, such as Slack's `bot`, so any
+ * type but DPoP is accepted.
  */
-const tokenTypes = async (
-  response: Response,
-  bearerResource: boolean | undefined,
-): Promise<oauth.RecognizedTokenTypes> => {
-  const body = bearerResource === true ? await jsonObject(response) : undefined;
+const tokenTypes = async (response: Response): Promise<oauth.RecognizedTokenTypes> => {
+  const body = await jsonObject(response);
   const received = body === undefined ? undefined : Reflect.get(body, "token_type");
   const type = typeof received === "string" ? received.toLowerCase() : undefined;
   return {
@@ -495,7 +523,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
         const document: unknown = await discoveryResponse(response).json();
         return document;
       });
-      if (document === undefined) return { found: undefined, bearer: challenge.bearer };
+      if (document === undefined) return undefined;
       const found = yield* decode(OAuthResource, document);
       const resource = yield* secureUrl(found.resource);
       // A resource can cover /mcp from the origin root, but cannot name a sibling
@@ -507,10 +535,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
       ) {
         return yield* new OAuthProtocolFailed({ reason: "resource_mismatch" });
       }
-      return {
-        found,
-        bearer: challenge.bearer || (found.bearer_methods_supported?.length ?? 0) > 0,
-      };
+      return found;
     });
 
   return {
@@ -537,7 +562,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
               ...(method.resource == null ? {} : { resource: method.resource }),
             };
           const resource = yield* secureUrl(method.discover);
-          const { found, bearer } = yield* discoverResource(resource);
+          const found = yield* discoverResource(resource);
           const issuer = found === undefined ? resource.href : found.authorization_servers[0];
           if (issuer === undefined)
             return yield* new OAuthProtocolFailed({ reason: "invalid_response" });
@@ -581,7 +606,6 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
                   ),
                 }),
             ...(resourceIndicator == null ? {} : { resource: resourceIndicator }),
-            ...(bearer ? { bearerResource: true as const } : {}),
           };
         });
         if (method.grant === "client_credentials")
@@ -714,7 +738,6 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
         verifier: string;
         resource?: string | undefined;
         nonce?: string | undefined;
-        bearerResource?: boolean | undefined;
       },
       parameters: URLSearchParams,
     ) =>
@@ -742,7 +765,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
         const nonce =
           input.nonce !== undefined && (await hasIdToken(response)) ? input.nonce : undefined;
         return oauth.processAuthorizationCodeResponse(server, input.client, response, {
-          recognizedTokenTypes: await tokenTypes(response, input.bearerResource),
+          recognizedTokenTypes: await tokenTypes(response),
           ...(nonce === undefined ? {} : { expectedNonce: nonce, requireIdToken: true }),
         });
       }).pipe(protocolStage("exchange")),
@@ -751,7 +774,6 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
       client: OAuthConfidentialRegistration;
       scopes: readonly string[];
       resource?: string | undefined;
-      bearerResource?: boolean | undefined;
     }) =>
       request(async (settings) => {
         const server = metadata(input.server);
@@ -768,7 +790,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
           ),
         );
         return oauth.processClientCredentialsResponse(server, input.client, response, {
-          recognizedTokenTypes: await tokenTypes(response, input.bearerResource),
+          recognizedTokenTypes: await tokenTypes(response),
         });
       }).pipe(protocolStage("clientCredentials")),
     refresh: (input: {
@@ -776,7 +798,6 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
       client: OAuthRegistration;
       refreshToken: string;
       resource?: string | undefined;
-      bearerResource?: boolean | undefined;
       idTokenSubject?: string | undefined;
     }) =>
       request(async (settings) => {
@@ -798,7 +819,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
         const usable =
           input.server.issuer_derived === true ? await withoutIdToken(response) : response;
         const tokens = await oauth.processRefreshTokenResponse(server, input.client, usable, {
-          recognizedTokenTypes: await tokenTypes(usable, input.bearerResource),
+          recognizedTokenTypes: await tokenTypes(usable),
         });
         // OIDC Core §12.2: a refreshed ID token must identify the same end user.
         const subject = oauth.getValidatedIdTokenClaims(tokens)?.sub;

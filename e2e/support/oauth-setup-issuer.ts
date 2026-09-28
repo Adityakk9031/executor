@@ -13,6 +13,16 @@ import {
 
 type TokenAuth = "client_secret_basic" | "client_secret_post" | "none";
 
+/** The members a standard token response carries; absent members were not issued. */
+export type IssuedTokens = {
+  readonly access_token: string;
+  readonly token_type: string;
+  readonly expires_in?: number;
+  readonly refresh_token?: string;
+  readonly id_token?: string;
+};
+export type TokenShape = (tokens: IssuedTokens, refreshing: boolean) => object;
+
 /** Start a loopback issuer with controllable discovery and registration metadata. */
 export const oauthSetupIssuer = Effect.gen(function* () {
   const address = yield* Deferred.make<string>();
@@ -77,10 +87,12 @@ export const oauthSetupIssuer = Effect.gen(function* () {
     | { readonly status: number; readonly body: object; readonly challenge?: string }
     | "reset"
     | undefined;
-  let tokenType = "Bearer";
+  /**
+   * Reshape each token response as a real service does, for example Slack's `token_type: "bot"`
+   * or Mailchimp's `scope: null`. It receives the standard members and whether this is a refresh.
+   */
+  let tokenShape: TokenShape | undefined;
   let authorizeError: string | undefined;
-  let challengeScheme = "Bearer";
-  let bearerMethods: readonly string[] | undefined;
   /** The ID-token subject issued on refresh. */
   let refreshSubject = "synthetic-subject";
   /** Lifetime of renewed tokens; unset, they last `expiresIn` like the first ones. */
@@ -164,7 +176,6 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       resource: `${origin}/mcp`,
       authorization_servers: [discovery === "blocked" ? "http://blocked.internal:8081" : origin],
       scopes_supported: scopes,
-      ...(bearerMethods === undefined ? {} : { bearer_methods_supported: bearerMethods }),
     });
   });
   const routes = Layer.mergeAll(
@@ -336,13 +347,16 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (refreshing) refreshesIssued++;
         const lifetime = refreshing ? (refreshedExpiresIn ?? expiresIn) : expiresIn;
         if (refreshing && hold === "refresh-issued") yield* heldRequest;
-        return yield* HttpServerResponse.json({
+        const tokens: IssuedTokens = {
           access_token: accessToken,
-          token_type: tokenType,
+          token_type: "Bearer",
           ...(lifetime === undefined ? {} : { expires_in: lifetime }),
           ...(refreshToken === undefined ? {} : { refresh_token: refreshToken }),
           ...(includeIdToken ? { id_token: `${jwt}.${signature}` } : {}),
-        });
+        };
+        return yield* HttpServerResponse.json(
+          tokenShape === undefined ? tokens : tokenShape(tokens, refreshing),
+        );
       }),
     ),
     HttpRouter.add(
@@ -372,7 +386,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         return HttpServerResponse.empty({
           status: 401,
           headers: {
-            "www-authenticate": `${challengeScheme} resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`,
+            "www-authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`,
           },
         });
       }),
@@ -388,7 +402,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           status: 401,
           headers: challenge
             ? {
-                "www-authenticate": `${challengeScheme} resource_metadata="${origin}/challenge-resource"`,
+                "www-authenticate": `Bearer resource_metadata="${origin}/challenge-resource"`,
               }
             : {},
         });
@@ -610,13 +624,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
        * connection with "reset"; null restores tokens.
        */
       readonly tokenError?: typeof tokenError | null;
-      readonly tokenType?: string;
+      /** Reshape token responses like a real service; null restores the standard shape. */
+      readonly tokenShape?: TokenShape | null;
       /** Return this RFC 6749 error code to the callback instead of a code; null restores codes. */
       readonly authorizeError?: string | null;
-      /** The scheme of the resource's 401 challenge. */
-      readonly challengeScheme?: string;
-      /** RFC 9728 `bearer_methods_supported`; null omits it. */
-      readonly bearerMethods?: readonly string[] | null;
       /** The ID-token subject issued on refresh. */
       readonly refreshSubject?: string;
       /** Lifetime of renewed tokens; null makes them last `expiresIn`. */
@@ -662,12 +673,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           browserReturn = input.browserReturn === null ? undefined : input.browserReturn;
         if (input.tokenError !== undefined)
           tokenError = input.tokenError === null ? undefined : input.tokenError;
-        if (input.tokenType !== undefined) tokenType = input.tokenType;
+        if (input.tokenShape !== undefined)
+          tokenShape = input.tokenShape === null ? undefined : input.tokenShape;
         if (input.authorizeError !== undefined)
           authorizeError = input.authorizeError === null ? undefined : input.authorizeError;
-        if (input.challengeScheme !== undefined) challengeScheme = input.challengeScheme;
-        if (input.bearerMethods !== undefined)
-          bearerMethods = input.bearerMethods === null ? undefined : input.bearerMethods;
         if (input.refreshSubject !== undefined) refreshSubject = input.refreshSubject;
         if (input.refreshedExpiresIn !== undefined)
           refreshedExpiresIn =

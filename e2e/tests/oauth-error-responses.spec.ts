@@ -50,11 +50,8 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
           idTokenAlgorithms: ["ES256"],
           idTokenAlgorithm: "ES256",
           tokenError: null,
-          tokenType: "Bearer",
           authorizeError: null,
           callbackIssuer: null,
-          challengeScheme: "Bearer",
-          bearerMethods: null,
           refreshTokens: false,
           expiresIn: 3600,
           refreshSubject: "synthetic-subject",
@@ -231,58 +228,6 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
           });
           expect(result.exchanged, label).toBe(0);
           expect(JSON.stringify(result.completed.body)).not.toContain("private_nonstandard_code");
-        }
-
-        // A resource that advertised Bearer accepts its service's nonstandard token type.
-        const tokenTypes: ReadonlyArray<{
-          readonly name: string;
-          readonly tokenType: string;
-          readonly challengeScheme: string;
-          readonly bearerMethods: readonly string[] | null;
-          readonly reason: string | undefined;
-        }> = [
-          {
-            name: "Nonstandard type, Bearer challenge",
-            tokenType: "user",
-            challengeScheme: "Bearer",
-            bearerMethods: null,
-            reason: undefined,
-          },
-          {
-            name: "Nonstandard type, Bearer metadata",
-            tokenType: "user",
-            challengeScheme: "DPoP",
-            bearerMethods: ["header"],
-            reason: undefined,
-          },
-          {
-            name: "Nonstandard type, no Bearer advertised",
-            tokenType: "user",
-            challengeScheme: "DPoP",
-            bearerMethods: null,
-            reason: "incompatible_response",
-          },
-          {
-            name: "DPoP-bound token",
-            tokenType: "DPoP",
-            challengeScheme: "Bearer",
-            bearerMethods: null,
-            reason: "unsupported",
-          },
-        ];
-        for (const scenario of tokenTypes) {
-          const [files, name] = mcp(scenario.name);
-          const result = yield* signIn(files, name, scenario);
-          expect(
-            result.completed.status,
-            `${scenario.name}: ${JSON.stringify(result.failure)}`,
-          ).toBe(scenario.reason === undefined ? 200 : 400);
-          if (scenario.reason !== undefined)
-            expect(result.failure, scenario.name).toMatchObject({
-              _tag: "OAuthCompletionFailed",
-              reason: scenario.reason,
-            });
-          expect(result.exchanged, scenario.name).toBe(1);
         }
 
         // An unsigned ID token is rejected even when the service advertises `none`.

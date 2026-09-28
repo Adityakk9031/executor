@@ -729,7 +729,6 @@ export const OAuthResource = Schema.Struct({
   resource: HttpUrl,
   authorization_servers: Schema.Array(HttpUrl),
   scopes_supported: Schema.optional(Schema.Array(Schema.String)),
-  bearer_methods_supported: Schema.optional(Schema.Array(Schema.String)),
 });
 /** This record is only read inside encrypted host state; never return it to app code. */
 const registration = {
@@ -789,20 +788,12 @@ export const OAuthAttempt = Schema.Struct({
   /** The saved client this attempt used, so a rejection can discard exactly that version. */
   savedClient: Schema.optionalKey(OAuthSavedClientRef),
   resource: Schema.optional(HttpUrl),
-  /** The protected resource advertised Bearer tokens; see `grantFields.bearerResource`. */
-  bearerResource: Schema.optional(Schema.Literal(true)),
   response: JsonObject,
 });
 export type OAuthAttempt = typeof OAuthAttempt.Type;
 /** Private refresh context. Access-token projections are stored separately on the account. */
 const grantFields = {
   resource: Schema.optional(HttpUrl),
-  /**
-   * The protected resource advertised Bearer tokens during discovery, through RFC 9728
-   * `bearer_methods_supported` or an RFC 6750 Bearer challenge. Its tokens are then used as
-   * Bearer tokens even when the service labels them with a nonstandard `token_type`.
-   */
-  bearerResource: Schema.optional(Schema.Literal(true)),
   response: JsonObject,
   expiresAt: Schema.optional(Schema.Number),
   fields: JsonObject,

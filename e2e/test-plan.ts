@@ -1038,7 +1038,40 @@ export const scenarios = {
     fixtures: "actors",
     file: "oauth-error-responses.spec.ts",
     title:
-      "OAuth classifies token and callback error responses, accepts Bearer resources' token types, and rejects DPoP, unsigned and mismatched ID tokens",
+      "OAuth classifies token and callback error responses and rejects unsigned and mismatched ID tokens",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer with controlled wire responses."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthDeclaredTokenResponses: {
+    fixtures: "actors",
+    file: "oauth-provider-token-responses.spec.ts",
+    title:
+      "Declared OAuth endpoints accept real services' token responses, including Slack, Shopify and Mailchimp shapes and null members, on sign-in and renewal, and reject DPoP",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer with controlled wire responses."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthDiscoveredTokenResponses: {
+    fixtures: "actors",
+    file: "oauth-provider-token-responses.spec.ts",
+    title:
+      "Discovered OAuth servers accept real services' token responses, including Slack, Shopify and Mailchimp shapes and null members, on sign-in and renewal, and reject DPoP",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer with controlled wire responses."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthEmptyTokenScope: {
+    fixtures: "actors",
+    file: "oauth-provider-token-responses.spec.ts",
+    title:
+      "An empty OAuth token scope reaches app code on sign-in and replaces the granted scope on renewal",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback issuer with controlled wire responses."),
