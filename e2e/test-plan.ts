@@ -264,6 +264,17 @@ export const scenarios = {
       local: na("Hosted profile API fixture; Node adapter exercised by self-host"),
     },
   },
+  importedJsonSchemaDocuments: {
+    fixtures: "actors",
+    file: "imported-json-schema-documents.spec.ts",
+    title:
+      "Apps build imported JSON Schemas with shared or deeply nested parts on every evaluation",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted profile API fixture; Node adapter exercised by self-host"),
+    },
+  },
   appCacheAccounts: {
     fixtures: "actors",
     file: "app-cache-accounts.spec.ts",
