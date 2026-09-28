@@ -120,7 +120,12 @@ The key files are readable only by the server user. Back up the whole volume.
 
 Motel stores telemetry separately at `/app/motel-data`. Replacing the container
 discards that telemetry by default. Mount a separate volume there if you need
-to retain it.
+to retain it. Motel keeps telemetry until the first of three bounds is reached:
+seven days, one million spans or 1 GiB, evicting the oldest traces first. A busy
+server reaches 1 GiB first, so it may keep only the last hours or minutes of
+traces. When exports arrive faster than Motel can store them, it refuses the
+excess rather than holding it in memory, and it counts every export it does not
+store. The server log reports those losses.
 
 If you supply keys through environment variables, keep those values in your
 secret manager as well; Executor does not save those overrides to disk. Keep
