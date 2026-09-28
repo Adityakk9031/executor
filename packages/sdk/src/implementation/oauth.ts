@@ -7,6 +7,7 @@ import {
   type Crypto,
   Effect,
   Encoding,
+  Fiber,
   JsonSchema,
   Match,
   Redacted,
@@ -109,6 +110,25 @@ const causeOf = (
  */
 const expiry = (issuedAt: number, expiresIn: number | undefined) =>
   expiresIn === undefined || expiresIn <= 0 ? {} : { expiresAt: issuedAt + expiresIn * 1000 };
+
+/**
+ * A renewal claim is a lease its holder keeps alive. While the holder renews, it confirms the
+ * claim every `renewalHeartbeat`; other resolves wait for it, however long its token request
+ * takes. A claim unconfirmed for `renewalLease` belongs to a process that stopped without
+ * settling it, for example from an out-of-memory kill. The next resolve then takes it over and
+ * renews from the saved grant. The lease spans several heartbeats so a busy process or a slow
+ * database write does not lose a live claim, and is short enough that callers arriving after a
+ * restart recover within one execute deadline.
+ */
+const renewalHeartbeat = 5_000;
+const renewalLease = 20_000;
+
+/**
+ * Claims held by renewals running in this process. A claim listed here is live whatever its
+ * last confirmation, so a stall that delays heartbeats, such as garbage collection near the
+ * memory limit, cannot make this process take over its own renewal.
+ */
+const heldClaims = new Set<string>();
 
 /** Why a saved grant cannot supply credentials. Recorded on the resolve span. */
 type ReconnectReason =
@@ -850,6 +870,7 @@ export const makeOAuth = (
             Effect.fail(
               new OAuthReconnectRequired({
                 account: account.id,
+                ...(reason === "renewal_interrupted" ? { reason } : {}),
                 ...(cause === undefined ? {} : { cause }),
               }),
             ),
@@ -865,20 +886,26 @@ export const makeOAuth = (
         if (row === null) return yield* reconnect("grant_missing");
         if (row.status === "reconnect") return yield* reconnect("grant_unusable");
         const now = yield* Clock.currentTimeMillis;
-        if (!row.status.startsWith("ready_")) {
-          // A crashed process may have consumed a rotating token. Do not replay an uncertain refresh.
-          if (now - row.updatedAt.getTime() > 60_000)
-            return yield* reconnect("renewal_interrupted");
+        // A renewal holds the grant. Its row still carries the grant it started from.
+        const claimed = !row.status.startsWith("ready_");
+        if (
+          claimed &&
+          (heldClaims.has(row.status) || now - row.updatedAt.getTime() <= renewalLease)
+        ) {
           awaited = true;
           yield* Effect.sleep("100 millis");
           continue;
         }
+        // An unconfirmed claim was abandoned by a process that stopped before saving a result.
+        // Renew again from the saved grant, as it would have. See renewalLease.
+        const abandoned = claimed;
         const grant = yield* decrypt(account.id, row.encrypted, OAuthGrant);
         const renewable = grant.grant === "client_credentials" || grant.refreshToken !== undefined;
         if (
-          grant.expiresAt === undefined ||
-          grant.expiresAt > now + (awaited ? 0 : 30_000) ||
-          (!renewable && grant.expiresAt > now)
+          !abandoned &&
+          (grant.expiresAt === undefined ||
+            grant.expiresAt > now + (awaited ? 0 : 30_000) ||
+            (!renewable && grant.expiresAt > now))
         )
           return Redacted.make(grant.fields);
         if (protocol === undefined) return yield* reconnect("not_renewable");
@@ -891,114 +918,158 @@ export const makeOAuth = (
               : protocol.refresh({ ...grant, refreshToken: grant.refreshToken });
         if (renewal === undefined) return yield* reconnect("not_renewable");
         const claim = `refresh_${yield* nextId}`;
-        yield* query(() =>
-          db.updateMany("oauthGrants", {
-            where: (b) => b.and(b("id", "=", account.id), b("status", "=", row.status)),
-            set: { status: claim, updatedAt: new Date(now) },
-          }),
-        );
-        const claimed = yield* query(() =>
-          db.findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) }),
-        );
-        if (claimed?.status !== claim) {
-          awaited = true;
-          continue;
-        }
-        const result = yield* renewal.pipe(
-          Effect.annotateSpans("oauth.provider.id", account.provider),
-          Effect.mapError((error) => ({
-            outcome: renewalOutcome(error),
-            cause: causeOf(stage, error),
-            identityChanged: error.reason === "subject_changed",
-          })),
-          Effect.flatMap((tokens) =>
-            project(grant.response, { ...grant.fields, ...tokens }).pipe(
-              // The service issued tokens, but not in the shape the provider declares.
-              Effect.mapError(() => ({
-                outcome: "incompatible_response" as const,
-                cause: { stage } satisfies OAuthFailureCause,
-                identityChanged: false,
-              })),
-              Effect.map((fields) => ({ tokens, fields })),
+        /** Renew under the claim and save the outcome; undefined when the claim was lost. */
+        const settle = Effect.gen(function* () {
+          const result = yield* renewal.pipe(
+            Effect.annotateSpans("oauth.provider.id", account.provider),
+            Effect.mapError((error) => ({
+              outcome: renewalOutcome(error),
+              cause: causeOf(stage, error),
+              identityChanged: error.reason === "subject_changed",
+            })),
+            Effect.flatMap((tokens) =>
+              project(grant.response, { ...grant.fields, ...tokens }).pipe(
+                // The service issued tokens, but not in the shape the provider declares.
+                Effect.mapError(() => ({
+                  outcome: "incompatible_response" as const,
+                  cause: { stage } satisfies OAuthFailureCause,
+                  identityChanged: false,
+                })),
+                Effect.map((fields) => ({ tokens, fields })),
+              ),
             ),
-          ),
-          Effect.result,
-        );
-        if (result._tag === "Failure") {
-          const { outcome, cause, identityChanged } = result.failure;
-          yield* Effect.annotateCurrentSpan("oauth.renewal.outcome", outcome);
-          const released = `ready_${yield* nextId}`;
-          // Only the process holding the claim may settle it. Otherwise another process has
-          // already settled this revision, and the loop reads its result.
-          const settled = yield* transaction(db, (tx) =>
+            Effect.result,
+          );
+          if (result._tag === "Failure") {
+            const { outcome, cause, identityChanged } = result.failure;
+            yield* Effect.annotateCurrentSpan("oauth.renewal.outcome", outcome);
+            const released = `ready_${yield* nextId}`;
+            // Only the process holding the claim may settle it. Otherwise another process has
+            // already settled this revision, and the loop reads its result.
+            const settled = yield* transaction(db, (tx) =>
+              Effect.gen(function* () {
+                const current = yield* query(() =>
+                  tx.findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) }),
+                );
+                if (current?.status !== claim) return false;
+                yield* query(() =>
+                  tx.updateMany("oauthGrants", {
+                    where: (b) => b.and(b("id", "=", account.id), b("status", "=", claim)),
+                    // Anything but a refusal releases the claim with the grant and its refresh
+                    // token unchanged, so a later call can renew it.
+                    set:
+                      outcome === "reconnect"
+                        ? { status: "reconnect" }
+                        : { status: released, updatedAt: row.updatedAt },
+                  }),
+                );
+                return true;
+              }),
+            );
+            if (!settled) return undefined;
+            if (outcome === "reconnect")
+              return yield* reconnect(
+                identityChanged
+                  ? "identity_changed"
+                  : abandoned
+                    ? "renewal_interrupted"
+                    : "renewal_refused",
+                cause,
+              );
+            return yield* new OAuthRenewalFailed({ account: account.id, reason: outcome, cause });
+          }
+          const { fields, tokens } = result.success;
+          const updatedAt = new Date(yield* Clock.currentTimeMillis);
+          // The renewed token's lifetime replaces the previous one, including when it states none.
+          const updated = yield* decode(OAuthGrant, {
+            ...Struct.omit(grant, ["expiresAt"]),
+            fields,
+            ...(grant.grant === "client_credentials"
+              ? {}
+              : { refreshToken: tokens.refresh_token ?? grant.refreshToken }),
+            ...expiry(updatedAt.getTime(), tokens.expires_in),
+          });
+          const encrypted = yield* encrypt(account.id, updated);
+          const encryptedCredentials = yield* encrypt(account.id, fields);
+          const ready = `ready_${yield* nextId}`;
+          const committed = yield* transaction(db, (tx) =>
             Effect.gen(function* () {
               const current = yield* query(() =>
                 tx.findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) }),
               );
-              if (current?.status !== claim) return false;
+              const saved = yield* query(() =>
+                tx.findFirst("accounts", { where: (b) => b("id", "=", account.id) }),
+              );
+              if (current?.status !== claim || saved === null) return false;
               yield* query(() =>
                 tx.updateMany("oauthGrants", {
                   where: (b) => b.and(b("id", "=", account.id), b("status", "=", claim)),
-                  // Anything but a refusal releases the claim with the grant and its refresh
-                  // token unchanged, so a later call can renew it.
-                  set:
-                    outcome === "reconnect"
-                      ? { status: "reconnect" }
-                      : { status: released, updatedAt: row.updatedAt },
+                  set: { status: ready, encrypted, updatedAt },
+                }),
+              );
+              yield* query(() =>
+                tx.updateMany("accounts", {
+                  where: (b) => b("id", "=", account.id),
+                  set: { encryptedCredentials },
                 }),
               );
               return true;
             }),
           );
-          if (!settled) continue;
-          if (outcome === "reconnect")
-            return yield* reconnect(
-              identityChanged ? "identity_changed" : "renewal_refused",
-              cause,
-            );
-          return yield* new OAuthRenewalFailed({ account: account.id, reason: outcome, cause });
-        }
-        const { fields, tokens } = result.success;
-        const updatedAt = new Date(yield* Clock.currentTimeMillis);
-        // The renewed token's lifetime replaces the previous one, including when it states none.
-        const updated = yield* decode(OAuthGrant, {
-          ...Struct.omit(grant, ["expiresAt"]),
-          fields,
-          ...(grant.grant === "client_credentials"
-            ? {}
-            : { refreshToken: tokens.refresh_token ?? grant.refreshToken }),
-          ...expiry(updatedAt.getTime(), tokens.expires_in),
+          if (!committed) return undefined;
+          yield* Effect.annotateCurrentSpan("oauth.renewal.outcome", "renewed");
+          return Redacted.make(fields);
         });
-        const encrypted = yield* encrypt(account.id, updated);
-        const encryptedCredentials = yield* encrypt(account.id, fields);
-        const ready = `ready_${yield* nextId}`;
-        const committed = yield* transaction(db, (tx) =>
+        // From claiming the grant to settling it, the renewal cannot be interrupted: a caller that
+        // times out or disconnects would otherwise abandon a live claim, and with it any rotated
+        // refresh token the service has already issued. The token request is bounded by its own
+        // timeout, so an interruption waits at most that long plus the save.
+        const renewed = yield* Effect.uninterruptible(
           Effect.gen(function* () {
+            const claimedAt = new Date(yield* Clock.currentTimeMillis);
+            yield* query(() =>
+              db.updateMany("oauthGrants", {
+                where: (b) => b.and(b("id", "=", account.id), b("status", "=", row.status)),
+                set: { status: claim, updatedAt: claimedAt },
+              }),
+            );
             const current = yield* query(() =>
-              tx.findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) }),
+              db.findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) }),
             );
-            const saved = yield* query(() =>
-              tx.findFirst("accounts", { where: (b) => b("id", "=", account.id) }),
+            if (current?.status !== claim) return undefined;
+            heldClaims.add(claim);
+            const heartbeat = yield* Effect.forkChild(
+              Effect.sleep(renewalHeartbeat).pipe(
+                Effect.andThen(Clock.currentTimeMillis),
+                Effect.flatMap((confirmedAt) =>
+                  query(() =>
+                    db.updateMany("oauthGrants", {
+                      where: (b) => b.and(b("id", "=", account.id), b("status", "=", claim)),
+                      set: { updatedAt: new Date(confirmedAt) },
+                    }),
+                  ),
+                ),
+                // A failed confirmation is retried at the next beat; the lease spans several.
+                Effect.catch(() => Effect.void),
+                Effect.forever,
+                Effect.interruptible,
+              ),
             );
-            if (current?.status !== claim || saved === null) return false;
-            yield* query(() =>
-              tx.updateMany("oauthGrants", {
-                where: (b) => b.and(b("id", "=", account.id), b("status", "=", claim)),
-                set: { status: ready, encrypted, updatedAt },
-              }),
+            return yield* settle.pipe(
+              Effect.ensuring(
+                Fiber.interrupt(heartbeat).pipe(
+                  Effect.andThen(Effect.sync(() => heldClaims.delete(claim))),
+                ),
+              ),
             );
-            yield* query(() =>
-              tx.updateMany("accounts", {
-                where: (b) => b("id", "=", account.id),
-                set: { encryptedCredentials },
-              }),
-            );
-            return true;
           }),
         );
-        if (!committed) continue;
-        yield* Effect.annotateCurrentSpan("oauth.renewal.outcome", "renewed");
-        return Redacted.make(fields);
+        if (renewed === undefined) {
+          // Another resolve claimed or settled this revision first; read its result.
+          awaited = true;
+          continue;
+        }
+        return renewed;
       }
     }).pipe(Effect.withSpan("oauth.resolve"));
 
@@ -1016,11 +1087,10 @@ export const makeOAuth = (
         db.findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) }),
       );
       if (row === null || row.status === "reconnect") return yield* reconnect;
+      // A renewal in progress, or one a stopped process abandoned, is settled by the next live
+      // resolve; its outcome is not known until then.
+      if (!row.status.startsWith("ready_")) return;
       const now = yield* Clock.currentTimeMillis;
-      if (!row.status.startsWith("ready_")) {
-        if (now - row.updatedAt.getTime() > 60_000) return yield* reconnect;
-        return;
-      }
       const grant = yield* decrypt(account.id, row.encrypted, OAuthGrant);
       const renewable = grant.grant === "client_credentials" || grant.refreshToken !== undefined;
       if (

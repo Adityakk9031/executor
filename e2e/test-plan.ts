@@ -900,6 +900,79 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  oauthRenewalKilledBeforeProvider: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title:
+      "OAuth renewal recovers within an execute deadline after the process dies before the service processes it",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Kills and restarts a runner-owned product process."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalKilledAfterRotation: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title:
+      "OAuth renewal reports an interruption after the process dies holding a rotated token it never saved",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Kills and restarts a runner-owned product process."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalKilledInReuseWindow: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title:
+      "OAuth renewal recovers after the process dies holding a rotated token while the service still accepts the replaced one",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Kills and restarts a runner-owned product process."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalKilledAfterSave: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title: "OAuth renewal keeps a saved rotated token after the process dies",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Kills and restarts a runner-owned product process."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalSlowLiveHolder: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title: "OAuth renewal keeps its claim through a slow token response while other calls wait",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Holds a runner-owned token endpoint response for longer than a lease."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalCallerDisconnects: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title: "OAuth renewal saves a rotated token after its caller disconnects",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Holds a runner-owned token endpoint response while its caller disconnects."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalRepeatedCrashes: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title: "OAuth renewal converges after the process dies again during each recovery",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Kills and restarts a runner-owned product process."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
   importDiagnostics: {
     fixtures: "actors",
     managementProfiles: ["owner"],
@@ -1236,6 +1309,15 @@ export const scenarios = {
     targets: {
       "self-host": na("Local dashboard and limited connection grants."),
       cloud: na("Local dashboard and limited connection grants."),
+      local: scheduled,
+    },
+  },
+  localOAuthRenewalInterrupted: {
+    file: "local-oauth-renewal-interruption.spec.ts",
+    title: "Local dashboard keeps an account signed in after the app stops mid-renewal",
+    targets: {
+      "self-host": na("Local dashboard sign-in state."),
+      cloud: na("Local dashboard sign-in state."),
       local: scheduled,
     },
   },

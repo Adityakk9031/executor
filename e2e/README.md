@@ -75,9 +75,11 @@ self-host process reads that explicit artifact instead of rebuilding the same
 trusted runtime. Rebuild with `e2e:prepare` after source changes; scenario data
 and processes remain isolated. Product listeners use an OS-assigned port.
 
-Local restart scenarios can advance persisted wall time while their server is
-stopped through the authenticated runner control API. A runner-owned Node preload
-sets wall time for both source and installed CLI processes. It is never packaged.
+Local and self-host restart scenarios can advance persisted wall time while their
+server is stopped through the authenticated runner control API. A runner-owned
+preload, loaded by Node and Bun, sets wall time for source and installed CLI
+processes. It is never packaged. The control API's `kill` ends the product process
+group with SIGKILL, running none of its shutdown, to model a crash.
 Sleep timers and duration measurements stay real. This tests
 minute-based scheduling without adding a minute of sleep to each scenario.
 
@@ -233,6 +235,12 @@ that image, replaces it with `EXECUTOR_E2E_DOCKER_IMAGE`, and checks retained
 login, encrypted credentials, app data, frontend availability and execution. It
 reads the previous build version from the image and checks the new version after
 replacement.
+
+The same config runs `docker-oauth-renewal.spec.ts` against the image. It shares the
+runner's network so the container reaches a loopback token endpoint that rotates
+refresh tokens. A slow renewal holds its claim while other calls wait, a renewal
+survives its caller disconnecting, and `docker kill` mid-renewal followed by an
+immediate `docker start` recovers the grant within an execute deadline.
 
 | Command                 | Target                                                          | Current coverage                                              |
 | ----------------------- | --------------------------------------------------------------- | ------------------------------------------------------------- |

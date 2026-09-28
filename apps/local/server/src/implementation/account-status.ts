@@ -21,9 +21,9 @@ export const accountSignIn =
         .orm("4.0.2")
         .findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) });
       if (row === null || row.status === "reconnect") return { state: "reconnect" } as const;
+      // A grant claimed by a renewal, including one a stopped process abandoned, still carries the
+      // grant it started from; the next live resolve settles it (see notes/oauth.md).
       const now = yield* Clock.currentTimeMillis;
-      if (!row.status.startsWith("ready_") && now - row.updatedAt.getTime() > 60_000)
-        return { state: "reconnect" } as const;
       const encrypted = yield* credentials.decrypt(account.id, Redacted.make(row.encrypted));
       const grant = yield* Schema.decodeUnknownEffect(OAuthGrant)(Redacted.value(encrypted));
       const reconnectAt =

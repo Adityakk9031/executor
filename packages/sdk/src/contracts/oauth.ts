@@ -598,12 +598,24 @@ export type OAuthCompletionFailed = typeof OAuthCompletionFailed.Type;
 export const OAuthReconnectRequired = UserFacingError.define({
   tag: "OAuthReconnectRequired",
   status: 409,
-  fields: { account: AccountId, cause: Schema.optional(OAuthFailureCause) },
-  presentation: ({ cause }) =>
+  fields: {
+    account: AccountId,
+    /**
+     * `renewal_interrupted`: an earlier renewal stopped with its process before saving a result,
+     * and the service refused the saved refresh token when it was retried, most likely because
+     * the lost renewal had already replaced it.
+     */
+    reason: Schema.optional(Schema.Literals(["renewal_interrupted"])),
+    cause: Schema.optional(OAuthFailureCause),
+  },
+  presentation: ({ reason, cause }) =>
     withCause(
       {
         title: "An account needs to reconnect",
-        description: "The saved sign-in can no longer be used for this account.",
+        description:
+          reason === "renewal_interrupted"
+            ? "Executor stopped while renewing this account’s access, before it could save the result. The service no longer accepts the saved sign-in, most likely because that renewal had already replaced it."
+            : "The saved sign-in can no longer be used for this account.",
         recovery: {
           action: "Open Accounts and reconnect the affected account, then return to Tools.",
           instructions:
