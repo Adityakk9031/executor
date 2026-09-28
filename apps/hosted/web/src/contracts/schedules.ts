@@ -6,7 +6,7 @@ import type { AppId, ProfileId, ScheduleSettings } from "@executor-js/sdk";
 import { Data, Effect } from "effect";
 import { Atom } from "effect/unstable/reactivity";
 import { acknowledge, upsert } from "@executor-js/ui/contracts/mutations";
-import { pollingQuery } from "@executor-js/ui/contracts/polling";
+import { pollingQuery, runningSchedules, steadyPolling } from "@executor-js/ui/contracts/polling";
 import type { ApprovalListItem } from "@executor-js/ui/contracts/schedules";
 import { HostedClient } from "./api.ts";
 import { OrganizationReference } from "@executor-js/hosted-server/organization";
@@ -29,7 +29,9 @@ const settings = Atom.family((key: AppKey) =>
     query: { profile: key.profile },
   }).pipe(Atom.refreshOnWindowFocus, protectedQuery),
 );
-const polledSettings = Atom.family((key: AppKey) => pollingQuery(settings(key)));
+const polledSettings = Atom.family((key: AppKey) =>
+  pollingQuery(settings(key), { active: runningSchedules }),
+);
 const definitions = Atom.family((key: AppKey) =>
   HostedClient.query("schedules", "definitions", {
     params: key,
@@ -89,7 +91,8 @@ const runsSource = Atom.family((organization: OrganizationReference) =>
   }).pipe(Atom.refreshOnWindowFocus, protectedQuery),
 );
 const runsQuery = Atom.family((organization: OrganizationReference) =>
-  pollingQuery(runsSource(organization)),
+  // Approval requests expire, and this queue exists to receive them.
+  pollingQuery(runsSource(organization), steadyPolling),
 );
 /** Join safe run metadata with app names; keep either read failure visible. */
 export const pendingApprovalsAtom = Atom.family((organization: OrganizationReference) =>

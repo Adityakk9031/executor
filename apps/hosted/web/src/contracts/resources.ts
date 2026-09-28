@@ -10,7 +10,7 @@ import {
   type WebhookId,
 } from "@executor-js/sdk";
 import { acknowledge } from "@executor-js/ui/contracts/mutations";
-import { pollingQuery } from "@executor-js/ui/contracts/polling";
+import { pollingQuery, unsettledRuns, unsettledWebhooks } from "@executor-js/ui/contracts/polling";
 import { HostedClient } from "./api.ts";
 import type { OrganizationReference } from "@executor-js/hosted-server/organization";
 import { protectedQuery } from "./protected-query.ts";
@@ -66,6 +66,7 @@ const runs = Atom.family((key: PageKey) =>
         items: page.items.filter((run) => run.profile === key.target.profile),
       })),
     ),
+    { active: unsettledRuns },
   ),
 );
 const starts = Atom.family((start: StartKey) => {
@@ -157,6 +158,7 @@ const hooks = Atom.family((key: Target) =>
       hooksSource(key),
       AsyncResult.map((rows) => rows.filter((hook) => (hook.profile ?? undefined) === key.profile)),
     ),
+    { active: unsettledWebhooks },
   ),
 );
 const reconcile = Atom.family((key: HookKey) =>

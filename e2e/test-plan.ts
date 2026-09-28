@@ -402,6 +402,8 @@ export const scenarios = {
     fixtures: "actors",
     file: "empty-states.spec.ts",
     title: "Empty states guide first use and recover from filters",
+    // Account searches filter the provisioned Executor account.
+    managementProfiles: ["owner"],
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -1320,6 +1322,16 @@ export const scenarios = {
       "self-host": scheduled,
       cloud: scheduled,
       local: na("Hosted browser sign-in and callback recovery."),
+    },
+  },
+  dashboardRequestVolume: {
+    fixtures: "actors",
+    file: "dashboard-request-volume.spec.ts",
+    title: "App tabs reconcile shared reads periodically only while the page is visible",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local streams its overview; this bound covers hosted organization reads."),
     },
   },
   queryRefresh: {

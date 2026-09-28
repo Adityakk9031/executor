@@ -3,7 +3,7 @@ import { Data, Effect } from "effect";
 import { Atom } from "effect/unstable/reactivity";
 import type { AppId, ProfileId, ProfileInputs, Profile } from "@executor-js/sdk";
 import { acknowledge, upsert } from "@executor-js/ui/contracts/mutations";
-import { pollingQuery } from "@executor-js/ui/contracts/polling";
+import { pollingQuery, steadyPolling } from "@executor-js/ui/contracts/polling";
 import { DashboardClient, overviewAtom } from "./api.ts";
 import { acknowledgedQuery } from "@executor-js/ui/contracts/mutations";
 class AppKey extends Data.Class<{ readonly app: AppId }> {}
@@ -14,7 +14,7 @@ const source = Atom.family((key: AppKey) =>
     acknowledgedQuery,
   ),
 );
-const query = Atom.family((key: AppKey) => pollingQuery(source(key)));
+const query = Atom.family((key: AppKey) => pollingQuery(source(key), steadyPolling));
 /** Shared per-app metadata for the picker and setup form. */
 export const profilesAtom = (key: { app: AppId }) => query(new AppKey({ app: key.app }));
 const acknowledgeProfile = (get: Atom.FnContext, key: AppKey, saved: Profile) => {
@@ -84,7 +84,7 @@ export const accountSelectionAtom = (key: ConstructorParameters<typeof Selection
 const hooksSource = Atom.family((key: Target) =>
   DashboardClient.query("profiles", "webhooks", { params: key }).pipe(Atom.refreshOnWindowFocus),
 );
-const hooks = Atom.family((key: Target) => pollingQuery(hooksSource(key)));
+const hooks = Atom.family((key: Target) => pollingQuery(hooksSource(key), steadyPolling));
 /** Lifecycle metadata never includes signing secrets. */
 export const profileWebhooksAtom = (key: ConstructorParameters<typeof Target>[0]) =>
   hooks(new Target(key));

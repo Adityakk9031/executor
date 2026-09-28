@@ -1,5 +1,5 @@
 /** Sharing state and mutations are keyed by organization and resource, with confirmed updates. */
-import { pollingQuery } from "@executor-js/ui/contracts/polling";
+import { pollingQuery, whileLoaded } from "@executor-js/ui/contracts/polling";
 import { Data, Effect } from "effect";
 import { Atom, AsyncResult } from "effect/unstable/reactivity";
 import type { AccountId, AppId, Profile } from "@executor-js/sdk";
@@ -32,7 +32,11 @@ const directory = Atom.family((key: DirectoryKey) =>
   HostedClient.query("resourceAccess", "directory", {
     params: { organization: key.organization },
     query: { view: key.view },
-  }).pipe(Atom.refreshOnWindowFocus, pollingQuery, protectedQuery),
+  }).pipe(
+    Atom.refreshOnWindowFocus,
+    (source) => pollingQuery(source, { active: whileLoaded(({ pendingApp }) => pendingApp) }),
+    protectedQuery,
+  ),
 );
 const appAccess = Atom.family((key: AppKey) =>
   HostedClient.query("resourceAccess", "app", { params: key }).pipe(

@@ -5,7 +5,7 @@ import type { AppId, ProfileId, ScheduleSettings } from "@executor-js/sdk";
 import { Data, Effect } from "effect";
 import { Atom } from "effect/unstable/reactivity";
 import { acknowledge, acknowledgedQuery, upsert } from "@executor-js/ui/contracts/mutations";
-import { pollingQuery } from "@executor-js/ui/contracts/polling";
+import { pollingQuery, steadyPolling } from "@executor-js/ui/contracts/polling";
 import type { ApprovalListItem } from "@executor-js/ui/contracts/schedules";
 import { DashboardClient, overviewAtom } from "./api.ts";
 
@@ -24,7 +24,7 @@ const settings = Atom.family((key: AppKey) =>
     query: { profile: key.profile },
   }).pipe(Atom.refreshOnWindowFocus, acknowledgedQuery),
 );
-const polledSettings = Atom.family((key: AppKey) => pollingQuery(settings(key)));
+const polledSettings = Atom.family((key: AppKey) => pollingQuery(settings(key), steadyPolling));
 const definitions = Atom.family((key: AppKey) =>
   DashboardClient.query("schedules", "definitions", {
     params: key,
@@ -69,7 +69,7 @@ const runsSource = DashboardClient.query("schedules", "runs", { query: { pending
   Atom.refreshOnWindowFocus,
   acknowledgedQuery,
 );
-const runsQuery = pollingQuery(runsSource);
+const runsQuery = pollingQuery(runsSource, steadyPolling);
 /** Join safe run metadata with app names; keep either read failure visible. */
 export const pendingApprovalsAtom = DashboardClient.runtime.atom((get) =>
   Effect.gen(function* () {

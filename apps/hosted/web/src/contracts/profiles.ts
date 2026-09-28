@@ -5,7 +5,11 @@ import { Atom } from "effect/unstable/reactivity";
 import type { AppId, ProfileId, ProfileInputs, Profile } from "@executor-js/sdk";
 import type { OrganizationReference } from "@executor-js/hosted-server/organization";
 import { acknowledge, upsert, invalidate } from "@executor-js/ui/contracts/mutations";
-import { pollingQuery } from "@executor-js/ui/contracts/polling";
+import {
+  pollingQuery,
+  unsettledProfiles,
+  unsettledWebhooks,
+} from "@executor-js/ui/contracts/polling";
 import { HostedClient } from "./api.ts";
 import { protectedQuery } from "./protected-query.ts";
 import { acknowledgeResourceProfile } from "./resource-access.ts";
@@ -24,7 +28,9 @@ const source = Atom.family((key: AppKey) =>
     protectedQuery,
   ),
 );
-const query = Atom.family((key: AppKey) => pollingQuery(source(key)));
+const query = Atom.family((key: AppKey) =>
+  pollingQuery(source(key), { active: unsettledProfiles }),
+);
 /** Shared per-app metadata for the picker and setup form. */
 export const profilesAtom = (key: { organization: OrganizationReference; app: AppId }) =>
   query(new AppKey({ organization: key.organization, app: key.app }));
@@ -114,7 +120,9 @@ const hooksSource = Atom.family((key: Target) =>
     query: { profile: key.profile },
   }).pipe(Atom.refreshOnWindowFocus),
 );
-const hooks = Atom.family((key: Target) => pollingQuery(hooksSource(key)));
+const hooks = Atom.family((key: Target) =>
+  pollingQuery(hooksSource(key), { active: unsettledWebhooks }),
+);
 /** Lifecycle metadata never includes signing secrets. */
 export const profileWebhooksAtom = (key: ConstructorParameters<typeof Target>[0]) =>
   hooks(new Target(key));

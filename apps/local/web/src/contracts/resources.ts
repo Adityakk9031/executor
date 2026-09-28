@@ -10,7 +10,7 @@ import {
   type WebhookId,
 } from "@executor-js/sdk";
 import { acknowledge, acknowledgedQuery } from "@executor-js/ui/contracts/mutations";
-import { pollingQuery } from "@executor-js/ui/contracts/polling";
+import { pollingQuery, steadyPolling } from "@executor-js/ui/contracts/polling";
 import { DashboardClient } from "./api.ts";
 
 class Target extends Data.Class<{
@@ -62,6 +62,7 @@ const runs = Atom.family((key: PageKey) =>
         items: page.items.filter((run) => run.profile === key.target.profile),
       })),
     ),
+    steadyPolling,
   ),
 );
 const starts = Atom.family((start: StartKey) => {
@@ -145,6 +146,7 @@ const hooks = Atom.family((key: Target) =>
       hooksSource(key),
       AsyncResult.map((rows) => rows.filter((hook) => (hook.profile ?? undefined) === key.profile)),
     ),
+    steadyPolling,
   ),
 );
 const reconcile = Atom.family((key: HookKey) =>

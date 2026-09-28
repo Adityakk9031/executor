@@ -9,7 +9,12 @@ import { Browser } from "../support/browser.ts";
 import { waitForAppUrl } from "../support/app-pages.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
-import { holdQuery, refreshVisiblePage } from "../support/query-transition.ts";
+import {
+  advanceToReconciliation,
+  holdQuery,
+  installBrowserClock,
+  refreshVisiblePage,
+} from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
 const Setup = Schema.Struct({
   id: Schema.String,
@@ -416,6 +421,7 @@ layer(HostedLive, { excludeTestServices: true })("Profile picker", (it) => {
       Effect.gen(function* () {
         const { actors, browser, files, path, url, first, second } = yield* seededProfileFixture;
         yield* browser.login(actors.member);
+        yield* installBrowserClock;
         yield* browser.use("Open the personal profile before deployment", (page) =>
           page.goto(`${url}?view=tools&profile=${first.id}`),
         );
@@ -445,6 +451,8 @@ layer(HostedLive, { excludeTestServices: true })("Profile picker", (it) => {
           ),
         });
         expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+        // Both open tabs follow the deployment at their next idle reconciliation.
+        yield* advanceToReconciliation;
         yield* browser.use("The personal profile follows the new deployment", (page) =>
           page.getByRole("button", { name: "queries.version", exact: true }).first().waitFor(),
         );
