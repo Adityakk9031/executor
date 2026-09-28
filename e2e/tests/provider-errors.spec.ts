@@ -166,7 +166,10 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
               );
             });
           if (kind !== "openapi") {
-            yield* upstream.configure({ status: 401 });
+            // A slow rejection, as a cold app start or a distant service makes it. Executor
+            // remembers slow listing failures for MCP discovery, but a caller that waits for
+            // the listing, such as the dashboard, must see the recovered service on its next read.
+            yield* upstream.configure({ status: 401, delayMs: 1_500 });
             yield* assertFailure(yield* catalog(), "unauthorized", 401);
             // Lazy MCP sources do not discover tools when listing unrelated webhooks.
             const setup = yield* api.request(

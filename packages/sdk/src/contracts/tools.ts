@@ -48,7 +48,8 @@ export interface ToolListOptions {
   /**
    * Report a listing that another request started at least this long ago, and that is still
    * running, as `ToolListingTimedOut` at once instead of waiting for it. A caller that gives up
-   * after this long, such as MCP discovery, would not get it in time. Without it the read waits.
+   * after this long, such as MCP discovery, would not get it in time. Such a caller is also told
+   * at once about a remembered slow failure. Without it the read waits for a live evaluation.
    */
   readonly reportRunningAfterMillis?: number;
 }

@@ -181,9 +181,12 @@ export const organizationDefaults = (
           .orm("4.0.2")
           .transaction(
             Effect.gen(function* () {
+              // Only metadata changes, so take the non-key lock. It still serializes member
+              // setup, but not a role change whose trigger checks the organization key; with
+              // `for update` that check and this setup's member lock deadlocked.
               const rows =
                 yield* sql`select coalesce(metadata::jsonb -> 'executorKeyAccounts', '{}'::jsonb) as accounts
-            from "organization" where id = ${organization} for update`.pipe(
+            from "organization" where id = ${organization} for no key update`.pipe(
                   Effect.mapError(() => new StorageError()),
                 );
               if (rows.length !== 1) return;

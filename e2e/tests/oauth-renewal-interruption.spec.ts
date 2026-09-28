@@ -54,6 +54,10 @@ const executeDeadline = 30_000;
 const slowResponse = 27_000;
 /** Longer than an unconfirmed claim is honoured; advanced only while the product is stopped. */
 const pastLease = 21_000;
+/** Seconds a recovered token lasts: beyond the host's 30-second renewal window for 90 s. */
+const recoveredLifetime = 120;
+/** Leaves the recovered token 20 s, inside the renewal window but not yet expired. */
+const intoRenewalWindow = 100_000;
 
 /**
  * Start the product again after a kill, as a supervisor's restart policy does. The source host's
@@ -447,7 +451,12 @@ const repeatedCrashes = Effect.gen(function* () {
     reason: "service_unavailable",
     cause: { stage: "refresh", status: 503 },
   });
-  // No kill or outage consumed the saved refresh token, so the grant recovers.
+  // No kill or outage consumed the saved refresh token, so the grant recovers. Nothing holds
+  // this renewal, so a caller may read the grant only after it was saved. The recovered token
+  // outlasts the host's renewal window, so such a caller uses it as the waiting callers do; a
+  // token inside the window would rightly be renewed again. Waiting callers that reuse a renewal
+  // whose token is still inside the window are covered by the held renewals above.
+  yield* issuer.configure({ refreshedExpiresIn: recoveredLifetime });
   const after = yield* metrics;
   const calls = yield* concurrentReads(context);
   const tokens = yield* Effect.forEach(
@@ -457,6 +466,11 @@ const repeatedCrashes = Effect.gen(function* () {
   expect(new Set(tokens).size, context).toBe(1);
   expect((yield* metrics).refreshesIssued - after.refreshesIssued, context).toBe(1);
   expect(after.refreshesIssued, context).toBe(start.refreshesIssued);
+  // Bring the recovered token inside the renewal window, so the next call renews it.
+  yield* serverControl("stop");
+  yield* serverControl("clock/advance", 200, { milliseconds: intoRenewalWindow });
+  yield* serverControl("start");
+  yield* issuer.configure({ refreshedExpiresIn: null });
   yield* newestTokenSaved(context, tokens[0] ?? null);
 });
 

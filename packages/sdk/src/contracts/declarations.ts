@@ -32,10 +32,12 @@ export const declarationFreshness = {
  * interruption.
  *
  * A slow failure is remembered for `freshMillis` after it failed: a listing that timed out or was
- * stopped after `loadMillis`, or one that failed after at least `slowFailureMillis`. Reads in that
- * window report it at once while one background evaluation retries; a success replaces it. A
- * faster failure costs a read no more than reporting a remembered one, so it is evaluated again
- * and a recovered upstream shows on the next read.
+ * stopped after `loadMillis`, or one that failed after at least `slowFailureMillis`. Reads with a
+ * wait bound in that window, such as MCP discovery, report it at once while one background
+ * evaluation retries; a success replaces it. Reads without a wait bound, such as the dashboard,
+ * evaluate again, so a recovered upstream shows on their next read however slowly the remembered
+ * failure arrived. A faster failure costs a read no more than reporting a remembered one, so it is
+ * never remembered.
  */
 export interface ToolListingPolicy {
   readonly freshMillis: number;

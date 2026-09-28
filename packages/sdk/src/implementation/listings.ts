@@ -77,8 +77,9 @@ type Outcome = Listed | Failed | Unkept | Stopped;
  * so a reader that stops waiting, such as MCP discovery giving up on a stalled app, leaves it
  * running until `loadMillis`, and its listing is kept when it finishes. A reader that passes
  * `reportRunningAfterMillis` is told at once about an evaluation that has run longer than that,
- * or that such a reader already gave up on; other readers wait for it. A slow failure is reported at once for `freshMillis` after it failed,
- * while one background evaluation at a time retries. Kept listings are shared by reference and
+ * or that such a reader already gave up on; other readers wait for it. A slow failure is reported
+ * at once to such a reader for `freshMillis` after it failed, while one background evaluation at a
+ * time retries; other readers evaluate again, so they never see a failure a live read would not. Kept listings are shared by reference and
  * never mutated, so consumers may derive projections that live exactly as long as the listing.
  */
 export const makeListings = (options: {
@@ -276,7 +277,14 @@ export const makeListings = (options: {
             return kept.value.listing;
           }
         }
-        if (kept?.value instanceof Failed && now - kept.value.at < policy.freshMillis) {
+        // A remembered failure spares a reader with a wait bound, such as MCP discovery, from
+        // waiting on the evaluation again. A reader prepared to wait, such as the dashboard,
+        // joins or starts a live evaluation instead, so a recovered upstream shows at once.
+        if (
+          kept?.value instanceof Failed &&
+          now - kept.value.at < policy.freshMillis &&
+          read.reportRunningAfterMillis !== undefined
+        ) {
           yield* authorize;
           yield* Effect.annotateCurrentSpan("executor.declarations.cache", "failed");
           yield* refresh;
