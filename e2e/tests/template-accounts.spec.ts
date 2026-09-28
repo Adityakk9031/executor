@@ -90,7 +90,12 @@ layer(HostedLive, { excludeTestServices: true })("Template accounts", (it) => {
           expect(profile.accounts.service).toEqual(accounts);
           const tools = yield* catalog();
           expect(tools.status, JSON.stringify(tools.body)).toBe(200);
-          const tool = kind === "graphql" ? "queries.query_identity" : "queries.identity";
+          const tool =
+            kind === "graphql"
+              ? "queries.query_identity"
+              : kind === "openapi"
+                ? "queries.identity.getIdentity"
+                : "queries.identity";
           expect((yield* body(Tools, tools)).items.map((item) => item.name)).toEqual([tool]);
           if (kind === "mcp") {
             const descriptions = JSON.stringify((yield* body(Tools, tools)).items);

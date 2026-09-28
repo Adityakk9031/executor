@@ -218,7 +218,7 @@ layer(HostedLive, { excludeTestServices: true })("PAT MCP", (it) => {
             const admin = yield* create(actors.admin);
             const adminClient = yield* mcp.connect(admin.key, "pat-role-change", { organization });
             const { profile } = yield* managementApp(actors.admin);
-            const inspect = `return await tools.executor.profiles[${JSON.stringify(profile.id)}].queries.appManagement_source(${JSON.stringify({ path: { organization, app: app.id } })})`;
+            const inspect = `return await tools.executor.profiles[${JSON.stringify(profile.id)}].queries.appManagement.source(${JSON.stringify({ path: { organization, app: app.id } })})`;
             const before = yield* adminClient.use(
               "An admin PAT can inspect app source",
               (client, signal) =>

@@ -45,7 +45,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor organization default"
           yield* api.request(
             actors.owner,
             "GET",
-            `${path}/tools/queries.appManagement_list?profile=${profile.id}`,
+            `${path}/tools/queries.appManagement.list?profile=${profile.id}`,
           ),
         );
         expect(tool.inputSchema.required ?? []).not.toContain("path");
@@ -54,7 +54,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor organization default"
           tool.inputSchema.properties.path.properties.organization,
         ).pipe(Effect.orElseSucceed(() => undefined));
         expect(organization?.default).toBe(actors.organization.id);
-        expect(organization?.description).toContain("context_get");
+        expect(organization?.description).toContain("context.get");
 
         yield* browser.login(actors.owner);
         const grant = yield* oauth.authorize;
@@ -70,7 +70,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor organization default"
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].queries.appManagement_list({});`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].queries.appManagement.list({});`,
                 },
               },
               undefined,

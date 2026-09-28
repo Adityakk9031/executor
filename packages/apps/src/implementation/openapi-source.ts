@@ -30,6 +30,11 @@ const invoke = <A>(work: () => Promise<A>) =>
 const invalid = () => new OpenapiError({ reason: "invalid_definition" });
 
 const pageSize = 64;
+/**
+ * Stored revision format. Bump it whenever compilation changes stored operations, such as their
+ * names, so a revision cached by an earlier framework is never served.
+ */
+const format = "openapi-v2";
 
 /** SHA-256 of a string, as lowercase hex. */
 const sha256 = (text: string) =>
@@ -108,6 +113,10 @@ export interface OpenapiSourceOptions extends Omit<
   readonly baseUrl?: string;
   readonly freshFor?: Duration.Input;
   readonly staleFor?: Duration.Input;
+  /**
+   * Query or mutation overrides keyed by the document's operationId. An operation without an
+   * operationId is keyed by its generated name without the kind, such as `users.getUsers`.
+   */
   readonly kinds?: OperationKinds;
   readonly fallbackSecurity?: OpenapiOperation["request"]["security"];
   readonly patches?: readonly {
@@ -232,9 +241,9 @@ export const liveOpenapiOperations = (
   );
   // Each source instance memoizes only the source identity. Persisted data remains revisioned.
   const sourceId = Effect.runSync(identity);
-  const pointer = sourceId.pipe(Effect.map((id) => ["openapi-v1", id, "current"]));
+  const pointer = sourceId.pipe(Effect.map((id) => [format, id, "current"]));
   const partKey = (revision: string, kind: string, name: string | number): JsonValue => [
-    "openapi-v1",
+    format,
     revision,
     kind,
     name,
@@ -260,7 +269,7 @@ export const liveOpenapiOperations = (
       );
       // Revisions are content-addressed: refreshing an unchanged document rewrites the
       // same parts and renews their retention instead of storing another copy.
-      const revision = yield* sha256(JSON.stringify([yield* sourceId, document]));
+      const revision = yield* sha256(JSON.stringify([format, yield* sourceId, document]));
       const names = compiled.operations.map((operation) => operation.name);
       const parts: { kind: string; name: string | number; value: JsonValue }[] = [
         ...compiled.operations.map((operation) => ({
@@ -411,8 +420,17 @@ export const liveOpenapiOperations = (
       Object.keys(values ?? {}).sort(),
     ]),
   );
+  const kindOf = (op: OpenapiOperation) => {
+    const key = op.operationId ?? op.name;
+    const kinds = options.kinds ?? {};
+    return Object.hasOwn(kinds, key)
+      ? (kinds[key] ?? "mutation")
+      : ["GET", "HEAD", "OPTIONS"].includes(op.method)
+        ? "query"
+        : "mutation";
+  };
   const qualified = (op: OpenapiOperation) =>
-    `${(options.kinds?.[op.name] ?? (["GET", "HEAD", "OPTIONS"].includes(op.method) ? "query" : "mutation")) === "query" ? "queries" : "mutations"}.${op.name}`;
+    `${kindOf(op) === "query" ? "queries" : "mutations"}.${op.name}`;
   const operationsFor = (manifest: typeof Manifest.Type) =>
     Effect.gen(function* () {
       const names = yield* namesFor(manifest);
@@ -488,7 +506,9 @@ export const liveOpenapiOperations = (
               { ...options, operations: [operation], definitions },
               new Map([[operation.name, schemas]]),
             );
-            const declarations = protocolOperations(tools, options.kinds);
+            const declarations = protocolOperations(tools, {
+              [operation.name]: kindOf(operation),
+            });
             const declaration = declarations.queries[raw] ?? declarations.mutations[raw];
             return { value: declaration === undefined ? undefined : nativeOperation(declaration) };
           }),

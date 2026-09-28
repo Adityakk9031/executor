@@ -44,7 +44,10 @@ export const OpenapiRequestBody = Schema.Struct({
 
 /** Credential-free operation data emitted by the OpenAPI importer. */
 export const OpenapiOperation = Schema.Struct({
+  /** The tool name after `queries.` or `mutations.`, grouped as `<group>.<leaf>`. */
   name: Schema.NonEmptyString,
+  /** The document's operationId, when it declares one. `kinds` overrides are keyed by it. */
+  operationId: Schema.optionalKey(Schema.String),
   description: Schema.String,
   method: Schema.Literals(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]),
   path: Schema.String,

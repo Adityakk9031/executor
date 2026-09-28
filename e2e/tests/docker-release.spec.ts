@@ -1148,7 +1148,7 @@ export default defineApp({ accounts: {} }, async () => ({
         );
       const source = yield* execute(
         "read app source through the built-in Executor app",
-        `return await tools.executor.profiles[${JSON.stringify(executorProfile.id)}].queries.appManagement_source(${JSON.stringify({ path: { organization: organization.id, app: app.id } })})`,
+        `return await tools.executor.profiles[${JSON.stringify(executorProfile.id)}].queries.appManagement.source(${JSON.stringify({ path: { organization: organization.id, app: app.id } })})`,
       );
       expect(
         source,

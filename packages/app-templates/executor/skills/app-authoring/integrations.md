@@ -100,6 +100,13 @@ settings the definition cannot be trusted to decide:
   [accounts.md](accounts.md#oauth-sign-in), preferring `discover`.
 - Optional `fallbackSecurity` when the definition declares no security, and
   `patches` for mistakes in a definition you do not control.
+- Optional `kinds`, keyed by operationId, when an operation's HTTP method
+  misclassifies it as a query or mutation.
+
+Tools are grouped by the operation's first tag, or its first path segment:
+operationId `listProjects` tagged `projects` becomes
+`queries.projects.listProjects`, and `accounts_connect` tagged `accounts`
+becomes `mutations.accounts.connect`. Discover the exact names with search.
 
 Operations the helper cannot represent, and operations whose security needs
 another method, are left out rather than failing the app. Public APIs need no

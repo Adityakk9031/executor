@@ -51,7 +51,7 @@ export interface HostedApiDocument extends Omit<OpenApi.OpenAPISpec, "components
 
 /** Tool schemas keep parameter schemas, not parameter descriptions, so this rides on the schema. */
 const organizationDescription =
-  "Organization ID or slug. Call context_get (GET /api/context) to read the organization for the current credential.";
+  "Organization ID or slug. Call context.get (GET /api/context) to read the organization for the current credential.";
 
 /** Generate the complete product document; security follows the middleware that serves each endpoint. */
 export const hostedApiDocument = <Id extends string, Groups extends HttpApiGroup.Constraint>(

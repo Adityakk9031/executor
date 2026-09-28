@@ -232,7 +232,7 @@ layer(HostedLive, { excludeTestServices: true })("Personal access tokens", (it) 
               anonymous,
               "POST",
               `${prefix}/apps/${executor.id}/tools/call`,
-              { tool: "queries.context_get", profile: profile.id, input: {} },
+              { tool: "queries.context.get", profile: profile.id, input: {} },
               headers(owner.key),
             );
             expect(context.status).toBe(200);

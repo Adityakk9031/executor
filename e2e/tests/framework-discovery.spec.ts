@@ -43,7 +43,7 @@ layer(HostedLive, { excludeTestServices: true })("Framework discovery", (it) => 
         const [discovered, imported, current, found, guide] = yield* Effect.all(
           [
             execute('return await tools.search({query: "framework", limit: 20});'),
-            execute('return await tools.search({query: "context_get", limit: 1});').pipe(
+            execute('return await tools.search({query: "context.get", limit: 1});').pipe(
               Effect.flatMap(
                 Schema.decodeUnknownEffect(
                   Schema.Struct({
@@ -52,7 +52,7 @@ layer(HostedLive, { excludeTestServices: true })("Framework discovery", (it) => 
                 ),
               ),
             ),
-            execute(`return await ${queries}.context_get({});`).pipe(
+            execute(`return await ${queries}.context.get({});`).pipe(
               Effect.flatMap(
                 Schema.decodeUnknownEffect(Schema.Struct({ organization: Schema.String })),
               ),

@@ -119,7 +119,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].queries.fail({query:{mode:${JSON.stringify(mode)}}});`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].queries.failures.fail({query:{mode:${JSON.stringify(mode)}}});`,
                 },
               },
               undefined,
@@ -213,7 +213,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].queries.fail({query:{mode:{hidden:${JSON.stringify(openapiSecretMarker)}}}});`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].queries.failures.fail({query:{mode:{hidden:${JSON.stringify(openapiSecretMarker)}}}});`,
                 },
               },
               undefined,
@@ -237,7 +237,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `try { await tools[${JSON.stringify(app.slug)}].queries.fail({query:{mode:"known"}}); } catch(error) { return JSON.parse(error.message); }`,
+                  code: `try { await tools[${JSON.stringify(app.slug)}].queries.failures.fail({query:{mode:"known"}}); } catch(error) { return JSON.parse(error.message); }`,
                 },
               },
               undefined,
@@ -283,7 +283,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
                 {
                   name: "execute",
                   arguments: {
-                    code: `return await tools[${JSON.stringify(app.slug)}].mutations.wire(${JSON.stringify(input)});`,
+                    code: `return await tools[${JSON.stringify(app.slug)}].mutations.wire.postWire(${JSON.stringify(input)});`,
                   },
                 },
                 undefined,
@@ -362,7 +362,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               actors.owner,
               "POST",
               `${prefix}/${app.id}/tools/call`,
-              { tool: "queries.fail", input: { query: { mode } } },
+              { tool: "queries.failures.fail", input: { query: { mode } } },
             );
             expect(httpResult.body).toMatchObject({
               _tag: "AppProviderFailed",

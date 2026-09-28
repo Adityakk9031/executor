@@ -133,7 +133,12 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
           }
           const affected = accounts[1];
           if (affected === undefined) return yield* Effect.die("Missing second account");
-          const tool = kind === "graphql" ? "queries.query_identity" : "queries.identity";
+          const tool =
+            kind === "graphql"
+              ? "queries.query_identity"
+              : kind === "openapi"
+                ? "queries.identity.getIdentity"
+                : "queries.identity";
           const catalog = () =>
             api.request(actors.owner, "GET", `${path}/tools?profile=${profile.id}`);
           // The dashboard's index evaluates on every read.

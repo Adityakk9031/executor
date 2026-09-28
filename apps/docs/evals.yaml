@@ -113,7 +113,7 @@ questions:
   - id: deploy-an-app
     question: How do I deploy an app?
     expected:
-      - call the apps_deploy mutation through the MCP endpoint
+      - call the apps.deploy mutation through the MCP endpoint
       - pass the files as path and content pairs
       - there is no executor deploy command
       - the app activates only after the build succeeds

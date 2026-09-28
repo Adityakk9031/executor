@@ -144,7 +144,7 @@ layer(TestLive, { excludeTestServices: true })("Local skills", (it) => {
             client.callTool(
               {
                 name: "execute",
-                arguments: { code: 'return await tools.search({ query: "appProfiles_create" });' },
+                arguments: { code: 'return await tools.search({ query: "appProfiles.create" });' },
               },
               undefined,
               { signal },
@@ -158,7 +158,7 @@ layer(TestLive, { excludeTestServices: true })("Local skills", (it) => {
             value: {
               items: expect.arrayContaining([
                 expect.objectContaining({
-                  path: expect.stringContaining("appProfiles_create"),
+                  path: expect.stringContaining("appProfiles.create"),
                   signature: expect.stringContaining("idempotencyKey"),
                 }),
               ]),
@@ -174,11 +174,11 @@ layer(TestLive, { excludeTestServices: true })("Local skills", (it) => {
                 arguments: {
                   code: `const executor = ${referenceTools};
 const path = { app: ${JSON.stringify(app.id)} };
-const created = await executor.mutations.appProfiles_create({ path, body: { owner: "local", subject: "local", accounts: {}, idempotencyKey: "management-docs-profile" } });
+const created = await executor.mutations.appProfiles.create({ path, body: { owner: "local", subject: "local", accounts: {}, idempotencyKey: "management-docs-profile" } });
 const target = { ...path, profile: created.id };
-const read = await executor.queries.appProfiles_get({ path: target });
-const updated = await executor.mutations.appProfiles_update({ path: target, body: { expectedRevision: read.revision, accounts: {} } });
-const listed = await executor.queries.appProfiles_list({ path });
+const read = await executor.queries.appProfiles.get({ path: target });
+const updated = await executor.mutations.appProfiles.update({ path: target, body: { expectedRevision: read.revision, accounts: {} } });
+const listed = await executor.queries.appProfiles.list({ path });
 return { sameProfile: created.id === read.id && read.id === updated.id, listed: listed.some((profile) => profile.id === created.id), revision: updated.revision, previousRevision: read.revision };`,
                 },
               },

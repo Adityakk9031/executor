@@ -150,7 +150,7 @@ export default defineApp({ accounts: {} }, async () => ({
                 actors.owner,
                 "POST",
                 `${prefix}/apps/${staleApp.id}/tools/call`,
-                { tool: "queries.listApps", input: { query: { name: "unscoped-name" } } },
+                { tool: "queries.registry.listApps", input: { query: { name: "unscoped-name" } } },
               );
               expect(rest.status).toBeGreaterThanOrEqual(400);
               const restTrace = yield* latestTrace;
@@ -174,7 +174,7 @@ export default defineApp({ accounts: {} }, async () => ({
                     {
                       name: "execute",
                       arguments: {
-                        code: `return await tools[${JSON.stringify(staleApp.slug)}].queries.listApps({query:{name:"unscoped-name"}});`,
+                        code: `return await tools[${JSON.stringify(staleApp.slug)}].queries.registry.listApps({query:{name:"unscoped-name"}});`,
                       },
                     },
                     undefined,

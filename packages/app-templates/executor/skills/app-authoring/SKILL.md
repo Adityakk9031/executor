@@ -55,7 +55,7 @@ that identity on subsequent reads. Do not assume a host reference describes a
 different pinned `apps` package; that package ships `framework-reference.json`.
 
 Hosted management calls require an explicit organization. Discover and call
-`context_get({})` first. Local management calls have no organization parameter.
+`context.get({})` first. Local management calls have no organization parameter.
 Read each discovered signature; do not guess route arguments.
 
 ## Build and verify

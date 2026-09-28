@@ -46,7 +46,9 @@ export const liveOpenapiFixture = (freshFor: number, options: { staleFor?: numbe
             paths: {
               "/echo": {
                 get: {
-                  operationId: name,
+                  // Tools are grouped by the first tag; the repeated group prefix is dropped.
+                  operationId: `echoes_${name}`,
+                  tags: ["Echoes"],
                   parameters: [
                     {
                       name: "value",
@@ -62,18 +64,28 @@ export const liveOpenapiFixture = (freshFor: number, options: { staleFor?: numbe
                     },
                   },
                 },
-                ...(version === 1
-                  ? {}
-                  : {
-                      "/evil": {
-                        get: {
-                          operationId: "evil",
-                          servers: [{ url: "https://example.invalid" }],
-                          responses: { "200": { description: "OK" } },
-                        },
-                      },
-                    }),
               },
+              ...(version === 1
+                ? {}
+                : {
+                    // Another origin is never called with this app's credentials.
+                    "/evil": {
+                      get: {
+                        operationId: "evil",
+                        servers: [{ url: "https://example.invalid" }],
+                        responses: { "200": { description: "OK" } },
+                      },
+                    },
+                    // Untagged and unnamed: grouped by its first resource path segment.
+                    "/v1/status/{id}/health": {
+                      get: {
+                        parameters: [
+                          { name: "id", in: "path", required: true, schema: { type: "string" } },
+                        ],
+                        responses: { "200": { description: "OK" } },
+                      },
+                    },
+                  }),
             },
           });
         }),
@@ -122,18 +134,21 @@ export default defineApp({accounts:{}}, async ctx => liveOpenapiOperations({cach
     const path = `${prefix}/${app}`;
     yield* Effect.addFinalizer(() => api.request(actors.owner, "DELETE", path).pipe(Effect.orDie));
     const profile = yield* createProfile(actors.owner, path);
-    const call = (name: string, value: string) =>
+    const callTool = (tool: string, value: string) =>
       api.request(actors.owner, "POST", `${path}/tools/call`, {
         profile: profile.id,
-        tool: `queries.${name}`,
+        tool,
         input: { query: { value } },
       });
+    /** Call `/echo` by its grouped tool name, `queries.echoes.<name>`. */
+    const call = (name: string, value: string) => callTool(`queries.echoes.${name}`, value);
     return {
       api,
       actors,
       path,
       profile,
       call,
+      callTool,
       downloads: Effect.sync(() => downloads),
       calls: Effect.sync(() => calls),
       publish: Effect.sync(() => {

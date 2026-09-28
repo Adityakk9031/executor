@@ -80,14 +80,14 @@ link and gives you the link; you finish in your browser.
 <CodeGroup>
 
 ```js Hosted
-return await tools.executor.profiles["<management-profile-id>"].mutations.accounts_connect({
+return await tools.executor.profiles["<management-profile-id>"].mutations.accounts.connect({
   path: { organization: "<organization-id>", app: "<app-id>" },
   body: { profile: "<profile-id>", requirement: "vercel" },
 });
 ```
 
 ```js Local
-return await tools.executor.profiles["<management-profile-id>"].mutations.accountConnect_issue({
+return await tools.executor.profiles["<management-profile-id>"].mutations.accountConnect.issue({
   body: { owner: "alice", target: { app: "<app-id>", profile: "<profile-id>", requirement: "vercel" } },
 });
 ```
@@ -95,7 +95,7 @@ return await tools.executor.profiles["<management-profile-id>"].mutations.accoun
 </CodeGroup>
 
 Create a profile first, or use the ID of your existing profile. Hosted uses
-`profiles_create`; local uses `appProfiles_create`. Read their discovered schemas
+`profiles.create`; local uses `appProfiles.create`. Read their discovered schemas
 for the required fields.
 
 Supply either `target`, to fill a specific profile requirement, or `provider`, to save
@@ -104,7 +104,7 @@ an account without selecting it anywhere. Not both.
 Check whether you finished:
 
 ```js
-const connection = await tools.executor.profiles["<management-profile-id>"].queries.accountConnections_get({
+const connection = await tools.executor.profiles["<management-profile-id>"].queries.accountConnections.get({
   path: { connection: "<connection-id>" },
 });
 return connection.state;

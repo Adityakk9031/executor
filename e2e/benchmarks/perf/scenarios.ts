@@ -154,6 +154,9 @@ export const primaryAccount = (entry: OrgReceipt) =>
 
 const org = (o: OrgReceipt) => `/api/organizations/${o.organization.id}`;
 const app = (o: OrgReceipt) => `${org(o)}/apps/${primaryApp(o).id}`;
+/** The emulator's first tool. OpenAPI groups `/ops/list_account_0000` under `ops`. */
+const probeTool = (entry: AppReceipt) =>
+  entry.kind === "openapi" ? "queries.ops.listAccount0000" : "queries.list_account_0000";
 /** Dashboard reads observed in production traffic, parameterised by the dashboard org. */
 const apiRoutes: readonly (readonly [string, string, (o: OrgReceipt) => string])[] = [
   ["inventory", "{org}/inventory", (o) => `${org(o)}/inventory`],
@@ -190,7 +193,7 @@ const apiRoutes: readonly (readonly [string, string, (o: OrgReceipt) => string])
   [
     "app.tool",
     "{app}/tools/{tool}?profile=",
-    (o) => `${app(o)}/tools/queries.list_account_0000?profile=${primaryApp(o).profile}`,
+    (o) => `${app(o)}/tools/${probeTool(primaryApp(o))}?profile=${primaryApp(o).profile}`,
   ],
   ["app.workspace", "{app}/workspace", (o) => `${app(o)}/workspace`],
   ["app.workspace.display", "{app}/workspace/display", (o) => `${app(o)}/workspace/display`],
@@ -440,7 +443,7 @@ const upstreamOf = (value: unknown): number | undefined => {
 };
 
 const toolPath = (entry: AppReceipt) =>
-  `tools[${JSON.stringify(entry.slug)}].profiles[${JSON.stringify(entry.profile)}].queries.list_account_0000`;
+  `tools[${JSON.stringify(entry.slug)}].profiles[${JSON.stringify(entry.profile)}].${probeTool(entry)}`;
 const toolInput = (entry: AppReceipt) =>
   entry.accounts.length > 0
     ? `{ accountId: ${JSON.stringify(entry.accounts[0])}, input: {} }`
@@ -627,7 +630,7 @@ const toolcallScenarios: Scenario[] = [
           `${org(entry)}/apps/${selected.id}/tools/call`,
           {
             profile: selected.profile,
-            tool: "queries.list_account_0000",
+            tool: probeTool(selected),
             input: selected.accounts.length ? { accountId: selected.accounts[0], input: {} } : {},
           },
         );
@@ -897,8 +900,8 @@ const errTool = (target: PerfTarget, name: string) =>
   errApp(target, name).pipe(
     Effect.map((entry) =>
       entry.profile === ""
-        ? `tools[${JSON.stringify(entry.slug)}].queries.list_account_0000`
-        : `tools[${JSON.stringify(entry.slug)}].profiles[${JSON.stringify(entry.profile)}].queries.list_account_0000`,
+        ? `tools[${JSON.stringify(entry.slug)}].${probeTool(entry)}`
+        : `tools[${JSON.stringify(entry.slug)}].profiles[${JSON.stringify(entry.profile)}].${probeTool(entry)}`,
     ),
   );
 

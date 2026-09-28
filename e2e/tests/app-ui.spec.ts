@@ -175,16 +175,16 @@ layer(HostedLive, { excludeTestServices: true })("Private app pages", (it) => {
           }),
         )((yield* Schema.decodeUnknownEffect(Completed)(search.structuredContent)).execution.value);
         expect(discovered.items.map((item) => item.path)).toContain(
-          `${tools}.queries.appUi_location`,
+          `${tools}.queries.appUi.location`,
         );
         expect(discovered.items.map((item) => item.path)).not.toContain(
-          `${tools}.mutations.appUi_authorize`,
+          `${tools}.mutations.appUi.authorize`,
         );
         expect(discovered.items.map((item) => item.path)).not.toContain(
-          `${tools}.queries.viewer_get`,
+          `${tools}.queries.viewer.get`,
         );
         expect(discovered.items.map((item) => item.path)).not.toContain(
-          `${tools}.mutations.appData_subscribe`,
+          `${tools}.mutations.appData.subscribe`,
         );
         const lookup = yield* client.use(
           "Get the canonical app URL using the MCP grant",
@@ -193,7 +193,7 @@ layer(HostedLive, { excludeTestServices: true })("Private app pages", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return await ${tools}.queries.appUi_location({ path: ${JSON.stringify({ organization: actors.organization.id, app: app.id })} });`,
+                  code: `return await ${tools}.queries.appUi.location({ path: ${JSON.stringify({ organization: actors.organization.id, app: app.id })} });`,
                 },
               },
               undefined,
@@ -211,7 +211,7 @@ layer(HostedLive, { excludeTestServices: true })("Private app pages", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return await ${tools}.queries.appUi_location({ path: ${JSON.stringify({ organization: "other-organization", app: app.id })} });`,
+                  code: `return await ${tools}.queries.appUi.location({ path: ${JSON.stringify({ organization: "other-organization", app: app.id })} });`,
                 },
               },
               undefined,

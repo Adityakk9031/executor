@@ -21,10 +21,10 @@ The full Tailwind import includes Preflight, which resets browser button and
 form styles. Importing only `theme.css` and `utilities.css` omits those resets;
 use that split only when you supply the required base styles yourself.
 
-For hosted apps, discover and call `appUi_location` after deployment:
+For hosted apps, discover and call `appUi.location` after deployment:
 
 ```js
-return await tools.executor.profiles["<management-profile-id>"].queries.appUi_location({
+return await tools.executor.profiles["<management-profile-id>"].queries.appUi.location({
   path: { organization: "<approved-organization-id>", app: "<app-id>" },
 });
 ```

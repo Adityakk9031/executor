@@ -107,18 +107,18 @@ instead of reconnecting or changing the provider.
 
 Deploy the source, create a profile, then request a connection for its account requirement.
 The management examples below use the **local** API. For hosted calls, use
-`profiles_create` and `accounts_connect` with `path.organization`, as shown in
+`profiles.create` and `accounts.connect` with `path.organization`, as shown in
 [deploy.md](deploy.md). Hosted calls derive owner and subject from the caller.
 Discover the management profile path with `tools.search` before calling it:
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
-const app = await executor.queries.apps_get({ path: { app: "<vercel-app-id>" } });
-const profile = await executor.mutations.appProfiles_create({
+const app = await executor.queries.apps.get({ path: { app: "<vercel-app-id>" } });
+const profile = await executor.mutations.appProfiles.create({
   path: { app: app.id },
   body: { owner: "alice", subject: "alice", accounts: {}, idempotencyKey: "vercel-setup" },
 });
-return await executor.mutations.accountConnect_issue({
+return await executor.mutations.accountConnect.issue({
   body: { owner: "alice", target: { app: app.id, profile: profile.id, requirement: "vercel" } },
 });
 ```
@@ -130,7 +130,7 @@ After the user finishes, check the request in a new execute call:
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
-const connection = await executor.queries.accountConnections_get({
+const connection = await executor.queries.accountConnections.get({
   path: { connection: "<connection-id>" },
 });
 return connection.state; // { status: "completed", account } means setup finished.
@@ -145,7 +145,7 @@ inspect the profile and request a new link.
 To save an account without selecting it for any app, pass `provider` instead:
 
 ```js
-return await tools.executor.profiles["<management-profile-id>"].mutations.accountConnect_issue({
+return await tools.executor.profiles["<management-profile-id>"].mutations.accountConnect.issue({
   body: { owner: "alice", provider: "<provider-reference>" },
 });
 ```
@@ -154,8 +154,8 @@ Supply exactly one of `target` or `provider`. Requests expire after thirty
 minutes. Cancelled or expired requests need a new link. Do not wait or busy-poll
 inside execute.
 
-Use `accounts_list({ query: { provider } })` to find compatible saved accounts first when
-appropriate. `appProfiles_update({ path: { app, profile }, body: { expectedRevision, accounts } })`
+Use `accounts.list({ query: { provider } })` to find compatible saved accounts first when
+appropriate. `appProfiles.update({ path: { app, profile }, body: { expectedRevision, accounts } })`
 replaces the whole profile selection map. Include every slot you want to keep.
 A missing required slot prevents tool discovery and calls for that profile.
 Account-dependent apps without profiles expose no direct MCP tools.
@@ -174,7 +174,7 @@ To use the same app with a second account, call:
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
-return await executor.mutations.appProfiles_create({
+return await executor.mutations.appProfiles.create({
   path: { app: "<vercel-app-id>" },
   body: {
     owner: "alice",

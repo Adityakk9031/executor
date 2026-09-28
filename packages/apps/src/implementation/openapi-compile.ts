@@ -22,11 +22,17 @@ import {
   type GeneratedSecrets,
 } from "../contracts/openapi-document.ts";
 import { openApiDocument, type OpenApiDocument } from "./openapi-document.ts";
+import { planOperationNames } from "./openapi-names.ts";
 
 function fail(code: TemplateError["code"], reason: string): never {
   throw new TemplateError({ code, reason });
 }
 const record = (value: unknown): JsonObject => Schema.decodeUnknownSync(JsonObject)(value);
+/** Naming reads only these fields of each declared Operation Object. */
+const OperationNaming = Schema.Struct({
+  operationId: Schema.optionalKey(Schema.String),
+  tags: Schema.optionalKey(Schema.Array(Schema.String)),
+});
 const identifier = (name: string) => name.replace(/[^a-zA-Z0-9_]/g, "_");
 function absolute(value: string): string {
   const url = new URL(value);
@@ -103,6 +109,15 @@ function responseSchema(
   return document.schema((api) => ({
     anyOf: shapes.map((shape) => shape(api)),
   }));
+}
+/** An operation that cannot be resolved is named from its method and path, then skipped. */
+function resolvedOrUndefined(document: OpenApiDocument, value: unknown): JsonObject | undefined {
+  try {
+    return document.resolve(record(value));
+  } catch (error) {
+    if (!(error instanceof TemplateError) && !Schema.isSchemaError(error)) throw error;
+    return undefined;
+  }
 }
 /** Unsupported response references cannot prevent importing otherwise executable calls. */
 function errorContent(document: OpenApiDocument, response: JsonObject): Json | undefined {
@@ -308,7 +323,22 @@ export const compileOpenApiDocument = (
           .map((method) => ({ path, item, method }));
       });
       if (!candidates.length) fail("no_operations", "This API does not contain any operations.");
-      for (const { path, item, method } of candidates) {
+      // Names are planned over every declared operation, so whether this compiler supports one
+      // operation never renames another.
+      const names = planOperationNames(
+        candidates.map(({ path, item, method }) => {
+          const naming = Schema.decodeUnknownOption(OperationNaming)(
+            resolvedOrUndefined(document, item[method.toLowerCase()]),
+          ).pipe(Option.getOrUndefined);
+          return {
+            operationId: naming?.operationId,
+            tag: naming?.tags?.find((tag) => tag.trim() !== ""),
+            method,
+            path,
+          };
+        }),
+      );
+      for (const [index, { path, item, method }] of candidates.entries()) {
         try {
           if (!path.startsWith("/") || path.includes("?") || path.includes("#"))
             fail("operation_path", "An operation has an invalid API path.");
@@ -316,7 +346,8 @@ export const compileOpenApiDocument = (
           const operation = Schema.decodeUnknownSync(Operation)(
             document.resolve(record(item[method.toLowerCase()])),
           );
-          const name = identifier(operation.operationId ?? `${method.toLowerCase()}_${path}`);
+          const name = names[index] ?? fail("operation_path", "An operation has no name.");
+          // Planning refines every collision; only a hash collision can repeat a name.
           if (built.some((op) => op.operation.name === name))
             fail(
               "duplicate_operation",
@@ -484,6 +515,9 @@ export const compileOpenApiDocument = (
             operation: {
               ...(streaming ? { streaming: true as const } : {}),
               name,
+              ...(operation.operationId === undefined
+                ? {}
+                : { operationId: operation.operationId }),
               description: operation.summary ?? operation.description ?? name,
               method,
               path,
