@@ -1433,6 +1433,11 @@ export const scenarios = {
     title: "Last active organization survives entry and rename while stale destinations recover",
     targets: cloudOnboarding,
   },
+  providerPhoto: {
+    file: "provider-photo.spec.ts",
+    title: "Linking Google adds its photo to the account menu and members list",
+    targets: cloudOnboarding,
+  },
   heroExperiments: {
     file: "hero-experiments.spec.ts",
     title: "Hero experiments render stable HTML and isolate previews",

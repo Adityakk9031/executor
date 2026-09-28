@@ -184,6 +184,23 @@ const make = Effect.gen(function* () {
         });
         return identity;
       }),
+    /** Sign in with Google as an address that already has an Executor account. */
+    googleSignInAs: (user: {
+      readonly email: string;
+      readonly name: string;
+      readonly picture: string;
+    }) =>
+      Effect.gen(function* () {
+        yield* evidence.step(
+          "Seed a Google profile for the existing email through emulators.dev",
+          emulators.googleUser(user),
+        );
+        yield* openLogin;
+        yield* chooseSocial("google");
+        yield* browser.use("Choose the identity on the google emulator", (page) =>
+          page.getByRole("button").filter({ hasText: user.email }).click(),
+        );
+      }),
     delayPreparation: Effect.gen(function* () {
       const arrived = yield* Deferred.make<void>(),
         release = yield* Deferred.make<void>(),
