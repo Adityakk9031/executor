@@ -439,6 +439,24 @@ export const scenarios = {
       local: na("Local has no organization member roles."),
     },
   },
+  localWorkflowEngineMemory: {
+    file: "local-workflow-engine-memory.spec.ts",
+    title: "local releases finished workflow runs' engines from memory",
+    targets: {
+      local: scheduled,
+      "self-host": na("The self-host image's engines are covered by the Docker release suite."),
+      cloud: na("Cloudflare runs Cloud's workflow engines."),
+    },
+  },
+  localWorkflowEngineSteps: {
+    file: "local-workflow-engine-steps.spec.ts",
+    title: "local's evictable workflow engine finishes long steps on runs no caller holds",
+    targets: {
+      local: scheduled,
+      "self-host": na("The self-host image's engine is covered by the Docker release suite."),
+      cloud: na("Cloudflare runs Cloud's workflow engines."),
+    },
+  },
   localStartupObservability: {
     file: "local-startup-observability.spec.ts",
     title: "local startup failures retain their resource phase and safe system code",

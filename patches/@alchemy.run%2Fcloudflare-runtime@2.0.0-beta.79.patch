@@ -452,3 +452,37 @@ index d8dd5221..3b032b77 100644
 +		registerImageEnv: (className, tag, env) => {
 +			const alias = generateImageTag(className);
 +			return Effect.acquireRelease(Effect.sync(() => {
+diff --git a/dist/core/node/bindings/workflows/Workflows.mjs b/dist/core/node/bindings/workflows/Workflows.mjs
+index 873eb4b..f329b35 100644
+--- a/dist/core/node/bindings/workflows/Workflows.mjs
++++ b/dist/core/node/bindings/workflows/Workflows.mjs
+@@ -88,8 +88,7 @@ const makeEngineService = ({ workflow, compatibilityFlags, modules }) => ({
+ 		durableObjectNamespaces: [{
+ 			className: "Engine",
+ 			enableSql: true,
+-			uniqueKey: encodeURIComponent(workflow.workflowName),
+-			preventEviction: true
++			uniqueKey: encodeURIComponent(workflow.workflowName)
+ 		}],
+ 		durableObjectStorage: { localDisk: WORKFLOWS_STORAGE_SERVICE_NAME },
+ 		bindings: [
+diff --git a/src/core/bindings/workflows/Workflows.ts b/src/core/bindings/workflows/Workflows.ts
+index 0e5d93a..e319db7 100644
+--- a/src/core/bindings/workflows/Workflows.ts
++++ b/src/core/bindings/workflows/Workflows.ts
+@@ -147,12 +147,14 @@ const makeEngineService = ({
+     compatibilityDate: DEFAULT_COMPATIBILITY_DATE,
+     compatibilityFlags: ["experimental", ...(compatibilityFlags ?? [])],
+     modules,
++    // Each run is its own Engine. An engine may leave memory once idle: sleeps, retry delays and
++    // event waits resume from durable alarms, and while a step runs the engine re-arms its alarm
++    // every 30 s, so a run no caller holds is not unloaded mid-step.
+     durableObjectNamespaces: [
+       {
+         className: "Engine",
+         enableSql: true,
+         uniqueKey: encodeURIComponent(workflow.workflowName),
+-        preventEviction: true,
+       },
+     ],
+     durableObjectStorage: {
