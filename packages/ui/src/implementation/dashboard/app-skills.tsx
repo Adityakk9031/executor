@@ -13,8 +13,9 @@ import type { SkillBindings } from "../../contracts/app-browser.ts";
 import type { FailureProps } from "../../contracts/dashboard.ts";
 import { Option } from "effect";
 import { Atom, AsyncResult } from "effect/unstable/reactivity";
+import { useAtomMount } from "@effect/atom-react";
 import type { AppSourceView } from "@executor-js/app-management/contracts";
-import { QueryView, useQuery } from "./context.tsx";
+import { QueryView, usePreload, useQuery } from "./context.tsx";
 import { SkillBrowserLoading } from "./app-browser-loading.tsx";
 import { CopyButton } from "./code.tsx";
 import { EmptyStatePanel } from "./empty-state.tsx";
@@ -48,6 +49,13 @@ export function AppSkills<E>({
 }) {
   // Outside the catalog query, so the status and its deploy survive the catalog reloading.
   const [committed, setCommitted] = useState<Committed>();
+  // Editable skills read the working source, then the deployed catalog. Neither depends on the
+  // other, so both start here instead of the catalog waiting for the source.
+  const catalog: Atom.Atom<AsyncResult.AsyncResult<AppSkillBundle | undefined, E>> =
+    app.activeDeployment === null ? undeployedCatalog : bindings.bundle;
+  const editable = editing !== undefined && canEdit;
+  usePreload(...(editable ? [editing.atoms.workspace(app.id), catalog] : [catalog]));
+  useAtomMount(catalog);
   return (
     <section aria-label="App skills" className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {committed !== undefined && editing !== undefined && (
@@ -61,7 +69,7 @@ export function AppSkills<E>({
           Failure={Failure}
         />
       )}
-      {editing !== undefined && canEdit ? (
+      {editable ? (
         <QueryView
           query={editing.atoms.workspace(app.id)}
           Failure={Failure}

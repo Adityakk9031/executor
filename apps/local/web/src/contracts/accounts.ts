@@ -1,16 +1,20 @@
 /** Typed account management; successful responses contain metadata only. */
 import type { Account, AccountId, AccountFieldsInput, OAuthClientInput } from "@executor-js/sdk";
+import { DashboardAccountDetail } from "@executor-js/local-server/contracts";
 import { Effect, Option } from "effect";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { acknowledge, acknowledgedQuery, invalidate } from "@executor-js/ui/contracts/mutations";
 import { DashboardClient, liveQueryAtom, overviewAtom, toolsAtom } from "./api.ts";
 
 export const accountAtom = Atom.family((account: AccountId) =>
-  liveQueryAtom(
-    Effect.flatMap(DashboardClient, (client) =>
+  liveQueryAtom({
+    name: "account",
+    key: { account },
+    success: DashboardAccountDetail,
+    query: Effect.flatMap(DashboardClient, (client) =>
       client.dashboard.liveAccount({ params: { account } }),
     ),
-  ).pipe(acknowledgedQuery),
+  }).pipe(acknowledgedQuery),
 );
 /** Each account owns its pending rename; metadata is confirmed before the editor resets. */
 export const renameAccountAtom = Atom.family((account: AccountId) =>

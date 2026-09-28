@@ -1810,6 +1810,16 @@ export const scenarios = {
       ),
     },
   },
+  serverRenderedSkills: {
+    fixtures: "actors",
+    file: "server-rendered-skills.spec.ts",
+    title: "An editable app's server-rendered skills hydrate without reading its source again",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("Hosted authoring scenario; local skills share the same view."),
+    },
+  },
   localAppDetailLoading: {
     file: "local-app-detail-loading.spec.ts",
     title: "Local desktop app navigation keeps a stable loading panel through live reads",
