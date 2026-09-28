@@ -88,7 +88,7 @@ export const cloudExecutor = Effect.fn(function* (
       cloudBuildAsset(build, path).pipe(Effect.provideService(BlobStore, blobs)),
     ),
   );
-  const { sources, repositories } = yield* cloudAppSources(tokens);
+  const appSources = yield* cloudAppSources(tokens);
   // App storage and hosted permission checks use the same database. Share its
   // client only inside this execution; the event scope owns all connections.
   const database = yield* makeExecutionMemo(
@@ -121,6 +121,7 @@ export const cloudExecutor = Effect.fn(function* (
         Effect.suspend(() =>
           closing ? Effect.succeed(false) : FiberSet.run(refreshes, work).pipe(Effect.as(true)),
         );
+      const { sources, repositories } = appSources(background);
       const registryStorage = yield* makeRegistryStorage.pipe(Effect.provideContext(services));
       const registry = storedRegistry(registryStorage, sources, origin);
       const runtime = yield* makeRuntime;
@@ -150,6 +151,7 @@ export const cloudExecutor = Effect.fn(function* (
         executor,
         storage,
         scheduleAuthority,
+        sources,
         management: {
           executor,
           sources,
@@ -205,7 +207,11 @@ export const cloudExecutor = Effect.fn(function* (
       AppRepositoryRecovery,
       executor.pipe(
         Effect.flatMap((resources) =>
-          recoverAppRepositories({ database: resources.storage, sources, blobs }),
+          recoverAppRepositories({
+            database: resources.storage,
+            sources: resources.sources,
+            blobs,
+          }),
         ),
         Effect.provide(RuntimeContext.phantom),
       ),

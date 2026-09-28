@@ -1008,6 +1008,16 @@ export const scenarios = {
       local: na("The shared source contract is exercised through hosted organization routes."),
     },
   },
+  workspaceSourceWrites: {
+    fixtures: "actors",
+    file: "workspace-source-writes.spec.ts",
+    title: "Workspace reads return source saved by Git pushes and commits",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("The shared source contract is exercised through hosted organization routes."),
+    },
+  },
   historicalSource: {
     fixtures: "actors",
     file: "historical-source.spec.ts",
