@@ -1544,6 +1544,16 @@ export const scenarios = {
       local: na("This scenario uses hosted deployment and app authentication."),
     },
   },
+  cloudBuildReuse: {
+    fixtures: "actors",
+    file: "cloud-build-reuse.spec.ts",
+    title: "Cold app Workers reuse a build already decoded in the isolate",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host loads retained builds without the Cloud isolate cache."),
+      local: na("Local loads retained builds without the Cloud isolate cache."),
+    },
+  },
   appWarmQueries: {
     fixtures: "actors",
     file: "app-observability.spec.ts",
