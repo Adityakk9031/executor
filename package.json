@@ -36,7 +36,7 @@
     "hosted:cloud:dev:1password": "bun run with:cloud:dev bun run --cwd apps/hosted/cloud dev --stage development",
     "hosted:cloud:deploy": "bun run with:cloud bun run --cwd apps/hosted/cloud deploy",
     "hosted:cloud:test-stage": "bun run with:test-stage bun run --cwd apps/hosted/cloud test-stage",
-    "hosted:docker": "bun run with:self-host env BETTER_AUTH_URL=http://localhost:4400 docker compose -f apps/hosted/self-host/compose.yaml up --build -d",
+    "hosted:docker": "bun run with:self-host env BETTER_AUTH_URL=http://localhost:4400 EXECUTOR_BUILD_VERSION=$(git rev-parse HEAD) docker compose -f apps/hosted/self-host/compose.yaml up --build -d",
     "hosted:docker:down": "bun run with:self-host docker compose -f apps/hosted/self-host/compose.yaml down",
     "typecheck": "bun run --cwd apps/hosted/cloud framework:build && tsc --noEmit && tsc --noEmit -p apps/local/web && tsc --noEmit -p apps/hosted/web && tsc --noEmit -p apps/hosted/cloud/web && tsc --noEmit -p apps/hosted/self-host/web && tsc --noEmit -p apps/marketing && tsc --noEmit -p apps/docs && tsc --noEmit -p scripts/releases",
     "web:build": "bun run --cwd apps/local/web build",

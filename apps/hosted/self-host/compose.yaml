@@ -5,6 +5,9 @@ services:
     build:
       context: ../../..
       dockerfile: apps/hosted/self-host/Dockerfile
+      args:
+        # Required. Set it in the environment or pass --build-arg.
+        - EXECUTOR_BUILD_VERSION
     environment:
       BETTER_AUTH_URL:
       BETTER_AUTH_SECRET:
