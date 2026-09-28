@@ -1,6 +1,12 @@
 /** Portable Effect cache mechanics. Adapters own storage and the background task lifetime. */
-import { Clock, Duration, Effect, Schema } from "effect";
-import { CacheEntry, CacheError, cacheLimits, type CacheTransport } from "./contracts/cache.ts";
+import { Clock, Duration, Effect, Exit, Schema } from "effect";
+import {
+  CacheAcquired,
+  CacheEntry,
+  CacheError,
+  cacheLimits,
+  type CacheTransport,
+} from "./contracts/cache.ts";
 export * from "./contracts/cache.ts";
 
 /** Canonical JSON prevents object property order from changing key identity. */
@@ -41,10 +47,17 @@ export interface CacheGet<A> {
 
 /** Create a scoped cache client; a background runner must retain all task resources until completion. */
 export const makeCache = (
-  transport: CacheTransport,
+  host: CacheTransport,
   background: (task: Effect.Effect<void, unknown>) => Effect.Effect<void>,
   scope: Schema.Json = "shared",
 ) => {
+  // Every round trip to the host store is visible from the app, whichever host runs it.
+  const transport: CacheTransport = (command) =>
+    host(command).pipe(
+      Effect.withSpan("app.cache.command", {
+        attributes: { "cache.operation": command.operation },
+      }),
+    );
   const keyOf = (key: Schema.Json) => cacheKey([scope, key]);
   const readKeys = (keys: readonly string[]) =>
     transport({ operation: "read", keys }).pipe(
@@ -93,26 +106,42 @@ export const makeCache = (
         }).pipe(
           Effect.withSpan("app.cache.load"),
           Effect.timeout(cacheLimits.loadTimeoutMs),
-          Effect.ensuring(
-            transport({ operation: "release", key, lease }).pipe(Effect.catch(() => Effect.void)),
+          // Publishing clears the lease in the same transaction. Only an unpublished load releases it.
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit)
+              ? Effect.void
+              : transport({ operation: "release", key, lease }).pipe(
+                  Effect.catch(() => Effect.void),
+                ),
           ),
         );
       const deadline = (yield* Clock.currentTimeMillis) + cacheLimits.leaseMs;
       let initialVersion: string | null | undefined;
       while (true) {
-        const entry = (yield* readKeys([key]))[0] ?? null;
+        // One transaction reads the entry and, when it needs loading, claims the lease.
+        const { entry, lease } = yield* transport({
+          operation: "acquire",
+          key,
+          refresh,
+          ...(initialVersion === undefined ? {} : { version: initialVersion }),
+        }).pipe(
+          Effect.flatMap((reply) =>
+            Schema.decodeUnknownEffect(CacheAcquired)(reply).pipe(
+              Effect.mapError(() => new CacheError({ reason: "storage" })),
+            ),
+          ),
+        );
         const now = yield* Clock.currentTimeMillis;
         if (initialVersion === undefined) initialVersion = entry?.version ?? null;
         const refreshed = refresh && entry !== null && entry.version !== initialVersion;
-        if (entry !== null && (refreshed || (!refresh && now < entry.freshUntil))) {
+        // A lease means the store found the entry due for loading; this caller must not drop it.
+        if (
+          entry !== null &&
+          (refreshed || (!refresh && lease === null && now < entry.freshUntil))
+        ) {
           yield* Effect.annotateCurrentSpan("cache.result", "fresh");
           return yield* decode(entry.value);
         }
-        const lease = yield* transport({
-          operation: "claim",
-          key,
-          version: entry?.version ?? null,
-        }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.NullOr(Schema.String))));
         if (!refresh && entry !== null && now < entry.staleUntil) {
           yield* Effect.annotateCurrentSpan("cache.result", "stale");
           if (lease !== null) yield* background(load(lease).pipe(Effect.asVoid));

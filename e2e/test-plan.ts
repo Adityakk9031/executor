@@ -146,6 +146,17 @@ export const scenarios = {
       local: na("Hosted profile API fixture; Node adapter exercised by self-host"),
     },
   },
+  toolsIndexCache: {
+    fixtures: "actors",
+    file: "tools-index-cache.spec.ts",
+    managementProfiles: ["owner", "admin"],
+    title: "A new organization's first Tools index loads its catalog without redundant cache trips",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted management app catalog; the Node cache adapter shares the SQLite store"),
+    },
+  },
   appCacheFences: {
     fixtures: "actors",
     file: "app-cache-fences.spec.ts",

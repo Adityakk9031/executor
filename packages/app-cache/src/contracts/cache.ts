@@ -30,10 +30,27 @@ export const CacheEntry = Schema.Struct({
 });
 /** Decoded cache value envelope. */
 export type CacheEntry = typeof CacheEntry.Type;
+/** The current entry, and a lease when this caller now owns its load. */
+export const CacheAcquired = Schema.Struct({
+  entry: Schema.NullOr(CacheEntry),
+  lease: Schema.NullOr(Schema.String),
+});
 
-/** Publication requires the lease acquired against the previously observed version. */
+/**
+ * Publication requires the lease acquired against the previously observed version.
+ * `acquire` reads one entry and claims its load in the same transaction, so a cache
+ * miss costs one round trip. `read` and `claim` remain for builds retained before it.
+ */
 export const CacheCommand = Schema.Union([
   Schema.Struct({ operation: Schema.Literal("read"), keys: Schema.Array(Key) }),
+  Schema.Struct({
+    operation: Schema.Literal("acquire"),
+    key: Key,
+    /** Claim even a fresh entry, as an explicit refresh does. */
+    refresh: Schema.Boolean,
+    /** Claim only while the entry still has this version. Absent accepts the current one. */
+    version: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  }),
   Schema.Struct({
     operation: Schema.Literal("claim"),
     key: Key,
