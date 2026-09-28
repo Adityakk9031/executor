@@ -13,6 +13,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { appBuildLoads, latestRequestBuildLoads, unreadableBuild } from "../support/build-loads.ts";
+import { Telemetry } from "../support/evidence.ts";
 import { Target } from "../support/platform.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 import {
@@ -35,6 +36,7 @@ const rotations = 25;
 /** Serial, alternating tool calls and workflow runs per account; two accounts run concurrently. */
 const interleaved = 16;
 const App = Schema.Struct({ id: Schema.String });
+const Viewer = Schema.Struct({ userId: Schema.String });
 const SetupStatus = Schema.Struct({ status: Schema.String });
 const SignIn = Schema.Struct({ authorizationUrl: Schema.String });
 const Run = Schema.Struct({
@@ -514,6 +516,47 @@ export default defineApp({ accounts: { service } }, {
               expect(loads, "one build load per runtime").toEqual(
                 Object.fromEntries(Object.keys(loads).map((runtime) => [runtime, 1])),
               );
+          }
+        }),
+      ),
+    { timeout: 120_000 },
+  );
+
+  it.effect(
+    scenarios.appWorkerAttribution.title,
+    (context) =>
+      withHostedCase(
+        context,
+        Effect.gen(function* () {
+          const { api, actors } = yield* scenario;
+          const telemetry = yield* Telemetry;
+          const viewer = yield* api
+            .request(actors.owner, "GET", "/api/viewer")
+            .pipe(Effect.flatMap((response) => body(Viewer, response)));
+          for (const database of [true, false]) {
+            const { app, connect, observe } = yield* keyApp({ database, resource: null });
+            const { profile } = yield* connect("synthetic-attribution");
+            yield* observe(app.id, profile);
+            // Each call's invocation names the Worker it ran in and the caller it ran for.
+            const identities = yield* telemetry
+              .spans("runtime.app.invoke", {
+                "executor.organization.id": actors.organization.id,
+                "executor.user.id": viewer.userId,
+              })
+              .pipe(
+                Effect.map((spans) =>
+                  spans
+                    .map((tags) => tags["executor.worker.identity"])
+                    .filter((identity) => identity?.startsWith(`${app.id}:`)),
+                ),
+                Effect.flatMap((matched) =>
+                  matched.length > 0
+                    ? Effect.succeed(matched)
+                    : Effect.fail(new Error("No attributed invocation has arrived")),
+                ),
+                Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 60 }),
+              );
+            expect(identities.length).toBeGreaterThan(0);
           }
         }),
       ),

@@ -12,7 +12,8 @@ import { appRuntime, makeAppRunner } from "@executor-js/sdk/workerd";
 import { HostRequirementsError, DeclaredRequirements, HostResponse } from "apps/contracts";
 import { RuntimeContext } from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Effect, Schema } from "effect";
+import { Context, Effect, Option, Schema } from "effect";
+import { CurrentOrganization, CurrentUserId } from "@executor-js/hosted-server";
 import type { AppDataSupervisor } from "./app-data.ts";
 import { dataChanges } from "../implementation/data-changes.ts";
 import { cachedRuntimeBuilds } from "../implementation/runtime-build-cache.ts";
@@ -39,6 +40,24 @@ const failed = (stage: RuntimeBuildFailed["stage"], cause: unknown) => {
   causes.set(error, describe(cause));
   return error;
 };
+/**
+ * Attribute Worker Loader use to the caller. Cloudflare bills each unique loaded Worker per day,
+ * and its own usage data cannot be split by user or organization.
+ */
+const withActor = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const context = yield* Effect.context<never>();
+    const user = Context.get(context, CurrentUserId);
+    const organization = Context.getOption(context, CurrentOrganization);
+    return yield* effect.pipe(
+      Effect.annotateSpans({
+        ...(user === undefined ? {} : { "executor.user.id": user }),
+        ...(Option.isSome(organization)
+          ? { "executor.organization.id": organization.value.organization }
+          : {}),
+      }),
+    );
+  });
 const NativeFetcher = Schema.declare(
   (value): value is Fetcher =>
     typeof value === "object" &&
@@ -117,50 +136,52 @@ export const cloudRuntime = Effect.fn(function* (
       name: "runtime.cloud",
       loadBuild: (build) =>
         load(build).pipe(Effect.map(({ mainModule, modules }) => ({ mainModule, modules }))),
-      invoke: runner.invoke,
+      invoke: (invocation, capabilities) => withActor(runner.invoke(invocation, capabilities)),
       build: ({ files }) =>
-        Effect.gen(function* () {
-          const headers = Object.fromEntries(Object.entries(yield* traceHeaders));
-          const { bundle, ui } = yield* compiler.compile(files, headers).pipe(
-            Effect.catchTag("RpcCallError", (error) => {
-              const cause = error.cause;
-              const failure =
-                cause instanceof Error && /^Worker exceeded memory limit\.?$/.test(cause.message)
-                  ? new BuildMemoryExceeded()
-                  : new RuntimeBuildFailed({ stage: "compile" });
-              causes.set(failure, describe(error));
-              return Effect.fail(failure);
-            }),
-            Effect.flatMap(Schema.decodeUnknownEffect(CompiledCloudApp)),
-            Effect.catchTag("SchemaError", (cause) => Effect.fail(failed("compile", cause))),
-            Effect.withSpan("runtime.cloud.compiler.request"),
-          );
-          const build = BuildId.make(`bld_${crypto.randomUUID()}`);
-          const requirements = yield* runner.declare(bundle, headers).pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(HostResponse)),
-            Effect.flatMap((envelope) =>
-              envelope.ok
-                ? Schema.decodeUnknownEffect(DeclaredRequirements)(envelope.value)
-                : Schema.decodeUnknownEffect(HostRequirementsError)(envelope.error).pipe(
-                    Effect.flatMap(Effect.fail),
-                  ),
+        withActor(
+          Effect.gen(function* () {
+            const headers = Object.fromEntries(Object.entries(yield* traceHeaders));
+            const { bundle, ui } = yield* compiler.compile(files, headers).pipe(
+              Effect.catchTag("RpcCallError", (error) => {
+                const cause = error.cause;
+                const failure =
+                  cause instanceof Error && /^Worker exceeded memory limit\.?$/.test(cause.message)
+                    ? new BuildMemoryExceeded()
+                    : new RuntimeBuildFailed({ stage: "compile" });
+                causes.set(failure, describe(error));
+                return Effect.fail(failure);
+              }),
+              Effect.flatMap(Schema.decodeUnknownEffect(CompiledCloudApp)),
+              Effect.catchTag("SchemaError", (cause) => Effect.fail(failed("compile", cause))),
+              Effect.withSpan("runtime.cloud.compiler.request"),
+            );
+            const build = BuildId.make(`bld_${crypto.randomUUID()}`);
+            const requirements = yield* runner.declare(bundle, headers).pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(HostResponse)),
+              Effect.flatMap((envelope) =>
+                envelope.ok
+                  ? Schema.decodeUnknownEffect(DeclaredRequirements)(envelope.value)
+                  : Schema.decodeUnknownEffect(HostRequirementsError)(envelope.error).pipe(
+                      Effect.flatMap(Effect.fail),
+                    ),
+              ),
+              Effect.mapError((cause) => failed("declaration", cause)),
+              Effect.withSpan("runtime.cloud.requirements"),
+            );
+            const assets = yield* retainCloudBuild(
+              build,
+              { ...bundle, database: requirements.database !== undefined },
+              ui,
+            ).pipe(Effect.provide(RuntimeContext.phantom));
+            return { build, requirements, ...(assets === undefined ? {} : { ui: assets }) };
+          }).pipe(
+            // The failing stage and its cause belong on the span; the public error stays small.
+            Effect.tapError((error) =>
+              Effect.annotateCurrentSpan({
+                "build.stage": Schema.is(BuildMemoryExceeded)(error) ? "compile" : error.stage,
+                "build.cause": causeOf(error),
+              }),
             ),
-            Effect.mapError((cause) => failed("declaration", cause)),
-            Effect.withSpan("runtime.cloud.requirements"),
-          );
-          const assets = yield* retainCloudBuild(
-            build,
-            { ...bundle, database: requirements.database !== undefined },
-            ui,
-          ).pipe(Effect.provide(RuntimeContext.phantom));
-          return { build, requirements, ...(assets === undefined ? {} : { ui: assets }) };
-        }).pipe(
-          // The failing stage and its cause belong on the span; the public error stays small.
-          Effect.tapError((error) =>
-            Effect.annotateCurrentSpan({
-              "build.stage": Schema.is(BuildMemoryExceeded)(error) ? "compile" : error.stage,
-              "build.cause": causeOf(error),
-            }),
           ),
         ),
       asset: ({ build, path }) =>

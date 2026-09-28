@@ -1113,6 +1113,16 @@ export const scenarios = {
       local: na("Local build loads are covered by the local build load scenario."),
     },
   },
+  appWorkerAttribution: {
+    fixtures: "actors",
+    file: "app-worker-reuse.spec.ts",
+    title: "Cloud app calls attribute their loaded Worker to the calling organization and user",
+    targets: {
+      "self-host": na("Only Cloud's Worker Loader bills each loaded Worker."),
+      cloud: managedCloud,
+      local: na("Only Cloud's Worker Loader bills each loaded Worker."),
+    },
+  },
   localAppBuildLoads: {
     file: "local-app-worker-reuse.spec.ts",
     title:
