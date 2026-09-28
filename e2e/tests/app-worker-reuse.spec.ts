@@ -12,8 +12,20 @@ import { Api, body } from "../support/api.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
-import { createProfile } from "../support/profiles.ts";
-import { Observation, observer, observerApp, RunObservation } from "../support/worker-observer.ts";
+import { appBuildLoads, latestRequestBuildLoads, unreadableBuild } from "../support/build-loads.ts";
+import { Target } from "../support/platform.ts";
+import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
+import {
+  expectFacetLoadsOnlyAtColdStarts,
+  expectIsolatedAccounts,
+  expectIsolatedAccountsAcrossReplacedFacets,
+  expectOneLoadPerColdStart,
+  loadRounds,
+  Observation,
+  observer,
+  observerApp,
+  RunObservation,
+} from "../support/worker-observer.ts";
 import { scenarios } from "../test-plan.ts";
 
 /** Token renewals and workflow runs, each a single request to the product. */
@@ -103,7 +115,7 @@ const keyApp = (options: { readonly database: boolean; readonly resource: string
           ),
           Effect.flatMap((saved) => body(Resource, saved)),
         );
-    const connect = (token: string) =>
+    const connect = (token: string, options: { readonly settle: boolean } = { settle: true }) =>
       Effect.gen(function* () {
         const profile = yield* createProfile(actors.owner, path);
         const pending = yield* api.request(actors.owner, "POST", `${path}/connections`, {
@@ -113,7 +125,7 @@ const keyApp = (options: { readonly database: boolean; readonly resource: string
         expect(pending.status, JSON.stringify(pending.body)).toBe(200);
         const account = (yield* submit((yield* body(Resource, pending)).id, token)).id;
         yield* removeAccount(account);
-        yield* settled(app.id, profile.id);
+        if (options.settle) yield* settled(app.id, profile.id);
         return { profile: profile.id, account };
       });
     /** Replace the saved credential of the same account, as a user's key rotation does. */
@@ -152,7 +164,18 @@ const keyApp = (options: { readonly database: boolean; readonly resource: string
           yield* Effect.sleep("100 millis");
         }
       });
-    return { app, connect, rotate, observe, run };
+    /** Another profile that selects an existing account, so both share one app Worker. */
+    const share = (account: string) =>
+      Effect.gen(function* () {
+        const profile = yield* createProfile(actors.owner, path);
+        const selected = yield* selectProfileAccounts(actors.owner, path, profile.id, {
+          service: account,
+        });
+        expect(selected.status, JSON.stringify(selected.body)).toBe(200);
+        yield* settled(app.id, profile.id);
+        return profile.id;
+      });
+    return { app, name, connect, share, rotate, observe, run, settled };
   });
 
 layer(HostedLive, { excludeTestServices: true })("App worker reuse", (it) => {
@@ -186,13 +209,20 @@ layer(HostedLive, { excludeTestServices: true })("App worker reuse", (it) => {
         const other = yield* observe(app.id, second.profile);
         expect(other).toMatchObject({ previous: null, token: "synthetic-other-account" });
         expect(other.isolate).not.toBe(observed[0]!.isolate);
-        // Returning to the first account resumes its loaded Worker and its module state.
         const back = yield* observe(app.id, first.profile);
-        expect(back).toMatchObject({
-          isolate: observed[0]!.isolate,
-          previous: `synthetic-rotation-${rotations}`,
-          token: `synthetic-rotation-${rotations}`,
-        });
+        if ((yield* Target).metadata.target === "cloud") {
+          // Returning to the first account resumes its loaded Worker and its module state.
+          expect(back).toMatchObject({
+            isolate: observed[0]!.isolate,
+            previous: `synthetic-rotation-${rotations}`,
+            token: `synthetic-rotation-${rotations}`,
+          });
+        } else {
+          // Self-host unloads the data facet another account replaced, so memory does not grow
+          // with the account selections ever used: the first account loads a fresh one.
+          expect(back).toMatchObject({ previous: null, token: `synthetic-rotation-${rotations}` });
+          expect(back.isolate).not.toBe(observed[0]!.isolate);
+        }
       }),
     ),
   );
@@ -201,7 +231,7 @@ layer(HostedLive, { excludeTestServices: true })("App worker reuse", (it) => {
     withHostedCase(
       context,
       Effect.gen(function* () {
-        const { connect, run } = yield* keyApp({ database: true, resource: null });
+        const { app, connect, run } = yield* keyApp({ database: true, resource: null });
         const first = yield* connect("synthetic-workflow-token");
         // Each workflow run receives its own run capability without loading another Worker.
         const runs = yield* Effect.forEach(
@@ -214,6 +244,18 @@ layer(HostedLive, { excludeTestServices: true })("App worker reuse", (it) => {
           expect(run.token).toBe("synthetic-workflow-token");
         }
         expect(new Set(runs.map((run) => run.isolate)).size).toBe(1);
+        // The runs share one app Worker, and profile setup starts the data facet; each loaded the
+        // build once. A workflow cold start records its load under the Worker name the runtime
+        // loads it by, so it adds no second Worker runtime.
+        const loads = yield* appBuildLoads(app.id);
+        expect(
+          Object.values(loads).every((count) => count === 1),
+          JSON.stringify(loads),
+        ).toBe(true);
+        expect(
+          Object.keys(loads).filter((runtime) => runtime.startsWith("worker ")),
+          JSON.stringify(loads),
+        ).toHaveLength(1);
       }),
     ),
   );
@@ -354,5 +396,127 @@ export default defineApp({ accounts: { service } }, {
         expect(back.previous).toBe(observed.at(-1)!.token);
       }),
     ),
+  );
+  it.effect(scenarios.appWorkerColdStartFailure.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const { api, actors, prefix } = yield* scenario;
+        for (const database of [true, false]) {
+          const { app, name, connect, share, observe, run, settled } = yield* keyApp({
+            database,
+            resource: null,
+          });
+          const path = `${prefix}/apps/${app.id}`;
+          const status = (profile: string) =>
+            api
+              .request(actors.owner, "GET", `${path}/profiles/${profile}`)
+              .pipe(Effect.flatMap((response) => body(SetupStatus, response)));
+          // Profile setup reads the app's webhook definitions, which cold-starts the data facet of
+          // an app with a database and the app Worker otherwise. The account is selected while the
+          // build is unreadable, so that first cold start of its runtime cannot load the build.
+          const token = `synthetic-cold-start-${database}`;
+          const restore = yield* unreadableBuild(name);
+          const failed = yield* connect(token, { settle: false });
+          yield* settled(app.id, failed.profile);
+          expect((yield* status(failed.profile)).status).toBe("failed");
+          yield* restore;
+          // Once the build is readable, another profile selecting the same account is set up. Its
+          // setup cold-starts the same runtime by the same name, which loads the build rather than
+          // keeping the failed cold start for the rest of the runtime's life.
+          const profile = yield* share(failed.account);
+          expect((yield* status(profile)).status).toBe("ready");
+          const observed = [yield* observe(app.id, profile)];
+          for (let round = 0; round < 3; round++) observed.push(yield* observe(app.id, profile));
+          expect(observed[0]).toMatchObject({ previous: null, token });
+          expect(new Set(observed.map((entry) => entry.isolate)).size).toBe(1);
+          expect(observed.map((entry) => entry.calls)).toEqual(
+            observed.map((_, index) => observed[0]!.calls + index),
+          );
+          if (!database) {
+            // Workflow runs share the recovered Worker.
+            const workflow = yield* run(profile);
+            expect(workflow).toMatchObject({ isolate: observed[0]!.isolate, token });
+          }
+        }
+      }),
+    ),
+  );
+
+  // Twenty serial calls per app wait for each call's delivered trace, and on hosts that unload
+  // replaced data facets every switch between the two accounts cold-starts a facet.
+  it.effect(
+    scenarios.appBuildLoads.title,
+    (context) =>
+      withHostedCase(
+        context,
+        Effect.gen(function* () {
+          for (const database of [true, false]) {
+            const { app, connect, share, observe } = yield* keyApp({ database, resource: null });
+            const first = yield* connect("synthetic-loads");
+            const calls: Array<{ observation: typeof Observation.Type; loads: number }> = [];
+            const call = (round: number) =>
+              Effect.gen(function* () {
+                const observation = yield* observe(app.id, first.profile);
+                calls.push({
+                  observation,
+                  loads: yield* latestRequestBuildLoads(`${database}-${round}`),
+                });
+              });
+            for (let round = 0; round < loadRounds; round++) yield* call(round);
+            expectOneLoadPerColdStart(calls);
+
+            // A profile that selects the same account shares its loaded Worker and loads nothing.
+            const shared = yield* observe(app.id, yield* share(first.account));
+            expect(shared).toMatchObject({
+              isolate: calls[0]!.observation.isolate,
+              previous: "synthetic-loads",
+              token: "synthetic-loads",
+            });
+            expect(yield* latestRequestBuildLoads(`${database}-shared`)).toBe(0);
+
+            // Another account's Worker never sees the first account's credential.
+            const second = yield* connect("synthetic-loads-other");
+            const [firstCalls, secondCalls] = yield* Effect.all(
+              [
+                Effect.forEach(Array.from({ length: 6 }), () => observe(app.id, first.profile)),
+                Effect.forEach(Array.from({ length: 6 }), () => observe(app.id, second.profile)),
+              ],
+              { concurrency: 2 },
+            );
+            // Self-host unloads the data facet a call of the other account replaced, so memory does
+            // not grow with the account selections ever used: alternating calls start fresh facets.
+            // Cloud keeps each account's facet Worker loaded.
+            const replacesFacets = database && (yield* Target).metadata.target !== "cloud";
+            if (replacesFacets)
+              expectIsolatedAccountsAcrossReplacedFacets(
+                { observed: firstCalls, token: "synthetic-loads" },
+                { observed: secondCalls, token: "synthetic-loads-other" },
+              );
+            else
+              expectIsolatedAccounts(
+                { observed: firstCalls, token: "synthetic-loads" },
+                { observed: secondCalls, token: "synthetic-loads-other" },
+                calls[0]!.observation.isolate,
+              );
+            const loads = yield* appBuildLoads(app.id);
+            expect(Object.keys(loads).length).toBeGreaterThan(0);
+            if (replacesFacets)
+              expectFacetLoadsOnlyAtColdStarts(loads, [
+                ...calls.map((call) => call.observation),
+                shared,
+                ...firstCalls,
+                ...secondCalls,
+              ]);
+            else
+              // Each app Worker and data facet loaded the build once, at its cold start, whichever
+              // call or background discovery started it.
+              expect(loads, "one build load per runtime").toEqual(
+                Object.fromEntries(Object.keys(loads).map((runtime) => [runtime, 1])),
+              );
+          }
+        }),
+      ),
+    { timeout: 120_000 },
   );
 });

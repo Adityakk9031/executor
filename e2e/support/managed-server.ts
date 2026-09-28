@@ -36,6 +36,8 @@ class ServerFailed extends Schema.TaggedError<ServerFailed>()("ServerFailed", {
 export const startManagedServer = (
   target: typeof Target.Service,
   mode: "product" | "development" = "product",
+  /** Operator settings for this process, applied over the runner's own. */
+  environment: Readonly<Record<string, string>> = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem,
@@ -92,6 +94,7 @@ export const startManagedServer = (
       EXECUTOR_BUILD_VERSION: target.metadata.commit,
       EXECUTOR_WORKER_BUNDLE: path.resolve(".local/test-runtime/host.json"),
       EXECUTOR_TEST_CLOCK_OFFSET_MS: "0",
+      ...environment,
     };
     const stop = Effect.suspend(() =>
       current === undefined

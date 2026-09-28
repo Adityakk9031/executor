@@ -457,6 +457,16 @@ func serve(mode string) error {
 		return errors.New("EXECUTOR_APPS_ALLOW_PRIVATE_FETCH must be true or false")
 	}
 	config = bytes.ReplaceAll(config, []byte("@@APPS_PRIVATE_FETCH@@"), []byte(privateFetch))
+	// The most app Workers workerd keeps loaded; the apps Worker applies its default for null.
+	appWorkers := "null"
+	if value := values["EXECUTOR_APP_WORKERS"]; value != "" {
+		number, err := strconv.Atoi(value)
+		if err != nil || number < 1 {
+			return errors.New("EXECUTOR_APP_WORKERS must be a positive integer")
+		}
+		appWorkers = strconv.Itoa(number)
+	}
+	config = bytes.ReplaceAll(config, []byte("@@APP_WORKERS@@"), []byte(appWorkers))
 	config = bytes.ReplaceAll(config, []byte("@@SELF_ORIGIN@@"), []byte(strconv.Quote(values["BETTER_AUTH_URL"])))
 	config = bytes.ReplaceAll(config, []byte("@@RUNTIME@@"), []byte(strings.Trim(strconv.Quote(runtime), "\"")))
 	service := `"product"`

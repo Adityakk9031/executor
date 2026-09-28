@@ -1138,3 +1138,258 @@ export default defineApp({ accounts: {} }, async () => ({
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );
+
+/** One call of a probe app, reporting its isolate and how many calls that isolate has served. */
+type Probe = Effect.Effect<{ readonly isolate: string; readonly calls: number }, unknown>;
+
+/**
+ * The released image reads `EXECUTOR_APP_WORKERS` through its Go host into the apps Worker's
+ * workerd binding. A positive value bounds the app Workers kept loaded, an unset value applies the
+ * default of 32 and an invalid value stops the server before it starts. Each probe app reports an
+ * identifier from its module state, so a Worker that was unloaded and loaded again reports a new
+ * identifier and no earlier calls.
+ */
+it.live(
+  "released image keeps at most EXECUTOR_APP_WORKERS app Workers loaded",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const processes = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const image = yield* Config.String("EXECUTOR_E2E_DOCKER_IMAGE");
+        const run = (args: readonly string[], env: Record<string, string> = {}) =>
+          processes.string(
+            ChildProcess.make("docker", args, {
+              env,
+              extendEnv: true,
+              stderr: args[0] === "logs" ? "pipe" : "inherit",
+            }),
+            { includeStderr: args[0] === "logs" },
+          );
+        const freePort = driver(
+          "allocate port",
+          () =>
+            new Promise<number>((resolve, reject) => {
+              const listener = createServer();
+              listener.once("error", reject);
+              listener.listen(0, "127.0.0.1", () => {
+                const address = listener.address();
+                listener.close(() =>
+                  address === null || typeof address === "string"
+                    ? reject(new Error("No test port"))
+                    : resolve(address.port),
+                );
+              });
+            }),
+        );
+        const containerPort = 8080;
+        /** Start the image with an app Worker limit, or none, in its own container. */
+        const start = (limit: string | undefined) =>
+          Effect.gen(function* () {
+            const id = `executor-app-workers-${randomBytes(6).toString("hex")}`;
+            const port = yield* freePort;
+            const origin = `http://localhost:${port}`;
+            const environment: Record<string, string> = {
+              PORT: String(containerPort),
+              BETTER_AUTH_URL: origin,
+              BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
+              EXECUTOR_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
+              ...(limit === undefined ? {} : { EXECUTOR_APP_WORKERS: limit }),
+            };
+            yield* Effect.acquireRelease(
+              run(
+                [
+                  "run",
+                  "--detach",
+                  "--name",
+                  id,
+                  "--init",
+                  "--publish",
+                  `127.0.0.1:${port}:${containerPort}`,
+                  ...Object.keys(environment).flatMap((name) => ["--env", name]),
+                  image,
+                ],
+                environment,
+              ),
+              // An anonymous data volume is removed with the container.
+              () => run(["rm", "--force", "--volumes", id]).pipe(Effect.orDie),
+            );
+            return { id, origin, address: `http://127.0.0.1:${port}` };
+          });
+
+        // An invalid limit stops the server with a clear message instead of using a default.
+        for (const invalid of ["0", "many"]) {
+          const container = yield* start(invalid);
+          const code = (yield* run(["wait", container.id]).pipe(
+            Effect.timeoutOrElse({
+              duration: "60 seconds",
+              orElse: () =>
+                Effect.fail(new Error(`EXECUTOR_APP_WORKERS=${invalid} did not stop the server`)),
+            }),
+          )).trim();
+          expect(code, `EXECUTOR_APP_WORKERS=${invalid} stops the server`).not.toBe("0");
+          expect(yield* run(["logs", container.id])).toContain(
+            "EXECUTOR_APP_WORKERS must be a positive integer",
+          );
+        }
+
+        /** An owner, an organization and probe apps without accounts on a running container. */
+        const serve = (limit: string | undefined, apps: number) =>
+          Effect.gen(function* () {
+            const container = yield* start(limit);
+            yield* Effect.addFinalizer((exit) =>
+              Exit.isFailure(exit)
+                ? run(["logs", container.id]).pipe(Effect.flatMap(Console.error), Effect.ignore)
+                : Effect.void,
+            );
+            const request = (route: string, data?: unknown, cookie?: string) =>
+              driver("app Worker limit HTTP request", () =>
+                fetch(`${container.address}${route}`, {
+                  method: data === undefined ? "GET" : "POST",
+                  headers: {
+                    origin: container.origin,
+                    "content-type": "application/json",
+                    ...(cookie === undefined ? {} : { cookie }),
+                  },
+                  ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+                }),
+              );
+            const json = <A>(schema: Schema.ConstraintDecoder<A, never>, response: Response) =>
+              driver("app Worker limit response", () => response.json()).pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(schema)),
+              );
+            yield* request("/health").pipe(
+              Effect.flatMap((r) => (r.status === 200 ? Effect.void : Effect.fail("not ready"))),
+              Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 200 }),
+            );
+            const setup = yield* request("/api/auth/self-host/setup", {
+              name: "Worker Limit Owner",
+              email: "worker-limit@example.test",
+              password: "Synthetic-worker-limit-password-123!",
+              organizationName: "Worker limit lab",
+            });
+            expect(setup.status).toBe(200);
+            const cookie = setup.headers
+              .getSetCookie()
+              .map((part) => part.split(";")[0])
+              .join("; ");
+            const [organization] = yield* json(
+              Schema.NonEmptyArray(Schema.Struct({ id: Schema.String })),
+              yield* request("/api/auth/organization/list", undefined, cookie),
+            );
+            const prefix = `/api/organizations/${organization.id}`;
+            const probes: Array<Probe> = [];
+            for (let index = 0; index < apps; index++) {
+              const deployed = yield* request(
+                `${prefix}/apps/deploy`,
+                {
+                  name: `Worker limit ${index}`,
+                  files: [
+                    {
+                      path: "index.ts",
+                      content: `import { defineApp, query, object } from "apps";
+let isolate;
+let calls = 0;
+export default defineApp({ accounts: {} }, async () => ({
+  queries: {
+    probe: query({ input: object({}) }, async () => {
+      isolate ??= crypto.randomUUID();
+      calls++;
+      return { isolate, calls };
+    }),
+  },
+}));`,
+                    },
+                  ],
+                },
+                cookie,
+              );
+              expect(
+                deployed.status,
+                yield* driver("deploy probe", () => deployed.clone().text()),
+              ).toBe(200);
+              const app = yield* json(Schema.Struct({ id: Schema.String }), deployed);
+              const profile = yield* json(
+                Schema.Struct({ id: Schema.String }),
+                yield* request(
+                  `${prefix}/apps/${app.id}/profiles`,
+                  { accounts: {}, idempotencyKey: randomUUID() },
+                  cookie,
+                ),
+              );
+              // Profile setup discovers the app in the background; let it finish before the calls.
+              yield* request(
+                `${prefix}/apps/${app.id}/profiles/${profile.id}`,
+                undefined,
+                cookie,
+              ).pipe(
+                Effect.flatMap((response) =>
+                  json(Schema.Struct({ status: Schema.String }), response),
+                ),
+                Effect.flatMap((current) =>
+                  current.status === "pending"
+                    ? Effect.fail(new Error("Profile setup has not finished"))
+                    : Effect.void,
+                ),
+                Effect.retry({ schedule: Schedule.spaced("200 millis"), times: 150 }),
+              );
+              probes.push(
+                request(
+                  `${prefix}/apps/${app.id}/tools/call`,
+                  { profile: profile.id, tool: "queries.probe", input: {} },
+                  cookie,
+                ).pipe(
+                  Effect.tap((response) =>
+                    Effect.sync(() => expect(response.status, `probe ${index}`).toBe(200)),
+                  ),
+                  Effect.flatMap((response) =>
+                    json(Schema.Struct({ isolate: Schema.String, calls: Schema.Number }), response),
+                  ),
+                ),
+              );
+            }
+            return probes;
+          });
+
+        // A limit of one: calling a second app unloads the first, which then loads again.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const [first, second] = (yield* serve("1", 2)) as [Probe, Probe];
+            const before = yield* first;
+            expect((yield* first).isolate, "a warm call reuses the loaded Worker").toBe(
+              before.isolate,
+            );
+            const other = yield* second;
+            const back = yield* first;
+            expect(back.isolate, "the first Worker was unloaded above the limit").not.toBe(
+              before.isolate,
+            );
+            expect(back.calls).toBe(1);
+            expect((yield* second).isolate, "the second Worker was unloaded in turn").not.toBe(
+              other.isolate,
+            );
+          }),
+        );
+
+        // No limit set: the default keeps 32 Workers loaded and unloads the 33rd most recent.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const probes = yield* serve(undefined, 33);
+            const first: Array<{ isolate: string; calls: number }> = [];
+            for (const probe of probes) first.push(yield* probe);
+            // Newest first, so each call reuses a loaded Worker and unloads none.
+            for (let index = probes.length - 1; index >= 1; index--) {
+              const again = yield* probes[index]!;
+              expect(again.isolate, `app ${index} stayed loaded`).toBe(first[index]!.isolate);
+              expect(again.calls).toBe(2);
+            }
+            const oldest = yield* probes[0]!;
+            expect(oldest.isolate, "the least recently used Worker was unloaded").not.toBe(
+              first[0]!.isolate,
+            );
+            expect(oldest.calls).toBe(1);
+          }),
+        );
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  300_000,
+);

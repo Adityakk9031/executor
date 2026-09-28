@@ -1,4 +1,5 @@
 /** An authored module that reports which loaded Worker served it and what credentials it saw. */
+import { expect } from "@effect/vitest";
 import { Schema } from "effect";
 
 /**
@@ -53,3 +54,92 @@ export default defineApp({ accounts: { service }${options.database ? ", database
     run: ctx.runId,
   })) },
 });`;
+
+/** Serial calls of one account whose build loads are counted from their traces. */
+export const loadRounds = 20;
+
+/**
+ * Every call of one account runs in the same loaded Worker, and only a cold start loads the build.
+ * A call is cold exactly when the module has observed no earlier call. Background discovery can
+ * start the Worker first, so the first call loads at most once; later calls never load.
+ */
+export const expectOneLoadPerColdStart = (
+  calls: ReadonlyArray<{ readonly observation: typeof Observation.Type; readonly loads: number }>,
+) => {
+  expect(new Set(calls.map((call) => call.observation.isolate)).size).toBe(1);
+  expect(calls.slice(1).every((call) => call.observation.calls > 1)).toBe(true);
+  // A warm call reads, decodes and transfers no app code.
+  expect(
+    calls.map((call) => call.loads),
+    "only a cold start loads the build",
+  ).toEqual(calls.map((call) => (call.observation.calls === 1 ? call.loads : 0)));
+  expect(calls[0]!.loads).toBeLessThanOrEqual(1);
+};
+
+/**
+ * Concurrent calls of two accounts of one app: each account keeps its own Worker, every call
+ * receives its own credential, and neither Worker ever holds the other account's credential.
+ */
+export const expectIsolatedAccounts = (
+  first: { readonly observed: ReadonlyArray<typeof Observation.Type>; readonly token: string },
+  second: { readonly observed: ReadonlyArray<typeof Observation.Type>; readonly token: string },
+  firstIsolate: string,
+) => {
+  for (const entry of first.observed)
+    expect(entry).toMatchObject({
+      isolate: firstIsolate,
+      previous: first.token,
+      token: first.token,
+    });
+  const [initial, ...rest] = second.observed;
+  expect(initial).toMatchObject({ previous: null, token: second.token });
+  expect(initial!.isolate).not.toBe(firstIsolate);
+  for (const entry of rest)
+    expect(entry).toMatchObject({
+      isolate: initial!.isolate,
+      previous: second.token,
+      token: second.token,
+    });
+};
+
+/**
+ * Concurrent calls of two accounts of an app with a database, on a host that unloads the data
+ * facet a call of other accounts replaced. The app runs one facet at a time, so alternating calls
+ * start fresh facet Workers. Every call still receives its own credential, module state lives only
+ * within one Worker, and no Worker ever serves both accounts.
+ */
+export const expectIsolatedAccountsAcrossReplacedFacets = (
+  first: { readonly observed: ReadonlyArray<typeof Observation.Type>; readonly token: string },
+  second: { readonly observed: ReadonlyArray<typeof Observation.Type>; readonly token: string },
+) => {
+  for (const { observed, token } of [first, second])
+    for (const entry of observed)
+      // A fresh Worker has seen no credential; a loaded one has seen only this account's.
+      expect(entry).toMatchObject({ token, previous: entry.calls === 1 ? null : token });
+  const firstIsolates = new Set(first.observed.map((entry) => entry.isolate));
+  expect(
+    second.observed.filter((entry) => firstIsolates.has(entry.isolate)),
+    "no Worker served both accounts",
+  ).toEqual([]);
+};
+
+/**
+ * Build loads of an app whose data facets were replaced and unloaded. The app Worker loads once.
+ * A facet loads only at a cold start: once for every fresh facet a call observed, plus at most one
+ * facet per runtime that background discovery started and another account's call replaced before
+ * any call observed it.
+ */
+export const expectFacetLoadsOnlyAtColdStarts = (
+  loads: Readonly<Record<string, number>>,
+  observed: ReadonlyArray<typeof Observation.Type>,
+) => {
+  const facets = Object.entries(loads).filter(([runtime]) => runtime.startsWith("facet "));
+  const workers = Object.entries(loads).filter(([runtime]) => !runtime.startsWith("facet "));
+  expect(Object.fromEntries(workers), "one build load per app Worker").toEqual(
+    Object.fromEntries(workers.map(([runtime]) => [runtime, 1])),
+  );
+  const fresh = observed.filter((entry) => entry.calls === 1).length;
+  const facetLoads = facets.reduce((sum, [, count]) => sum + count, 0);
+  expect(facetLoads, "every observed cold start loaded the build").toBeGreaterThanOrEqual(fresh);
+  expect(facetLoads, "only cold starts load the build").toBeLessThanOrEqual(fresh + facets.length);
+};
