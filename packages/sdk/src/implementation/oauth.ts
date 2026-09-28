@@ -38,6 +38,8 @@ import {
   OAuthRenewalFailed,
   OAuthConfidentialRegistration,
   OAuthSetupFailed,
+  OAuthSavedClientMetadata,
+  type OAuthClientSource,
   type OAuthFailureCause,
   type OAuthOptions,
 } from "../contracts/oauth.ts";
@@ -403,14 +405,21 @@ export const makeOAuth = (
         ? yield* query(() => db.findFirst("oauthClients", { where: (b) => b("id", "=", clientId) }))
         : null;
       let client: OAuthRegistration | undefined;
+      let reused: { readonly version: Uint8Array; readonly source?: OAuthClientSource } | undefined;
       if (saved !== null) {
         const registered = yield* decrypt(clientId, saved.encrypted, OAuthRegistration);
+        const metadata = yield* decrypt(clientId, saved.encrypted, OAuthSavedClientMetadata);
         if (
           registered.client_secret_expires_at === undefined ||
           registered.client_secret_expires_at === 0 ||
           registered.client_secret_expires_at * 1000 > now
-        )
+        ) {
           client = registered;
+          reused = {
+            version: saved.encrypted,
+            ...(metadata.executor_source === undefined ? {} : { source: metadata.executor_source }),
+          };
+        }
       }
       const savedClient = client !== undefined;
       if (
@@ -427,7 +436,7 @@ export const makeOAuth = (
         if (url === undefined) return yield* new OAuthSetupFailed({ reason: "invalid_client" });
         client = { client_id: url.href, token_endpoint_auth_method: "none" };
       }
-      return { method, redirect, discovered, clientId, client, savedClient };
+      return { method, redirect, discovered, clientId, client, savedClient, reused };
     });
   const oauthSetup = (input: typeof CheckOAuthSetup.Type) =>
     resolveSetup(input, true).pipe(
@@ -474,7 +483,11 @@ export const makeOAuth = (
         discovered,
         clientId,
         client: availableClient,
+        reused,
       } = yield* resolveSetup(input, input.client === undefined);
+      /** Where the client came from; a reused client keeps its recorded source, if any. */
+      let source: OAuthClientSource | undefined =
+        input.client !== undefined ? "manual" : reused === undefined ? "metadata" : reused.source;
       const now = yield* Clock.currentTimeMillis;
       let client: OAuthRegistration | undefined;
       if (input.client !== undefined) {
@@ -510,6 +523,7 @@ export const makeOAuth = (
             method.tokenEndpointAuthMethod,
           )
           .pipe(Effect.mapError((error) => registrationFailed(error, HttpUrl.make(redirect.href))));
+        source = "registered";
       }
       if (client === undefined) return yield* new OAuthClientUnavailable(input);
       if (
@@ -518,7 +532,10 @@ export const makeOAuth = (
       )
         return yield* new OAuthSetupFailed({ reason: "invalid_client" });
       const registered = client;
-      const encryptedClient = yield* encrypt(clientId, registered);
+      const encryptedClient = yield* encrypt(clientId, {
+        ...registered,
+        ...(source === undefined ? {} : { executor_source: source }),
+      });
       const saveClient = (store: Query) =>
         query(() =>
           store.upsert("oauthClients", {
@@ -602,7 +619,8 @@ export const makeOAuth = (
       }
       if (redirect === undefined)
         return yield* new OAuthSetupFailed({ reason: "invalid_redirect" });
-      if (input.client === undefined) yield* saveClient(db);
+      // A reused client is already saved; writing it again could restore one discarded meanwhile.
+      if (input.client === undefined && reused === undefined) yield* saveClient(db);
       const authorization = yield* protocol
         .authorize({ ...discovered, client: registered, redirectUri: redirect.href })
         .pipe(Effect.mapError(() => new OAuthSetupFailed({ reason: "unsupported" })));
@@ -616,7 +634,16 @@ export const makeOAuth = (
         account,
         ...(existing === undefined ? {} : { reconnect: true }),
         client: registered,
-        ...(input.client === undefined ? {} : { clientKey: clientId }),
+        ...(input.client !== undefined
+          ? { clientKey: clientId }
+          : {
+              savedClient: {
+                key: clientId,
+                version: Encoding.encodeBase64(reused?.version ?? encryptedClient),
+                ...(source === undefined ? {} : { source }),
+                fresh: reused === undefined,
+              },
+            }),
         response: method.response,
       });
       const encrypted = yield* encrypt(id, attempt);
@@ -755,9 +782,33 @@ export const makeOAuth = (
       const parameters = yield* protocol
         .callback(attempt, callback)
         .pipe(Effect.mapError(callbackFailed));
-      const tokens = yield* protocol
-        .exchange(attempt, parameters)
-        .pipe(Effect.mapError(exchangeFailed));
+      const tokens = yield* protocol.exchange(attempt, parameters).pipe(
+        Effect.mapError(exchangeFailed),
+        Effect.catchIf(
+          (error) =>
+            error.reason === "invalid_client" && attempt.savedClient?.source === "registered",
+          (error) =>
+            Effect.gen(function* () {
+              const saved = attempt.savedClient;
+              if (saved === undefined) return yield* error;
+              const version = yield* Effect.fromResult(Encoding.decodeBase64(saved.version)).pipe(
+                Effect.mapError(() => new StorageError()),
+              );
+              // Only the version this attempt used: a client saved since then stays.
+              yield* query(() =>
+                db.deleteMany("oauthClients", {
+                  where: (b) => b.and(b("id", "=", saved.key), b("encrypted", "=", version)),
+                }),
+              );
+              return yield* new OAuthCompletionFailed({
+                reason: saved.fresh
+                  ? "registered_client_incompatible"
+                  : "registered_client_rejected",
+                ...(error.cause === undefined ? {} : { cause: error.cause }),
+              });
+            }),
+        ),
+      );
       const fields = yield* project(attempt.response, tokens).pipe(
         Effect.mapError(
           () =>
@@ -795,7 +846,10 @@ export const makeOAuth = (
           ? undefined
           : {
               id: attempt.clientKey,
-              encrypted: yield* encrypt(attempt.clientKey, attempt.client),
+              encrypted: yield* encrypt(attempt.clientKey, {
+                ...attempt.client,
+                executor_source: "manual",
+              }),
             };
       const ready = `ready_${yield* nextId}`;
       return yield* transaction(db, (tx) =>

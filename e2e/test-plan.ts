@@ -1013,6 +1013,17 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  oauthSavedClientRejection: {
+    fixtures: "actors",
+    file: "oauth-saved-client-rejection.spec.ts",
+    title:
+      "A rejected client Executor registered is discarded only in the version the sign-in used, and entered clients are kept",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer with controlled wire responses."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
   oauthErrorResponses: {
     fixtures: "actors",
     file: "oauth-error-responses.spec.ts",
