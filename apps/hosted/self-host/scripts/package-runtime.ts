@@ -178,9 +178,13 @@ const packageRuntime = Effect.gen(function* () {
   })
     .map(([name, value]) => `(name=${JSON.stringify(name)},text=${JSON.stringify(String(value))})`)
     .join(",");
-  // Every workflow run is its own Engine durable object. A run in progress holds its engine
-  // through the binding's open call, and sleeps and retries wake it from durable alarms, so an
-  // engine may leave memory once idle. Pinning engines kept every finished run resident.
+  // Every workflow run is its own Engine durable object, and pinning engines kept every finished
+  // run resident. workerd unloads an engine about 70 s after its last call once no caller holds
+  // it, even with a step in flight; only a run started by create() has a caller holding it. The
+  // patched engine re-arms its alarm every 30 s while a step runs, so runs woken by an alarm, an
+  // event, a resume or a restart keep their engine loaded. Sleeps, retry delays and event waits
+  // resume from durable alarms, so a finished engine leaves memory, and so could a waiting one,
+  // but the host's reconciliation reads every open run every few seconds, which keeps it loaded.
   const workflowEngines = `(className="Engine",uniqueKey="executor-app-workflows",enableSql=true)`;
   const config = `using Workerd = import "/workerd/workerd.capnp";
 const config :Workerd.Config = (
