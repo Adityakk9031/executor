@@ -245,6 +245,7 @@ layer(HostedLive, { excludeTestServices: true })("Profile picker", (it) => {
       Effect.gen(function* () {
         const { api, actors, browser, app, path, url, first, second } = yield* seededProfileFixture;
         yield* browser.login(actors.member);
+        yield* installBrowserClock;
         yield* browser.use("Open the app without a selected account", (page) =>
           page.goto(`${url}?view=tools`),
         );
@@ -356,25 +357,33 @@ layer(HostedLive, { excludeTestServices: true })("Profile picker", (it) => {
             .getByRole("checkbox", { name: /Work inbox/ })
             .check(),
         );
-        const read = yield* holdQuery(
-          [actors.organization.id, actors.organization.slug].map(
-            (org) => `/api/organizations/${org}/apps/${app.id}/profiles`,
-          ),
-          "fail",
-        );
-        yield* refreshVisiblePage;
-        yield* read.requested;
-        expect(
-          yield* browser.use("The array draft remains while metadata loads", (page) =>
-            page
-              .getByRole("dialog")
-              .getByRole("checkbox", { name: /Work inbox/ })
-              .isChecked(),
-          ),
-        ).toBe(true);
-        yield* read.release;
-        yield* browser.use("The read failure is visible", (page) =>
-          page.getByText("Unable to complete this request", { exact: true }).first().waitFor(),
+        // Periodic reconciliation can already be reading profiles when the tab regains focus.
+        // The focus refresh supersedes that read, so every profiles read in the cycle fails.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const read = yield* holdQuery(
+              [actors.organization.id, actors.organization.slug].map(
+                (org) => `/api/organizations/${org}/apps/${app.id}/profiles`,
+              ),
+              "fail",
+              { allRequests: true },
+            );
+            yield* advanceToReconciliation;
+            yield* read.requested;
+            yield* refreshVisiblePage;
+            expect(
+              yield* browser.use("The array draft remains while metadata loads", (page) =>
+                page
+                  .getByRole("dialog")
+                  .getByRole("checkbox", { name: /Work inbox/ })
+                  .isChecked(),
+              ),
+            ).toBe(true);
+            yield* read.release;
+            yield* browser.use("The read failure is visible", (page) =>
+              page.getByText("Unable to complete this request", { exact: true }).first().waitFor(),
+            );
+          }),
         );
         expect(
           yield* browser.use("The array draft survives a failed refresh", (page) =>
