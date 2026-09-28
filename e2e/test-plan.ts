@@ -2029,6 +2029,18 @@ export const scenarios = {
       local: na("Cloud social sign-in instrumentation."),
     },
   },
+  authInvocations: {
+    fixtures: "actors",
+    file: "auth-invocations.spec.ts",
+    title: "Concurrent users read their own sessions and trace auth SQL to their own requests",
+    targets: {
+      cloud: scheduled,
+      "self-host": na(
+        "Self-host serves Better Auth from one process with its own database; Cloud binds each Worker invocation's connection.",
+      ),
+      local: na("Local has no hosted sign-in sessions."),
+    },
+  },
   clientRejectionReporting: {
     fixtures: "actors",
     file: "client-rejection-reporting.spec.ts",

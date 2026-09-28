@@ -1,7 +1,7 @@
 import { cloudArtifactsTokensLive } from "./infrastructure/artifacts-tokens.ts";
 import { Provisioning, dispatchProvisioning } from "./infrastructure/provisioning.ts";
 import { previewLifetime } from "./infrastructure/test-stage-expiry.ts";
-import { executorCloudApiDocument } from "./contracts/api.ts";
+import { ExecutorCloudApi, executorCloudApiDocument } from "./contracts/api.ts";
 import { hostedAppUi, appAddresses } from "@executor-js/hosted-server/app-ui";
 import { cloudAppUiBase } from "./contracts/app-ui.ts";
 import { AppDomainCoordinatorLive, cloudAppDomains } from "./infrastructure/app-domains.ts";
@@ -9,7 +9,10 @@ import { AppRepositoryRecovery, WorkflowHost } from "@executor-js/sdk/core";
 import { AppWorkflows } from "./infrastructure/workflows.ts";
 import {
   OrganizationRemoval,
+  OrganizationRemovalHost,
+  OrganizationRemovalStart,
   dispatchOrganizationRemovals,
+  startOrganizationRemoval,
 } from "./infrastructure/organization-removal-workflow.ts";
 import { HostedExecutor, lazyHostedApiDocument } from "@executor-js/hosted-server";
 import { BillingMeter } from "./contracts/billing-meter.ts";
@@ -161,11 +164,20 @@ export default Api.make(
     const welcomeEmails = yield* cloudWelcomeEmails(email.welcome);
     yield* AppWorkflows;
     yield* Provisioning;
-    yield* OrganizationRemoval;
     const executor = yield* cloudExecutor(
       yield* AppDataSupervisor,
       yield* cloudArtifactsTokensLive,
     );
+    const billing = yield* billingLive.pipe(Effect.orDie);
+    // The removal workflow runs in this isolate and shares its services.
+    const removal = yield* OrganizationRemoval.pipe(
+      Effect.provideService(OrganizationRemovalHost, {
+        executor,
+        identity: auth.identity,
+        billing,
+      }),
+    );
+    const removals = Layer.succeed(OrganizationRemovalStart, startOrganizationRemoval(removal));
     const schedules = yield* cloudSchedules;
     const dispatch = dispatchProvisioning.pipe(
       Effect.provide(executor),
@@ -177,7 +189,7 @@ export default Api.make(
     );
     yield* Cloudflare.Workers.cron("* * * * *", () =>
       dispatchOrganizationRemovals.pipe(
-        Effect.provide(executor),
+        Effect.provide(Layer.merge(executor, removals)),
         Effect.scoped,
         Effect.catch(() => Effect.logWarning("Organization removal journal unavailable")),
         lifetime.background,
@@ -200,7 +212,6 @@ export default Api.make(
       appDomains.status,
     );
     const mcp = yield* cloudMcp;
-    const billing = yield* billingLive.pipe(Effect.orDie);
     const meter = yield* BillingMeter.pipe(Effect.provide(billing));
     // One established schedule owns both independent background jobs. Each job
     // reports its own failure so a workflow problem cannot prevent email delivery.
@@ -246,6 +257,7 @@ export default Api.make(
       HttpRouter.provideRequest(catalogLive(authoring, document.document, egress)),
       Layer.provide(schedules),
       Layer.provide(billing),
+      Layer.provide(removals),
       Layer.provide(onboarding),
       Layer.provide(requireUserLive),
       Layer.provide(requireOrganizationLive),
@@ -253,6 +265,29 @@ export default Api.make(
       Layer.provide(auth.identity),
       Layer.provide(auth.apiIdentity),
       Layer.provide(auth.mcpIdentity),
+    );
+    const memoMap = yield* Layer.makeMemoMap;
+    // The dashboard API holds most routes and their schema decoders. MCP, auth, telemetry
+    // and document requests do not use it, so it is built on its first request and kept
+    // for the isolate. Building is synchronous: no other request can see a partial build.
+    const buildApi = api.pipe(
+      Layer.provide(HttpServer.layerServices),
+      HttpRouter.toHttpEffect,
+      Effect.provideService(Layer.CurrentMemoMap, memoMap),
+    );
+    const apiServices = yield* Effect.context<Effect.Services<typeof buildApi>>();
+    let apiHandle: Effect.Success<typeof buildApi> | undefined;
+    const apiRequest = Effect.suspend(
+      () => (apiHandle ??= Effect.runSync(Effect.provideContext(buildApi, apiServices))),
+    );
+    // Register the API's own paths here, so routing precedence is unchanged.
+    const apiRoutes = Layer.mergeAll(
+      HttpRouter.add("GET", "/openapi.json", apiRequest),
+      ...Object.values(ExecutorCloudApi.groups).flatMap((group) =>
+        Object.values(group.endpoints).map((endpoint) =>
+          HttpRouter.add(endpoint.method, endpoint.path, apiRequest),
+        ),
+      ),
     );
     const mcpRoutes = Layer.mergeAll(
       HttpRouter.add("*", "/mcp", mcp.http),
@@ -296,7 +331,7 @@ export default Api.make(
       HttpRouter.add("GET", "/api/entry", cloudEntryApi(auth.browserSession)).pipe(
         HttpRouter.provideRequest(onboarding),
       ),
-      api,
+      apiRoutes,
       publishedSkillRoutes(authoring),
       HttpRouter.add("*", "/api/:channel/*", analytics.proxy),
       HttpRouter.add("POST", "/api/:channel/submit", errorTunnel),
@@ -331,7 +366,7 @@ export default Api.make(
     const handle = yield* routes.pipe(
       Layer.provide(HttpServer.layerServices),
       HttpRouter.toHttpEffect,
-      Effect.provideService(Layer.CurrentMemoMap, yield* Layer.makeMemoMap),
+      Effect.provideService(Layer.CurrentMemoMap, memoMap),
     );
     return {
       fetch: Effect.gen(function* () {
