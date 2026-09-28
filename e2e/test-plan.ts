@@ -2447,7 +2447,7 @@ export const scenarios = {
   },
   localProfilePicker: {
     file: "local-profile-picker.spec.ts",
-    title: "local account groups select scalar tools without copying apps",
+    title: "local account groups choose single and multiple accounts in place without copying apps",
     targets: {
       local: scheduled,
       "self-host": na("Local pairing journey."),

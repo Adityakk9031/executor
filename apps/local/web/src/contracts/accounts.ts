@@ -79,11 +79,14 @@ export const reconnectAccountAtom = DashboardClient.runtime.fn(
     ),
 );
 
-/** All dashboard credential paths invalidate unknown health and account-dependent catalogs. */
+/**
+ * All dashboard credential paths invalidate unknown health and account-dependent catalogs.
+ * The inventory gates every dashboard page, so it reloads in place instead of being cleared.
+ */
 export function accountCredentialsChanged(get: Atom.FnContext | Atom.AtomContext, saved: Account) {
   refreshCredentialDependents(get, saved.id);
   invalidate(get, accountAtom(saved.id));
-  invalidate(get, overviewAtom);
+  get.registry.refresh(overviewAtom);
 }
 function refreshCredentialDependents(get: Atom.FnContext | Atom.AtomContext, account: AccountId) {
   const inventory = AsyncResult.value(get.registry.get(overviewAtom));

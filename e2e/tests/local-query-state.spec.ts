@@ -127,34 +127,45 @@ export default defineApp({ accounts: { service } }, async () => ({  }));
             page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
           ),
         ).toBe("Second draft account");
-        yield* browser.use("Open account selection", (page) => page.goto(`/apps/${app.id}/setup`));
-        yield* browser.use("Choose a saved account", (page) => page.getByRole("combobox").click());
-        yield* browser.use("Make an unsaved account selection", (page) =>
-          page.getByRole("option", { name: "Second draft account", exact: true }).click(),
+        yield* browser.use("Open the app's accounts", (page) =>
+          page.goto(`/apps/${app.id}?view=accounts`),
         );
-        yield* browser.use("The account picker has closed", (page) =>
-          page.getByRole("listbox").waitFor({ state: "hidden" }),
+        yield* browser.use("Start connecting another account", (page) =>
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
+        );
+        const connectionDraft = "Keep this unsaved connection name";
+        yield* browser.use("Name the connection without saving", (page) =>
+          page
+            .getByRole("dialog", { name: "Connect Draft test service", exact: true })
+            .getByRole("textbox", { name: "Account name", exact: true })
+            .fill(connectionDraft),
         );
         expect(
           (yield* session.send("DELETE", `/v1/apps/${app.id}`, undefined, headers)).status,
         ).toBe(200);
         yield* browser.use("The live app query reports removal", (page) =>
           page
-            .getByRole("dialog", { name: "Choose accounts", exact: true })
-            .getByRole("alert", { name: "App no longer available", exact: true })
+            .getByRole("alert", {
+              name: "App no longer available",
+              exact: true,
+              includeHidden: true,
+            })
             .waitFor({ state: "visible" }),
         );
         expect(
-          yield* browser.use("The failed live read keeps account selection", (page) =>
-            page.getByRole("dialog").getByRole("combobox").count(),
+          yield* browser.use("The failed live read keeps the connection dialog", (page) =>
+            page.getByRole("dialog", { name: "Connect Draft test service", exact: true }).count(),
           ),
         ).toBe(1);
         expect(
-          yield* browser.use("The unsaved selection remains available", (page) =>
-            page.getByRole("dialog").getByRole("combobox").textContent(),
+          yield* browser.use("The unsaved connection name remains available", (page) =>
+            page
+              .getByRole("dialog", { name: "Connect Draft test service", exact: true })
+              .getByRole("textbox", { name: "Account name", exact: true })
+              .inputValue(),
           ),
-        ).toContain("Second draft account");
-        yield* browser.checkpoint("Local account selection survives a live read failure");
+        ).toBe(connectionDraft);
+        yield* browser.checkpoint("Local account connection draft survives a live read failure");
       }),
     ),
   );

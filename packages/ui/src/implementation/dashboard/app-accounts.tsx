@@ -27,6 +27,7 @@ import {
 import { ProviderIcon } from "./common.tsx";
 import { EmptyState } from "./empty-state.tsx";
 import { Button, type ButtonProps } from "../components/button.tsx";
+import { Checkbox } from "../components/checkbox.tsx";
 
 /** Explain a provider's account limit and offer a separate profile when the host permits it. */
 export function ProviderAccountSupport({
@@ -149,11 +150,18 @@ export function RemoveAccountBinding<E>({
   );
 }
 
+/** Saves one slot's next binding in place; rows stay disabled while a save is in flight. */
+export interface AccountChooser {
+  readonly choose: (slot: string, value: SelectedAccounts[string]) => void;
+  readonly pending: boolean;
+}
+
 /** Provider rows show the account bindings inside one profile or its editor. */
 export function AppAccounts({
   app,
   selection,
   accounts,
+  chooser,
   chooseAction,
   reconnectAction,
   accountActions,
@@ -163,6 +171,7 @@ export function AppAccounts({
   readonly app: App;
   readonly selection: SelectedAccounts;
   readonly accounts: readonly AccountSummary[];
+  readonly chooser?: AccountChooser | undefined;
   readonly chooseAction?: ReactNode;
   readonly reconnectAction?: (account: AccountSummary) => ReactNode;
   readonly accountActions?: (slot: string, requirement: AccountRequirement) => ReactNode;
@@ -182,6 +191,26 @@ export function AppAccounts({
       {requirements.map(([slot, requirement]) => {
         const selected = selection[slot];
         const ids = typeof selected === "string" ? [selected] : (selected ?? []);
+        const many = requirement.cardinality === "many";
+        // Choosing lists every compatible saved account oldest first, so a new account joins
+        // the end; bound accounts that are no longer compatible stay visible to be removed.
+        const rows = chooser
+          ? [
+              ...accounts
+                .filter((account) => account.provider === requirement.provider)
+                .toSorted(
+                  (a, b) =>
+                    a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id),
+                )
+                .map((account) => account.id),
+              ...ids.filter(
+                (id) =>
+                  !accounts.some(
+                    (account) => account.id === id && account.provider === requirement.provider,
+                  ),
+              ),
+            ]
+          : ids;
         const action = accountActions?.(slot, requirement) ?? chooseAction;
         const showSlot = requirements.some(
           ([otherSlot, other]) =>
@@ -219,57 +248,96 @@ export function AppAccounts({
                 </span>
               )}
             </div>
-            {(ids.length > 0 || action) && (
+            {(rows.length > 0 || action) && (
               <div
                 className={
-                  ids.length === 0
+                  rows.length === 0
                     ? "overflow-hidden rounded-lg border border-dashed"
                     : "overflow-hidden rounded-lg border"
                 }
               >
-                {ids.length > 0 && (
-                  <ul className="divide-y divide-border/50 text-[13px]">
-                    {ids.map((id) => {
+                {rows.length > 0 && (
+                  <ul
+                    role={chooser && !many ? "radiogroup" : undefined}
+                    aria-label={chooser ? `${requirement.definition.name} accounts` : undefined}
+                    className="divide-y divide-border/50 text-[13px]"
+                  >
+                    {rows.map((id) => {
                       const account = accounts.find((item) => item.id === id);
+                      const label = account?.label || (account ? "Unnamed account" : undefined);
+                      const bound = ids.includes(id);
+                      const status =
+                        account && accountNeedsSignIn(account) ? (
+                          <span className="flex items-center gap-2 text-xs text-sign-in-warning">
+                            Needs sign-in{reconnectAction?.(account)}
+                          </span>
+                        ) : account?.signIn?.state === "unavailable" ? (
+                          <span className="text-xs text-sign-in-warning">Unavailable</span>
+                        ) : null;
                       return (
                         <li
                           key={id}
                           className="group/account flex min-h-10 min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 px-3.5 py-2 transition-colors hover:bg-muted/25 focus-within:bg-muted/25"
                         >
-                          <HugeiconsIcon
-                            icon={UserCircleIcon}
-                            size={16}
-                            className="shrink-0 text-muted-foreground"
-                            aria-hidden
-                          />
-                          <span className="min-w-0 flex-1 break-words [&_a:hover]:underline">
-                            {account ? (
-                              <AccountLink account={id}>
-                                {account.label || "Unnamed account"}
-                              </AccountLink>
-                            ) : (
-                              "Account disconnected"
-                            )}
-                          </span>
-                          {account && accountNeedsSignIn(account) ? (
-                            <span className="flex items-center gap-2 text-xs text-sign-in-warning">
-                              Needs sign-in{reconnectAction?.(account)}
-                            </span>
-                          ) : account?.signIn?.state === "unavailable" ? (
-                            <span className="text-xs text-sign-in-warning">Unavailable</span>
-                          ) : null}
-                          {removeAccountAction?.(
-                            slot,
-                            id,
-                            account?.label || "Account disconnected",
+                          {chooser ? (
+                            <label
+                              className={`flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 ${bound ? "" : "text-muted-foreground hover:text-foreground"} has-disabled:cursor-default`}
+                            >
+                              {many ? (
+                                <Checkbox
+                                  checked={bound}
+                                  disabled={chooser.pending}
+                                  onCheckedChange={(checked) =>
+                                    chooser.choose(
+                                      slot,
+                                      checked === true
+                                        ? [...ids, id]
+                                        : ids.filter((other) => other !== id),
+                                    )
+                                  }
+                                />
+                              ) : (
+                                <input
+                                  type="radio"
+                                  name={`${app.id}-${slot}`}
+                                  checked={bound}
+                                  disabled={chooser.pending || (!bound && !account)}
+                                  onChange={() => chooser.choose(slot, id)}
+                                  className="size-4 shrink-0 cursor-pointer appearance-none rounded-full border border-input shadow-xs outline-none transition-shadow checked:border-[5px] checked:border-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50 dark:bg-input/30"
+                                />
+                              )}
+                              <span className="min-w-0 flex-1 break-words">
+                                {label ?? "Account disconnected"}
+                              </span>
+                            </label>
+                          ) : (
+                            <>
+                              <HugeiconsIcon
+                                icon={UserCircleIcon}
+                                size={16}
+                                className="shrink-0 text-muted-foreground"
+                                aria-hidden
+                              />
+                              <span className="min-w-0 flex-1 break-words [&_a:hover]:underline">
+                                {label ? (
+                                  <AccountLink account={id}>{label}</AccountLink>
+                                ) : (
+                                  "Account disconnected"
+                                )}
+                              </span>
+                            </>
                           )}
+                          {status}
+                          {bound &&
+                            !(chooser && many) &&
+                            removeAccountAction?.(slot, id, label ?? "Account disconnected")}
                         </li>
                       );
                     })}
                   </ul>
                 )}
                 {action && (
-                  <div className={ids.length > 0 ? "border-t border-border/50" : undefined}>
+                  <div className={rows.length > 0 ? "border-t border-border/50" : undefined}>
                     {action}
                   </div>
                 )}
