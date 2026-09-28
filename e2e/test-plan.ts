@@ -2189,6 +2189,18 @@ export const scenarios = {
       ),
     },
   },
+  cachedSkills: {
+    fixtures: "actors",
+    file: "cached-skills.spec.ts",
+    title: "remote skill catalogs are served from the app cache",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na(
+        "Shared runtime and HTTP behavior are covered on hosted targets; local MCP has its own skill scenario.",
+      ),
+    },
+  },
   appSkills: {
     fixtures: "actors",
     file: "app-skills.spec.ts",
