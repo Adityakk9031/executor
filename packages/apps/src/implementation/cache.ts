@@ -19,9 +19,11 @@ export const authorCache = (
   host: HostCache,
   accounts: ResolvedAccounts,
   signal: AbortSignal,
+  /** The invocation's trusted deadline. Waiting on another caller's load never runs past it. */
+  deadline?: number,
 ): AppCache => {
   const scoped = (scope: JsonValue, callerSignal = signal): AppCache => {
-    const cache = makeCache(host.transport, host.background, scope);
+    const cache = makeCache(host.transport, host.background, scope, deadline);
     const load = <A>(method: "get" | "revalidate", options: CacheGetOptions<A>) =>
       cache[method]({
         key: options.key,

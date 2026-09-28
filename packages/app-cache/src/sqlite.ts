@@ -199,6 +199,18 @@ export const sqliteCache = (storage: CacheSqlStorage) => {
                 command.key,
               );
               return null;
+            case "renew": {
+              const row = read(command.key);
+              if (row?.lease !== command.lease || row.lease_until <= now) return false;
+              storage.sql.exec(
+                "UPDATE executor_cache SET lease_until=? WHERE namespace=? AND key=? AND lease=?",
+                now + cacheLimits.leaseMs,
+                namespace,
+                command.key,
+                command.lease,
+              );
+              return true;
+            }
             case "release":
               storage.sql.exec(
                 "UPDATE executor_cache SET lease=NULL, lease_until=0 WHERE namespace=? AND key=? AND lease=?",

@@ -16,7 +16,17 @@ export const cacheLimits = {
   totalEntries: 100_000,
   retentionMs: 7 * 24 * 60 * 60 * 1_000,
   loadTimeoutMs: 90_000,
-  leaseMs: 120_000,
+  /**
+   * A loader's lease lapses this long after its host last renewed it. Hosts renew every
+   * `renewMs` while the invocation that claimed it runs, so a stalled or lost holder frees the
+   * key well inside an MCP execute budget.
+   */
+  leaseMs: 15_000,
+  renewMs: 5_000,
+  /** The longest a caller waits on another loader before loading for itself without publishing. */
+  waitMs: 10_000,
+  /** Bound for one command to a host store; a lost reply fails instead of holding its caller. */
+  commandTimeoutMs: 10_000,
 } as const;
 
 const Key = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
@@ -63,6 +73,8 @@ export const CacheCommand = Schema.Union([
     entry: CacheEntry,
   }),
   Schema.Struct({ operation: Schema.Literal("release"), key: Key, lease: Schema.String }),
+  /** Extend a lease its holder still owns. Replies false once the lease lapsed or was replaced. */
+  Schema.Struct({ operation: Schema.Literal("renew"), key: Key, lease: Schema.String }),
   Schema.Struct({
     operation: Schema.Literal("write"),
     entries: Schema.Array(Schema.Struct({ key: Key, entry: CacheEntry })),

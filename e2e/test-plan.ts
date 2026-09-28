@@ -295,6 +295,16 @@ export const scenarios = {
       local: na("Hosted management app catalog; the Node cache adapter shares the SQLite store"),
     },
   },
+  appCacheStalledLoader: {
+    fixtures: "actors",
+    file: "app-cache-stalled-loader.spec.ts",
+    title: "App cache callers outlast a stalled loader and the cache recovers after it",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted profile API fixture; Node adapter exercised by self-host"),
+    },
+  },
   appCacheFences: {
     fixtures: "actors",
     file: "app-cache-fences.spec.ts",

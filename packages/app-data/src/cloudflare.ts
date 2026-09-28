@@ -10,7 +10,13 @@ import type {
 import { Clock, Deferred, Effect, Exit, Result, Schema, Semaphore } from "effect";
 import { fingerprint } from "./implementation/cursor.ts";
 import { AppDatabaseError } from "./contracts/database.ts";
-import { CacheReply, changesCache } from "@executor-js/app-cache/contracts";
+import {
+  CacheCommand,
+  CacheError,
+  CacheReply,
+  changesCache,
+} from "@executor-js/app-cache/contracts";
+import { holdLeases } from "@executor-js/app-cache";
 import { sqliteCache } from "@executor-js/app-cache/sqlite";
 
 /** Executable bytes, supplied by the trusted build store rather than a browser request. */
@@ -357,6 +363,14 @@ export const makeFacetSupervisor = (
           if (invocation.write)
             yield* Effect.acquireRelease(begin, () => finish.pipe(Effect.catch(() => Effect.void)));
           const run = Effect.gen(function* () {
+            const namespace = invocation.cacheNamespace;
+            // The invocation owns the leases it claims until it finishes, background refreshes included.
+            const leases =
+              namespace === undefined
+                ? undefined
+                : yield* holdLeases((command) => store(namespace, command));
+            const closeLeases = () =>
+              leases === undefined ? Promise.resolve() : Effect.runPromise(leases.close);
             const call = yield* Effect.acquireRelease(
               Effect.sync(() => {
                 const id = invocation.id;
@@ -368,16 +382,24 @@ export const makeFacetSupervisor = (
                       invocation.headers,
                       elicitation,
                       workflows,
-                      invocation.cacheNamespace === undefined
+                      leases === undefined
                         ? null
                         : (command) =>
                             Effect.runPromise(
-                              cache(invocation.cacheNamespace ?? "", command).pipe(
+                              Schema.decodeUnknownEffect(CacheCommand)(command).pipe(
+                                Effect.mapError(() => new CacheError({ reason: "invalid" })),
+                                Effect.flatMap(leases.transport),
                                 Effect.tap(() =>
                                   Effect.sync(() => {
                                     if (changesCache(command)) cacheChanged = true;
                                   }),
                                 ),
+                                Effect.match({
+                                  onSuccess: (value) => ({ ok: true as const, value }),
+                                  onFailure: (error) => ({ ok: false as const, error }),
+                                }),
+                                Effect.flatMap(Schema.encodeEffect(CacheReply)),
+                                Effect.orDie,
                               ),
                             ),
                     ),
@@ -393,7 +415,12 @@ export const makeFacetSupervisor = (
                     state.facets.abort("data", "App invocation cancelled");
                   }
                   if (Exit.isSuccess(exit) && entrypoint.finish !== undefined) {
-                    state.waitUntil(entrypoint.finish(id).catch(() => undefined));
+                    state.waitUntil(
+                      entrypoint
+                        .finish(id)
+                        .catch(() => undefined)
+                        .then(closeLeases),
+                    );
                     return;
                   }
                   // Drain the invocation before the next caller acquires a fresh facet capability.
@@ -401,6 +428,7 @@ export const makeFacetSupervisor = (
                     Promise.resolve().then(() => entrypoint.cancel(id)),
                     result,
                   ]);
+                  await closeLeases();
                 }),
             );
             const result = yield* Effect.promise(() => call.result);

@@ -1,7 +1,8 @@
 /** Portable Effect cache mechanics. Adapters own storage and the background task lifetime. */
-import { Clock, Duration, Effect, Exit, Schema } from "effect";
+import { Clock, Duration, Effect, Exit, Option, Schedule, Schema, Scope } from "effect";
 import {
   CacheAcquired,
+  type CacheCommand,
   CacheEntry,
   CacheError,
   cacheLimits,
@@ -50,6 +51,8 @@ export const makeCache = (
   host: CacheTransport,
   background: (task: Effect.Effect<void, unknown>) => Effect.Effect<void>,
   scope: Schema.Json = "shared",
+  /** The caller's own deadline, when the host supplies one. Waiting never runs past it. */
+  deadline?: number,
 ) => {
   // Every round trip to the host store is visible from the app, whichever host runs it.
   const transport: CacheTransport = (command) =>
@@ -100,7 +103,7 @@ export const makeCache = (
               freshUntil: now + fresh,
               staleUntil: now + fresh + stale,
             },
-          });
+          }).pipe(Effect.withSpan("app.cache.publish"));
           if (published !== true) return yield* new CacheError({ reason: "unavailable" });
           return value;
         }).pipe(
@@ -115,7 +118,12 @@ export const makeCache = (
                 ),
           ),
         );
-      const deadline = (yield* Clock.currentTimeMillis) + cacheLimits.leaseMs;
+      // Another caller's lease is renewed while its invocation runs, however slowly it loads.
+      // Waiting is bounded here instead: past it, this caller loads for itself.
+      const waitUntil = Math.min(
+        (yield* Clock.currentTimeMillis) + cacheLimits.waitMs,
+        deadline ?? Number.POSITIVE_INFINITY,
+      );
       let initialVersion: string | null | undefined;
       while (true) {
         // One transaction reads the entry and, when it needs loading, claims the lease.
@@ -151,7 +159,15 @@ export const makeCache = (
           yield* Effect.annotateCurrentSpan("cache.result", "miss");
           return yield* load(lease);
         }
-        if (now >= deadline) return yield* new CacheError({ reason: "timeout" });
+        if (now >= waitUntil) {
+          // Without the lease this value is not published; the holder or a later caller does.
+          yield* Effect.annotateCurrentSpan("cache.result", "local");
+          return yield* options.load.pipe(
+            Effect.flatMap(decode),
+            Effect.timeout(cacheLimits.loadTimeoutMs),
+            Effect.withSpan("app.cache.load", { attributes: { "cache.load.leased": false } }),
+          );
+        }
         yield* Effect.sleep("100 millis");
       }
     }).pipe(Effect.withSpan("app.cache.get"));
@@ -194,3 +210,89 @@ export const makeCache = (
     revalidate: <A>(options: CacheGet<A>) => get(options, true),
   };
 };
+
+/**
+ * Host-side lease ownership for one app invocation. Leases the invocation claims are renewed while
+ * it runs, so a slow load keeps its key, and released when the host ends the invocation, including
+ * interrupted and cancelled ones and loads whose own release never arrived. A holder that stops
+ * running, or whose store channel stops answering, loses its lease within `leaseMs`.
+ */
+export const holdLeases = (transport: CacheTransport) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const held = new Map<string, string>();
+    const command = (input: CacheCommand) =>
+      transport(input).pipe(
+        Effect.timeout(cacheLimits.commandTimeoutMs),
+        Effect.catchTag("TimeoutError", () => Effect.fail(new CacheError({ reason: "timeout" }))),
+      );
+    // Renew what is held at each tick; leases claimed or released since are seen next time.
+    const renew = Effect.suspend(() => {
+      const leases = [...held];
+      return leases.length === 0
+        ? Effect.void
+        : Effect.forEach(
+            leases,
+            ([key, lease]) =>
+              command({ operation: "renew", key, lease }).pipe(
+                Effect.map((reply) => reply === true),
+                Effect.orElseSucceed(() => false),
+                Effect.flatMap((renewed) =>
+                  Effect.sync(() => {
+                    if (!renewed && held.get(key) === lease) held.delete(key);
+                  }),
+                ),
+              ),
+            { discard: true },
+          ).pipe(
+            Effect.withSpan("app.cache.lease.renew", {
+              attributes: { "cache.leases": leases.length },
+            }),
+          );
+    });
+    yield* renew.pipe(
+      Effect.delay(cacheLimits.renewMs),
+      Effect.repeat(Schedule.forever),
+      Effect.forkIn(scope),
+    );
+    const observe = (input: CacheCommand, reply: Schema.Json) =>
+      Effect.sync(() => {
+        switch (input.operation) {
+          case "acquire": {
+            const acquired = Schema.decodeUnknownOption(CacheAcquired)(reply);
+            if (Option.isSome(acquired) && acquired.value.lease !== null)
+              held.set(input.key, acquired.value.lease);
+            return;
+          }
+          case "claim":
+            if (typeof reply === "string") held.set(input.key, reply);
+            return;
+          case "publish":
+          case "release":
+            if (held.get(input.key) === input.lease) held.delete(input.key);
+            return;
+          case "invalidate":
+            held.delete(input.key);
+            return;
+        }
+      });
+    return {
+      /** Use for every command of the invocation. Each command is bounded by `commandTimeoutMs`. */
+      transport: ((input) =>
+        command(input).pipe(Effect.tap((reply) => observe(input, reply)))) satisfies CacheTransport,
+      /** Stop renewing and release every lease the invocation still holds. */
+      close: Effect.gen(function* () {
+        yield* Scope.close(scope, Exit.void);
+        const leases = [...held];
+        held.clear();
+        yield* Effect.forEach(
+          leases,
+          ([key, lease]) =>
+            command({ operation: "release", key, lease }).pipe(
+              Effect.catchCause(() => Effect.void),
+            ),
+          { concurrency: "unbounded", discard: true },
+        );
+      }),
+    };
+  });

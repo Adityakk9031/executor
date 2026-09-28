@@ -282,7 +282,7 @@ export const liveOpenapiOperations = (
           value: names.slice(page * pageSize, (page + 1) * pageSize),
         });
       // Byte and count bounds apply to each RPC. Publication is last, under the cache loader lease.
-      const batches: { key: JsonValue; value: JsonValue }[][] = [];
+      const batches: { entries: { key: JsonValue; value: JsonValue }[]; bytes: number }[] = [];
       let batch: { key: JsonValue; value: JsonValue }[] = [];
       let size = 0;
       // The retained copy holds the exact stored JSON; reading it decodes like a cache hit.
@@ -293,7 +293,7 @@ export const liveOpenapiOperations = (
         const text = JSON.stringify(entry);
         const bytes = new TextEncoder().encode(text).byteLength;
         if (batch.length && (batch.length >= 64 || size + bytes > 4_000_000)) {
-          batches.push(batch);
+          batches.push({ entries: batch, bytes: size });
           batch = [];
           size = 0;
         }
@@ -306,12 +306,22 @@ export const liveOpenapiOperations = (
             Schema.decodeUnknownSync(StoredEntry)(text).value,
           );
       }
-      if (batch.length) batches.push(batch);
+      if (batch.length) batches.push({ entries: batch, bytes: size });
       // Revision keys are immutable and independent. Await every write before
       // publishing the manifest, without serializing their network round trips.
       yield* Effect.forEach(
         batches,
-        (entries) => fromPromise(context.cache.write)(entries, retention),
+        ({ entries, bytes }, index) =>
+          fromPromise(context.cache.write)(entries, retention).pipe(
+            Effect.withSpan("app.cache.flush", {
+              attributes: {
+                "cache.flush.index": index,
+                "cache.flush.count": batches.length,
+                "cache.flush.entries": entries.length,
+                "cache.flush.bytes": bytes,
+              },
+            }),
+          ),
         {
           concurrency: partConcurrency,
           discard: true,

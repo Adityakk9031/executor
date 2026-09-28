@@ -6,7 +6,7 @@
  * the Worker Loader's cold-start callback, so a warm call reads and transfers no code.
  */
 import type { Fetcher, WorkerLoader } from "@cloudflare/workers-types";
-import { Effect, Exit, Option, Schema } from "effect";
+import { Effect, Exit, Option, Schema, Semaphore } from "effect";
 import {
   ElicitationReply,
   type HostRequest,
@@ -25,7 +25,14 @@ import {
   type FacetInvocation,
 } from "@executor-js/app-data/cloudflare";
 import { workerModules } from "@executor-js/app-data/worker-bundle";
-import { changesCache } from "@executor-js/app-cache/contracts";
+import {
+  CacheCommand,
+  CacheError,
+  CacheReply,
+  changesCache,
+  type CacheTransport,
+} from "@executor-js/app-cache/contracts";
+import { holdLeases } from "@executor-js/app-cache";
 import { RuntimeProtocolFailed } from "../contracts/runtime.ts";
 import type { WorkerBundle } from "../contracts/worker-build.ts";
 import { appFacetBridge, appRpcBridge } from "./worker-bridge.ts";
@@ -109,6 +116,21 @@ const compatibilityDate = "2026-07-30";
 /** The longest a call's release, including its cache refreshes, may keep running. */
 const releaseLimit = "35 seconds";
 
+/**
+ * In-flight cache commands from one call to its app's store. On Cloudflare, Workers RPC
+ * occasionally never delivered one of four or more concurrent calls to the same Durable Object
+ * while an immediate repeat arrived, which stalled the loader holding the key. Two lanes keep a
+ * load's writes parallel without that burst. Lanes belong to one call: workerd forbids a request
+ * from resuming another request's I/O, so they are never shared across calls.
+ */
+const cacheLanes = 2;
+
+/** One call's cache channel and the leases it owns until the call's release has finished. */
+interface CacheSession {
+  readonly callback: Callback;
+  readonly close: Effect.Effect<void>;
+}
+
 const failed = (cause: unknown) =>
   Effect.annotateCurrentSpan(
     "executor.runtime.cause",
@@ -153,7 +175,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
       readonly elicit: Callback | null;
       readonly controls: Callback | null;
       readonly workflow?: WorkflowExecution;
-      readonly cache: Callback | null;
+      readonly cache: Effect.Effect<CacheSession> | null;
     },
   ) =>
     Effect.scoped(
@@ -201,6 +223,8 @@ export const makeAppRunner = (host: AppRunnerHost) => {
                 Schema.encodeSync(ElicitationReply)(
                   Schema.decodeUnknownSync(ElicitationReply)(await elicit(input)),
                 );
+        const cache = options.cache === null ? undefined : yield* options.cache;
+        const closeCache = cache?.close ?? Effect.void;
         const call = yield* Effect.acquireRelease(
           Effect.tryPromise({
             try: () =>
@@ -210,7 +234,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
                 delivery,
                 workflow,
                 options.controls,
-                options.cache,
+                cache?.callback ?? null,
               ),
             catch: (cause) => cause,
           }).pipe(
@@ -223,6 +247,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
               Schema.decodeUnknownEffect(AppRpcInvocation)(value).pipe(Effect.catch(failed)),
             ),
             Effect.withSpan("runtime.app.rpc.start"),
+            Effect.onError(() => closeCache),
           ),
           (call, exit) => {
             let released: Promise<void> | undefined;
@@ -251,7 +276,9 @@ export const makeAppRunner = (host: AppRunnerHost) => {
               Effect.withSpan("runtime.app.rpc.release"),
               Effect.catchCause(() => Effect.void),
             );
-            if (Exit.isFailure(exit)) return release;
+            // Leases are released once the call's own work is over: a cancelled call at once, a
+            // successful one after its background refreshes, even past the release limit.
+            if (Exit.isFailure(exit)) return release.pipe(Effect.ensuring(closeCache));
             held = true;
             // A release that outlives its limit still runs in the Worker, draining cache refreshes:
             // keep the Worker loaded until it settles, so the residency never unloads it midway.
@@ -263,7 +290,11 @@ export const makeAppRunner = (host: AppRunnerHost) => {
                 Effect.sync(() =>
                   host.waitUntil(
                     Effect.runPromiseWith(services)(
-                      release.pipe(Effect.ensuring(settled), Effect.ensuring(unhold)),
+                      release.pipe(
+                        Effect.ensuring(settled),
+                        Effect.ensuring(closeCache),
+                        Effect.ensuring(unhold),
+                      ),
                     ),
                   ),
                 ),
@@ -365,10 +396,47 @@ export const makeAppRunner = (host: AppRunnerHost) => {
           workflowRun: capabilities.workflow?.runId,
         });
         if (mode === "facet") return yield* facet(invocation, identity, capabilities, body);
-        const cache = host.data(invocation.app);
+        const data = host.data(invocation.app);
         const services = yield* Effect.context<never>();
         // Cache writes after the result (background refreshes) are not reported to the host.
         let cacheChanged = false;
+        const store =
+          (lanes: Semaphore.Semaphore): CacheTransport =>
+          (command) =>
+            lanes
+              .withPermits(1)(data.cache(invocation.build, command))
+              .pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(CacheReply)),
+                Effect.mapError(() => new CacheError({ reason: "storage" })),
+                Effect.flatMap((reply) =>
+                  reply.ok ? Effect.succeed(reply.value) : Effect.fail(reply.error),
+                ),
+              );
+        // Each attempt owns the leases its Worker claims until that attempt's release finishes.
+        const cache = Effect.suspend(() =>
+          holdLeases(store(Semaphore.makeUnsafe(cacheLanes))),
+        ).pipe(
+          Effect.map((leases): CacheSession => ({
+            callback: (command) =>
+              Effect.runPromiseWith(services)(
+                Schema.decodeUnknownEffect(CacheCommand)(command).pipe(
+                  Effect.mapError(() => new CacheError({ reason: "invalid" })),
+                  Effect.flatMap(leases.transport),
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      if (changesCache(command)) cacheChanged = true;
+                    }),
+                  ),
+                  Effect.match({
+                    onSuccess: (value) => ({ ok: true as const, value }),
+                    onFailure: (error) => ({ ok: false as const, error }),
+                  }),
+                  Effect.flatMap(Schema.encodeEffect(CacheReply)),
+                ),
+              ),
+            close: leases.close,
+          })),
+        );
         const result = yield* start(name, capabilities.load, {
           body,
           headers: invocation.headers,
@@ -376,13 +444,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
           elicit: capabilities.elicit,
           controls: capabilities.controls,
           ...(capabilities.workflow === undefined ? {} : { workflow: capabilities.workflow }),
-          cache: async (command) => {
-            const reply = await Effect.runPromiseWith(services)(
-              cache.cache(invocation.build, command),
-            );
-            if (changesCache(command)) cacheChanged = true;
-            return reply;
-          },
+          cache,
         });
         return cacheChanged &&
           typeof result === "object" &&
