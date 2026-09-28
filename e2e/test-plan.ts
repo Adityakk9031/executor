@@ -1759,6 +1759,57 @@ export const scenarios = {
       local: na("This scenario checks hosted API and MCP parity."),
     },
   },
+  scopedConnectionAccess: {
+    fixtures: "actors",
+    file: "mcp-connections.spec.ts",
+    title:
+      "Scoped connections issue their own MCP URL and follow live edits, read-only rules and revocation",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local connections are covered by the local scoped connection scenario."),
+    },
+  },
+  scopedConnectionProfiles: {
+    fixtures: "actors",
+    file: "mcp-connections.spec.ts",
+    title:
+      "Scoped connections run apps only as selected profiles and save bare accounts as profiles",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted profile ownership and account sharing."),
+    },
+  },
+  scopedConnectionConsent: {
+    fixtures: "actors",
+    file: "mcp-connections.spec.ts",
+    title: "Scoped connection consent rejects other users and other organizations",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local has one operator and no organizations."),
+    },
+  },
+  scopedConnectionDashboard: {
+    fixtures: "actors",
+    file: "mcp-connections.spec.ts",
+    title: "Members create and revoke a scoped connection from the dashboard",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("The shared connections page is exercised through the hosted dashboard."),
+    },
+  },
+  localScopedConnections: {
+    file: "local-mcp-connections.spec.ts",
+    title: "Local scoped connections limit an OAuth client to their tools and revoke it",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted connections are covered by the hosted scoped connection scenarios."),
+      cloud: na("Hosted connections are covered by the hosted scoped connection scenarios."),
+    },
+  },
   patMcp: {
     fixtures: "actors",
     file: "pat-mcp.spec.ts",
