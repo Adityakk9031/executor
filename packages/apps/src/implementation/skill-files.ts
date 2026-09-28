@@ -1,6 +1,5 @@
 /** One parser for packaged, GitHub and well-known skill files. */
 import { Effect, Schema } from "effect";
-import { parseDocument } from "yaml";
 import {
   AppSkillMetadata,
   AppSkillName,
@@ -30,6 +29,8 @@ export const skillFromFiles = (
     );
     if (match?.[1] === undefined) return yield* invalid("frontmatter");
     const frontmatter = match[1];
+    // YAML is only needed when skills are parsed, not while a host starts.
+    const { parseDocument } = yield* Effect.promise(() => import("yaml"));
     const value: unknown = yield* Effect.try({
       try: () => {
         const yaml = parseDocument(frontmatter);

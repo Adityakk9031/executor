@@ -256,7 +256,7 @@ export const localApi = (
       });
       const publicSkills = yield* readExecutorSkills;
       const productRoutes = Layer.mergeAll(
-        publishedSkillRoutes(publicSkills),
+        publishedSkillRoutes(Effect.succeed(publicSkills)),
         HttpApiBuilder.layer(LocalWebhookSetupApi).pipe(
           Layer.provide(localWebhookSetupHandlers(executor, config, auth)),
         ),

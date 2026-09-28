@@ -17,8 +17,7 @@ import { billingBindings } from "./infrastructure/billing.ts";
 import { registryRoutes, gitRoutes } from "@executor-js/app-management";
 import { hostedAppGitAccess } from "@executor-js/hosted-server/app-management";
 /** Cloudflare composition edge. Alchemy owns the Effect runtime and request scopes. */
-import { executorSkillFiles, publishedSkillRoutes } from "@executor-js/app-templates/executor";
-import authoring from "../.generated/executor-authoring.json" with { type: "json" };
+import { publishedSkillRoutes } from "@executor-js/app-templates/executor";
 import { hideRemovedOrganizations } from "./implementation/organization-removal.ts";
 import {
   browserTelemetry,
@@ -236,12 +235,14 @@ export default Api.make(
     const egress = yield* cloudEgress;
     // Only /openapi.json and preparing the Executor catalog app read the document.
     const document = lazyHostedApiDocument(() => executorCloudApiDocument(auth.origin));
+    // Only that app and the published skills read the large authoring reference.
+    const authoring = Effect.promise(() => import("./implementation/executor-authoring.ts")).pipe(
+      Effect.map(({ executorAuthoringSkills }) => executorAuthoringSkills),
+    );
     const api = cloudApi(document).pipe(
       Layer.provide(appUi.dashboard),
       Layer.provide(requestServices(auth.appSessions).layer),
-      HttpRouter.provideRequest(
-        catalogLive(executorSkillFiles(authoring), document.document, egress),
-      ),
+      HttpRouter.provideRequest(catalogLive(authoring, document.document, egress)),
       Layer.provide(schedules),
       Layer.provide(billing),
       Layer.provide(onboarding),
@@ -295,7 +296,7 @@ export default Api.make(
         HttpRouter.provideRequest(onboarding),
       ),
       api,
-      publishedSkillRoutes(executorSkillFiles(authoring)),
+      publishedSkillRoutes(authoring),
       HttpRouter.add("*", "/api/:channel/*", analytics.proxy),
       HttpRouter.add("POST", "/api/:channel/submit", errorTunnel),
       browserTelemetry.pipe(HttpRouter.provideRequest(auth.identity)),

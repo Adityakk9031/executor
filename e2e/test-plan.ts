@@ -1491,7 +1491,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "deferred-server-paths.spec.ts",
     title:
-      "Hosted API document is identical across concurrent reads and matches the installed Executor app",
+      "Hosted API document and authoring skills load on demand and match the installed Executor app",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,

@@ -146,7 +146,8 @@
     "bun@1.4.2": "patches/bun@1.4.2.patch",
     "tree-sitter@0.21.1": "patches/tree-sitter@0.21.1.patch",
     "tree-sitter@0.22.4": "patches/tree-sitter@0.22.4.patch",
-    "pg-cloudflare@1.4.0": "patches/pg-cloudflare@1.4.0.patch"
+    "pg-cloudflare@1.4.0": "patches/pg-cloudflare@1.4.0.patch",
+    "@better-auth/passkey@1.7.5": "patches/@better-auth%2Fpasskey@1.7.5.patch"
   },
   "trustedDependencies": [
     "bun",

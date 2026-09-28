@@ -82,7 +82,7 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
     const api = selfHostApi(document).pipe(
       Layer.provide(appUi.dashboard),
       HttpRouter.provideRequest(auth.appSessions),
-      HttpRouter.provideRequest(catalogLive(skills, document.document, egress)),
+      HttpRouter.provideRequest(catalogLive(Effect.succeed(skills), document.document, egress)),
       Layer.provide(requireUserLive),
       Layer.provide(requireOrganizationLive),
       HttpRouter.provideRequest(executorServices),
@@ -112,7 +112,7 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
       Layer.provide(auth.apiIdentity),
     );
     const productRoutes = Layer.mergeAll(
-      publishedSkillRoutes(skills),
+      publishedSkillRoutes(Effect.succeed(skills)),
       authoring,
       api,
       browserTelemetry.pipe(HttpRouter.provideRequest(auth.identity)),
