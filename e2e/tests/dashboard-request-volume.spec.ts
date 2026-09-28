@@ -1,3 +1,4 @@
+import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schedule } from "effect";
 import { randomUUID } from "node:crypto";
@@ -123,8 +124,9 @@ export default defineApp({ accounts: {} }, async () => ({
         yield* browser.use("Control the browser clock and observe shared reads", (page) =>
           page.clock.install().then(() => observe(page)),
         );
-        yield* browser.use("Open the app overview", (page) =>
-          page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=overview`),
+        yield* openThroughBrowser(
+          "Open the app overview",
+          `/org/${actors.organization.slug}/apps/${app.id}?view=overview`,
         );
         yield* browser.use("The app overview has loaded", (page) =>
           page

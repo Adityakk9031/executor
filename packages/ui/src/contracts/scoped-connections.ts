@@ -43,7 +43,7 @@ export const connectionToolsLabel = (tools: ConnectionTools): string =>
     ? "All tools"
     : tools.kind === "readOnly"
       ? "Read-only tools"
-      : `${tools.names.length.toLocaleString()} ${tools.names.length === 1 ? "tool" : "tools"}`;
+      : `${tools.names.length.toLocaleString("en-US")} ${tools.names.length === 1 ? "tool" : "tools"}`;
 
 /** An editor draft. Its ID is chosen once so a retried create returns the same connection. */
 export interface ConnectionDraft {

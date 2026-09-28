@@ -40,6 +40,7 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http";
+import { withHostPipeline } from "@executor-js/dashboard-start/in-process";
 import { selfHostApi } from "./api.ts";
 import { selfHostMcp } from "../mcp.ts";
 import { selfHostAuth } from "../auth.ts";
@@ -174,13 +175,16 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
     const routes = HttpRouter.add(
       "*",
       "*",
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        if (Option.isSome(addresses.fromHost(request.headers.host)))
-          return yield* apps.pipe(requestTiming);
-        if (addresses.ownsHost(request.headers.host)) return notFound;
-        return yield* product;
-      }).pipe(recordRequestRejections),
+      // Server-rendered pages read the product API through this same dispatch, in-process.
+      withHostPipeline(
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          if (Option.isSome(addresses.fromHost(request.headers.host)))
+            return yield* apps.pipe(requestTiming);
+          if (addresses.ownsHost(request.headers.host)) return notFound;
+          return yield* product;
+        }).pipe(recordRequestRejections),
+      ),
     );
     return routes;
   });

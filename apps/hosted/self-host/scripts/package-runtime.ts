@@ -26,7 +26,8 @@ const packageRuntime = Effect.gen(function* () {
   const alchemyResolve = createRequire(path.join(alchemyRoot, "package.json"));
   yield* fs.remove(output, { recursive: true, force: true });
   yield* fs.makeDirectory(output, { recursive: true });
-  const web = path.join(root, "apps/hosted/self-host/web/dist");
+  // The product Worker bundles the document renderer; only browser files are served from disk.
+  const web = path.join(root, "apps/hosted/self-host/web/dist/client");
   const types: Readonly<Record<string, string>> = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript",

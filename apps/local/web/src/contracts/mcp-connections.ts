@@ -1,4 +1,5 @@
 /** The local operator's scoped connections, reconciled after each write. */
+import { hydrated } from "@executor-js/ui/contracts/http";
 import { Effect } from "effect";
 import type { ConnectionId } from "@executor-js/mcp-auth/connections";
 import type { ConnectionSave } from "@executor-js/ui/contracts/scoped-connections";
@@ -6,9 +7,11 @@ import { acknowledge, acknowledgedQuery, upsert } from "@executor-js/ui/contract
 import { DashboardClient } from "./api.ts";
 
 /** Keep confirmed connections visible while background reconciliation runs. */
-export const mcpConnectionsAtom = DashboardClient.query("mcpConnections", "list", {}).pipe(
-  acknowledgedQuery,
-);
+export const mcpConnectionsAtom = DashboardClient.query(
+  "mcpConnections",
+  "list",
+  hydrated({}),
+).pipe(acknowledgedQuery);
 /** Create with the editor's chosen ID, or replace an existing connection's name and access. */
 export const saveMcpConnectionAtom = DashboardClient.runtime.fn(
   ({ existing, input }: ConnectionSave, get) =>

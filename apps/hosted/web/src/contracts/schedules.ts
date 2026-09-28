@@ -1,3 +1,5 @@
+import { hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { protectedQuery } from "./protected-query.ts";
 import { browserApproval } from "@executor-js/ui/contracts/browser-approval";
 import { BrowserAtoms } from "./telemetry.ts";
@@ -24,19 +26,27 @@ class ScheduleKey extends Data.Class<{
   readonly name: string;
 }> {}
 const settings = Atom.family((key: AppKey) =>
-  HostedClient.query("schedules", "list", {
-    params: key,
-    query: { profile: key.profile },
-  }).pipe(Atom.refreshOnWindowFocus, protectedQuery),
+  HostedClient.query(
+    "schedules",
+    "list",
+    hydrated({
+      params: key,
+      query: { profile: key.profile },
+    }),
+  ).pipe(refreshOnFocus, protectedQuery),
 );
 const polledSettings = Atom.family((key: AppKey) =>
   pollingQuery(settings(key), { active: runningSchedules }),
 );
 const definitions = Atom.family((key: AppKey) =>
-  HostedClient.query("schedules", "definitions", {
-    params: key,
-    query: { profile: key.profile },
-  }).pipe(Atom.refreshOnWindowFocus),
+  HostedClient.query(
+    "schedules",
+    "definitions",
+    hydrated({
+      params: key,
+      query: { profile: key.profile },
+    }),
+  ).pipe(refreshOnFocus),
 );
 const controls = Atom.family((key: ScheduleKey) => {
   const saved = (get: Atom.FnContext, value: ScheduleSettings) =>
@@ -85,10 +95,14 @@ export const scheduleBindings = (
   ...(editable ? { controls: (name: string) => controls(new ScheduleKey({ ...key, name })) } : {}),
 });
 const runsSource = Atom.family((organization: OrganizationReference) =>
-  HostedClient.query("schedules", "runs", {
-    params: { organization },
-    query: { pending: true },
-  }).pipe(Atom.refreshOnWindowFocus, protectedQuery),
+  HostedClient.query(
+    "schedules",
+    "runs",
+    hydrated({
+      params: { organization },
+      query: { pending: true },
+    }),
+  ).pipe(refreshOnFocus, protectedQuery),
 );
 const runsQuery = Atom.family((organization: OrganizationReference) =>
   // Approval requests expire, and this queue exists to receive them.

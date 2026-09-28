@@ -80,7 +80,7 @@ function ToolList({
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
         <Input
           aria-label="Search tools"
-          placeholder={`Search ${tools.length.toLocaleString()} tools…`}
+          placeholder={`Search ${tools.length.toLocaleString("en-US")} tools…`}
           className="h-8 min-w-40 flex-1 text-[13px]"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -101,7 +101,7 @@ function ToolList({
             >
               {item.label}
               <span className="ml-1 font-mono text-[10px] text-muted-foreground">
-                {counts[item.value].toLocaleString()}
+                {counts[item.value].toLocaleString("en-US")}
               </span>
             </button>
           ))}
@@ -149,7 +149,7 @@ function ToolList({
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
         <span>
-          {names.length.toLocaleString()} of {tools.length.toLocaleString()} selected
+          {names.length.toLocaleString("en-US")} of {tools.length.toLocaleString("en-US")} selected
           {missing.length > 0 && (
             <>
               {" · "}
@@ -172,7 +172,7 @@ function ToolList({
             disabled={unselectedMatches.length === 0}
             onClick={() => onChange([...names, ...unselectedMatches.map((tool) => tool.name)])}
           >
-            Select {scope} ({unselectedMatches.length.toLocaleString()})
+            Select {scope} ({unselectedMatches.length.toLocaleString("en-US")})
           </Button>
           <Button
             type="button"

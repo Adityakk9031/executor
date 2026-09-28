@@ -1,3 +1,5 @@
+import { hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { browserApproval } from "@executor-js/ui/contracts/browser-approval";
 import { BrowserAtoms } from "./telemetry.ts";
 /** Product transport owns schedule atoms; each mutation belongs to one app and schedule. */
@@ -19,17 +21,25 @@ class ScheduleKey extends Data.Class<{
   readonly name: string;
 }> {}
 const settings = Atom.family((key: AppKey) =>
-  DashboardClient.query("schedules", "list", {
-    params: key,
-    query: { profile: key.profile },
-  }).pipe(Atom.refreshOnWindowFocus, acknowledgedQuery),
+  DashboardClient.query(
+    "schedules",
+    "list",
+    hydrated({
+      params: key,
+      query: { profile: key.profile },
+    }),
+  ).pipe(refreshOnFocus, acknowledgedQuery),
 );
 const polledSettings = Atom.family((key: AppKey) => pollingQuery(settings(key), steadyPolling));
 const definitions = Atom.family((key: AppKey) =>
-  DashboardClient.query("schedules", "definitions", {
-    params: key,
-    query: { profile: key.profile },
-  }).pipe(Atom.refreshOnWindowFocus),
+  DashboardClient.query(
+    "schedules",
+    "definitions",
+    hydrated({
+      params: key,
+      query: { profile: key.profile },
+    }),
+  ).pipe(refreshOnFocus),
 );
 const controls = Atom.family((key: ScheduleKey) => {
   const saved = (get: Atom.FnContext, value: ScheduleSettings) =>
@@ -65,10 +75,11 @@ export const scheduleBindings = (
   definitions: definitions(new AppKey(key)),
   ...(editable ? { controls: (name: string) => controls(new ScheduleKey({ ...key, name })) } : {}),
 });
-const runsSource = DashboardClient.query("schedules", "runs", { query: { pending: true } }).pipe(
-  Atom.refreshOnWindowFocus,
-  acknowledgedQuery,
-);
+const runsSource = DashboardClient.query(
+  "schedules",
+  "runs",
+  hydrated({ query: { pending: true } }),
+).pipe(refreshOnFocus, acknowledgedQuery);
 const runsQuery = pollingQuery(runsSource, steadyPolling);
 /** Join safe run metadata with app names; keep either read failure visible. */
 export const pendingApprovalsAtom = DashboardClient.runtime.atom((get) =>

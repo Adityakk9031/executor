@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { EmptyState } from "@executor-js/ui/dashboard/empty-state";
 import { reportBrowserUsage } from "../../contracts/product-analytics.ts";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
@@ -24,11 +25,12 @@ import { organizationsAtom } from "../../contracts/organization.ts";
 
 /** The user approves the URL's requested connection. App/tool scoping remains a backend capability. */
 export function McpAuthorizePage() {
+  const page = usePageUrl();
   // Keep the signed query intact; repeated OAuth fields must not be reserialized by the router.
-  const query = window.location.search.slice(1),
+  const query = page.search.slice(1),
     params = new URLSearchParams(query);
   const clientId = params.get("client_id") ?? "";
-  const target = grantTarget(window.location.origin, params.getAll("resource"));
+  const target = grantTarget(page.origin, params.getAll("resource"));
   const destination = consentDestination(params.get("redirect_uri"));
   const client = useAtomValue(mcpClientAtom(clientId));
   const organizations = useAtomValue(organizationsAtom);

@@ -1,3 +1,5 @@
+import { hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { inventoryAtom } from "./organization.ts";
 /** Personal setup metadata is acknowledged before navigation; catalogs key on saved revisions. */
 import { Data, Effect } from "effect";
@@ -23,8 +25,8 @@ class Target extends Data.Class<{
   readonly profile: ProfileId;
 }> {}
 const source = Atom.family((key: AppKey) =>
-  HostedClient.query("profiles", "list", { params: key }).pipe(
-    Atom.refreshOnWindowFocus,
+  HostedClient.query("profiles", "list", hydrated({ params: key })).pipe(
+    refreshOnFocus,
     protectedQuery,
   ),
 );
@@ -115,10 +117,14 @@ export const accountSelectionAtom = (key: ConstructorParameters<typeof Selection
   selection(new SelectionKey(key));
 
 const hooksSource = Atom.family((key: Target) =>
-  HostedClient.query("webhooks", "list", {
-    params: key,
-    query: { profile: key.profile },
-  }).pipe(Atom.refreshOnWindowFocus),
+  HostedClient.query(
+    "webhooks",
+    "list",
+    hydrated({
+      params: key,
+      query: { profile: key.profile },
+    }),
+  ).pipe(refreshOnFocus),
 );
 const hooks = Atom.family((key: Target) =>
   pollingQuery(hooksSource(key), { active: unsettledWebhooks }),

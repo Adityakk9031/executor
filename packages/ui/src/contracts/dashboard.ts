@@ -222,11 +222,3 @@ export function providerDisplayUrl(definition: ProviderDefinition | undefined): 
     }
   return null;
 }
-/** A consistent short date for account/source metadata. */
-export const displayDate = (value: Date) =>
-  value.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });

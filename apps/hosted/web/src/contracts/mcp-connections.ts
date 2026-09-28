@@ -1,4 +1,6 @@
 /** The member's own scoped connections in one organization, reconciled after each write. */
+import { hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { Atom } from "effect/unstable/reactivity";
 import { Effect } from "effect";
 import type { OrganizationReference } from "@executor-js/hosted-server/organization";
@@ -10,8 +12,8 @@ import { resourceInventoryAtom } from "./resource-access.ts";
 
 /** Keep confirmed connections visible while background reconciliation runs. */
 export const mcpConnectionsAtom = Atom.family((organization: OrganizationReference) =>
-  HostedClient.query("mcpConnections", "list", { params: { organization } }).pipe(
-    Atom.refreshOnWindowFocus,
+  HostedClient.query("mcpConnections", "list", hydrated({ params: { organization } })).pipe(
+    refreshOnFocus,
     acknowledgedQuery,
   ),
 );

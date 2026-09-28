@@ -141,19 +141,20 @@ const make = Effect.gen(function* () {
           `Choose the identity on the ${provider} emulator`,
           (page) =>
             Promise.all([
+              // The Worker resolves sign-in and opens team setup directly, rendered on the server.
               page.waitForResponse((response) => {
                 const url = new URL(response.url());
                 return (
                   response.request().isNavigationRequest() &&
                   url.origin === target.metadata.origin &&
-                  url.pathname === "/login"
+                  url.pathname === "/create"
                 );
               }),
               page.getByRole("button").filter({ hasText: identity.email }).click(),
             ]).then(([response]) =>
               response.text().then((html) => ({
                 status: response.status(),
-                prepared: html.includes('id="executor-entry"') && html.includes('"path":"/create"'),
+                prepared: html.includes("Create your team") && html.includes("cloud:entry-team:"),
                 private: response.headers()["cache-control"]?.includes("no-store") === true,
               })),
             ),

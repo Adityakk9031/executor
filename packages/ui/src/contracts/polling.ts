@@ -34,6 +34,8 @@ export const pollingQuery = <A>(
   Atom.readable(
     (get) => {
       const value = get(source);
+      // A server render reads once; only a visible page keeps reconciling.
+      if (typeof window === "undefined") return value;
       get.addFinalizer(
         Effect.runCallback(
           Effect.forever(

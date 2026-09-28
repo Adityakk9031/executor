@@ -6,7 +6,6 @@ export {
   unfilledAccountSlots,
   selectedIds,
   accountSelectionIssues,
-  displayDate,
   type AccountSelectionIssue,
 } from "@executor-js/ui/contracts/dashboard";
 /** A late account change needs the same setup action as one visible in the inventory. */

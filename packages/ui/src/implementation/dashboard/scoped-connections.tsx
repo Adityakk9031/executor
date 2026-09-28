@@ -72,7 +72,7 @@ type View =
   | { readonly kind: "editor"; readonly draft: ConnectionDraft; readonly existing: boolean };
 
 const plural = (count: number, one: string, many = `${one}s`) =>
-  `${count.toLocaleString()} ${count === 1 ? one : many}`;
+  `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
 
 /** Every profile/app choice per app, computed once per inventory. */
 const inventoryChoices = (inventory: Inventory) => {
@@ -447,7 +447,7 @@ function Tabs<T extends string>({
         >
           {option.label}
           <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">
-            {option.count.toLocaleString()}
+            {option.count.toLocaleString("en-US")}
           </span>
         </button>
       ))}

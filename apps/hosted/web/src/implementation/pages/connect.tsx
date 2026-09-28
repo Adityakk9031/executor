@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { McpInstallInstructions } from "@executor-js/ui/dashboard/connect";
 import { ScopedConnectionsPage } from "@executor-js/ui/dashboard/scoped-connections";
 import { ConnectionToolPicker } from "@executor-js/ui/dashboard/connection-tool-picker";
@@ -14,8 +15,9 @@ import { documentationUrl } from "../../contracts/documentation.ts";
 
 /** The member's full-access URL and scoped connections for this organization. */
 export function ConnectPage() {
+  const page = usePageUrl();
   const { organization } = useOrganizationRoute();
-  const docs = new URL(documentationUrl(), window.location.origin).href;
+  const docs = new URL(documentationUrl(), page.origin).href;
   return (
     <ScopedConnectionsPage
       key={organization}
@@ -25,9 +27,7 @@ export function ConnectPage() {
       revoke={revokeMcpConnectionAtom(organization)}
       Failure={HostedFailure}
       docs={docs}
-      installation={
-        <McpInstallInstructions endpoint={`${window.location.origin}/mcp`} docs={docs} />
-      }
+      installation={<McpInstallInstructions endpoint={`${page.origin}/mcp`} docs={docs} />}
       renderTools={({ app, profile, names, onChange }) => (
         <ConnectionToolPicker
           query={connectionToolListAtom({

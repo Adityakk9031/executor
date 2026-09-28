@@ -52,6 +52,7 @@ import { LocalAuthApi } from "../contracts/auth.ts";
 import { AccountConnectApi } from "../contracts/account-connections.ts";
 import { browserTelemetry } from "./telemetry.ts";
 import { webFiles } from "./web.ts";
+import { withHostPipeline } from "@executor-js/dashboard-start/in-process";
 import { localManagementDocument } from "../contracts/management.ts";
 import { gitSourceStorage } from "@executor-js/app-source";
 import { nativeRepositories } from "@executor-js/app-source/node";
@@ -351,12 +352,15 @@ export const localApi = (
       return HttpRouter.add(
         "*",
         "*",
-        Effect.gen(function* () {
-          const request = yield* HttpServerRequest.HttpServerRequest;
-          return yield* appFromHost(request.headers.host, config.port) === undefined
-            ? productHandler
-            : appHandler.pipe(requestTiming);
-        }).pipe(recordRequestRejections),
+        // Server-rendered pages read the product API through this same dispatch, in-process.
+        withHostPipeline(
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            return yield* appFromHost(request.headers.host, config.port) === undefined
+              ? productHandler
+              : appHandler.pipe(requestTiming);
+          }).pipe(recordRequestRejections),
+        ),
       );
     }),
   );

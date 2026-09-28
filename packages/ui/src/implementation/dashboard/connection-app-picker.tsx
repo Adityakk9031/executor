@@ -251,7 +251,7 @@ export function ConnectionAppRow({
           onClick={() => onExpandedChange(true)}
           className="-mt-1 mb-2 ml-[72px] text-xs text-muted-foreground hover:text-foreground"
         >
-          {selection.tools.names.length.toLocaleString()} selected · Edit
+          {selection.tools.names.length.toLocaleString("en-US")} selected · Edit
         </button>
       )}
       {selection !== undefined && selection.tools.kind === "selected" && expanded && (

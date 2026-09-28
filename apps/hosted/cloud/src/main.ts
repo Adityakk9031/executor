@@ -55,8 +55,14 @@ import { cloudWelcomeEmails } from "./infrastructure/welcome-email.ts";
 import { cloudEntryApi, cloudEntryDocument, resolveCloudEntry } from "./implementation/entry.ts";
 import { browserReturnTo } from "@executor-js/hosted-server/browser/contracts";
 import { HttpServerRequest } from "effect/unstable/http";
-import { staticDocument } from "./implementation/homepage.ts";
 import { homepage } from "./implementation/homepage.ts";
+import {
+  cloudDashboard,
+  dashboardPageRoutes,
+  organizationRoot,
+} from "./implementation/dashboard.ts";
+import { withHostPipeline } from "@executor-js/dashboard-start/in-process";
+import dashboardRoutes from "@executor-js/hosted-cloud-web/routes";
 import { postHogBindings } from "./infrastructure/posthog.ts";
 import { cloudAnalytics } from "./implementation/product-analytics.ts";
 import { sentryWorkerBuild } from "./infrastructure/sentry-build.ts";
@@ -131,22 +137,17 @@ export default Api.make(
         // this list.
         runWorkerFirst: [
           "/",
-          "/login",
-          "/login/",
-          "/login/sso",
-          "/login/sso/",
-          "/create",
-          "/create/",
+          // The Worker renders every dashboard document; see `cloudflare-routes.ts`. Its
+          // `/org/*` rule also covers each organization's `/org/*/mcp` endpoint.
+          ...dashboardRoutes,
           "/api",
           "/api/*",
           "/health",
           "/openapi.json",
           "/mcp",
-          "/org/*/mcp",
           "/git/*",
           "/.well-known/*",
         ],
-        // Vite emits _redirects from the TanStack route tree; Alchemy reads it.
       },
     };
   }),
@@ -288,7 +289,7 @@ export default Api.make(
                 new Headers(request.headers),
               ),
             ),
-            staticDocument("/dashboard.html"),
+            cloudDashboard,
           ),
         ).pipe(HttpRouter.provideRequest(onboarding)),
       ),
@@ -300,7 +301,9 @@ export default Api.make(
       HttpRouter.add("*", "/api/:channel/*", analytics.proxy),
       HttpRouter.add("POST", "/api/:channel/submit", errorTunnel),
       browserTelemetry.pipe(HttpRouter.provideRequest(auth.identity)),
-      HttpRouter.add("GET", "/", homepage(auth.cookiePrefix, analytics.hero)),
+      HttpRouter.add("GET", "/", homepage(auth.cookiePrefix, analytics.hero, cloudDashboard(null))),
+      HttpRouter.add("GET", "/org/:organizationSlug", organizationRoot),
+      ...dashboardPageRoutes.map((route) => HttpRouter.add("GET", route, cloudDashboard(null))),
       HttpRouter.add("*", "/api/webhooks/:appId/:subscriptionId", hostedWebhookCallback).pipe(
         HttpRouter.provideRequest(executor),
       ),
@@ -360,6 +363,8 @@ export default Api.make(
         recordRequestRejections,
         reportErrors,
         requestTiming,
+        // Server-rendered pages read the API through this complete pipeline, in-process.
+        withHostPipeline,
         lifetime.http,
       ),
     };

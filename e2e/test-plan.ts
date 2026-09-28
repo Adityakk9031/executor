@@ -1740,14 +1740,38 @@ export const scenarios = {
       local: na("Local has no hosted organization membership."),
     },
   },
-  sessionHint: {
+  earlyFormSubmission: {
     fixtures: "actors",
-    file: "session-hint.spec.ts",
-    title: "Session hints paint early without granting access and clear on sign-out or expiry",
+    file: "early-form-submission.spec.ts",
+    title:
+      "A form submitted before the page is interactive is held, never sent natively, and completes after hydration",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloud sign-in has no password form; the guard is shared and runs on self-host."),
+      local: na("Local has no sign-in form."),
+    },
+  },
+  documentRateLimit: {
+    fixtures: "actors",
+    file: "document-rate-limit.spec.ts",
+    title: "Pages render beyond the per-address auth limit while credential routes stay limited",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Automated Cloud stages disable auth rate limiting to isolate scenarios."),
+      local: na("Local has no auth rate limit."),
+    },
+  },
+  serverRenderedDashboard: {
+    fixtures: "actors",
+    file: "server-rendered-dashboard.spec.ts",
+    title:
+      "Dashboard pages render on the server behind sign-in, keep their framing protections and hydrate without repeating reads",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
-      local: na("Local uses pairing rather than hosted session cookies."),
+      local: na(
+        "Local pairs through a URL fragment; the local server-rendered scenario covers it.",
+      ),
     },
   },
   localAppDetailLoading: {
@@ -1801,7 +1825,7 @@ export const scenarios = {
   settingsLoading: {
     fixtures: "actors",
     file: "settings-loading.spec.ts",
-    title: "Settings loading keeps static labels and controls around unknown values",
+    title: "Settings render on the server and keep their layout while members load in the browser",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -1811,7 +1835,7 @@ export const scenarios = {
   apiKeysLoading: {
     fixtures: "actors",
     file: "settings-loading.spec.ts",
-    title: "API keys loading keeps its page identity and reads tokens before metadata",
+    title: "API keys loading keeps its page identity while tokens load",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,

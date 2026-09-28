@@ -1,3 +1,4 @@
+import { usePreload } from "@executor-js/dashboard-start/registry";
 import { AppResources } from "./app-resources.tsx";
 import { AppAccounts } from "./app-accounts.tsx";
 import { ProfileResources } from "@executor-js/ui/dashboard/profile-resources";
@@ -95,6 +96,12 @@ export function AppDetailPage({
     enableBeforeUnload: skillDirty,
   });
   const atoms = useDashboardAtoms();
+  usePreload(
+    atoms.inventory,
+    liveAppAtom({ organization, app: appId }),
+    profilesAtom({ organization, app: appId }),
+    appAccessAtom({ organization, app: appId }),
+  );
   const inventory = useQuery(atoms.inventory);
   const query = useQuery(liveAppAtom({ organization, app: appId }));
   const app = Option.isSome(query.data)
