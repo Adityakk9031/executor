@@ -85,8 +85,9 @@ export const authorCache = (
           .flatMap((value) => (Array.isArray(value) ? value : [value]))
           .find((value) => value.id === account.id);
         if (bound === undefined) throw new CacheError({ reason: "invalid" });
+        // Credentials never enter the scope, so a token renewal keeps the account's entries.
         return scoped(
-          { account: bound.id, method: bound.method, fields: bound.fields },
+          { account: bound.id, method: bound.method, generation: bound.generation },
           callerSignal,
         );
       },

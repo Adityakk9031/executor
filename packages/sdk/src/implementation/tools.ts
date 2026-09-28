@@ -181,6 +181,7 @@ export function resolve(
             id: account.id,
             provider: required.definition,
             method: account.method,
+            generation: account.credentialGeneration,
             fields: Redacted.value(fields),
           })),
         ),

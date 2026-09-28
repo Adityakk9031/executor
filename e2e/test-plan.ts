@@ -823,6 +823,16 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  oauthCacheScope: {
+    fixtures: "actors",
+    file: "oauth-cache-scope.spec.ts",
+    title: "Account cache scopes survive OAuth renewal and start empty after a reconnect",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer that renews tokens on every use."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
   importDiagnostics: {
     fixtures: "actors",
     managementProfiles: ["owner"],

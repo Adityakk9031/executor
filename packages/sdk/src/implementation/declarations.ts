@@ -1,5 +1,5 @@
 /** Stale-while-revalidate reads of evaluated app declarations (skills, workflows, webhooks). */
-import { Clock, Effect, Encoding, Option, Redacted, Schema, type Crypto } from "effect";
+import { Clock, Effect, Encoding, Option, Schema, type Crypto } from "effect";
 import {
   declarationFreshness,
   declarationLimits,
@@ -61,7 +61,7 @@ const JsonText = Schema.fromJsonString(Schema.Unknown);
 
 /**
  * Evaluated declarations depend on the build, the profile revision, the selected accounts and
- * their stored credentials. Every read reruns the invocation snapshot; a kept result is served
+ * their credential generations. Token renewal keeps a result; reconnecting replaces it. Every read reruns the invocation snapshot; a kept result is served
  * only after the same lifecycle checks that precede credential release in an evaluation.
  */
 export const makeDeclarations = (options: {
@@ -79,18 +79,15 @@ export const makeDeclarations = (options: {
     );
   const key = (command: string, state: InvocationSnapshot) =>
     Effect.gen(function* () {
-      const selections = yield* Effect.forEach(state.selections, ({ slot, accounts }) =>
-        Effect.forEach(accounts, (account) =>
-          digest(Redacted.value(account.encryptedCredentials)).pipe(
-            Effect.map((credentials) => [
-              account.id,
-              account.provider,
-              account.method,
-              credentials,
-            ]),
-          ),
-        ).pipe(Effect.map((accounts) => [slot, accounts])),
-      );
+      const selections = state.selections.map(({ slot, accounts }) => [
+        slot,
+        accounts.map((account) => [
+          account.id,
+          account.provider,
+          account.method,
+          account.credentialGeneration,
+        ]),
+      ]);
       return yield* digest(
         new TextEncoder().encode(
           JSON.stringify([

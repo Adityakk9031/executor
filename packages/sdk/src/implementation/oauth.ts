@@ -54,7 +54,7 @@ import {
   type OwnerId,
   type ProviderId,
 } from "../contracts/shared.ts";
-import type { Credentials, StoredAccount } from "../contracts/storage.ts";
+import { StoredAccount, type Credentials } from "../contracts/storage.ts";
 import { query, transaction, type Query } from "./database.ts";
 import {
   idTokenSubject,
@@ -541,18 +541,23 @@ export const makeOAuth = (
             const current = yield* lockConnection(tx, input, crypto);
             if (current.state.status === "completed") return current.state.account;
             yield* openConnection(tx, input);
-            const saved =
+            const stored =
               existing === undefined
-                ? account
+                ? undefined
                 : yield* ownedAccount(tx, { account: account.id, owner: input.owner });
-            if (existing === undefined) {
+            const saved = stored ?? account;
+            if (stored === undefined) {
               yield* query(() => tx.create("accounts", { ...saved, encryptedCredentials }));
               if (lifecycle) yield* lifecycle.accountCreated(saved);
             } else
+              // Connecting an existing account again starts a new credential generation.
               yield* query(() =>
                 tx.updateMany("accounts", {
-                  where: (b) => b("id", "=", saved.id),
-                  set: { encryptedCredentials },
+                  where: (b) => b("id", "=", stored.id),
+                  set: {
+                    encryptedCredentials,
+                    credentialGeneration: stored.credentialGeneration + 1,
+                  },
                 }),
               );
             const state = {
@@ -661,7 +666,7 @@ export const makeOAuth = (
       ) {
         return yield* new OAuthCompletionFailed({ reason: "account_unavailable" });
       }
-      return yield* decode(Account, row);
+      return yield* decode(StoredAccount, row);
     });
 
   const completeOAuth = (input: typeof CompleteConnectionOAuth.Type) =>
@@ -780,12 +785,17 @@ export const makeOAuth = (
           // A newer sign-in started while the token exchange was running.
           if (current.oauthAttempt !== id) return yield* failed("sign_in_replaced");
           // Read again after the remote exchange: deletion must win, and a concurrent rename must survive.
-          const saved = attempt.reconnect ? yield* reconnectTarget(tx, attempt) : account;
-          if (attempt.reconnect) {
+          const target = attempt.reconnect ? yield* reconnectTarget(tx, attempt) : undefined;
+          const saved = target ?? account;
+          if (target !== undefined) {
+            // A reconnect may sign in as another upstream identity: start a new generation.
             yield* query(() =>
               tx.updateMany("accounts", {
-                where: (b) => b("id", "=", saved.id),
-                set: { encryptedCredentials },
+                where: (b) => b("id", "=", target.id),
+                set: {
+                  encryptedCredentials,
+                  credentialGeneration: target.credentialGeneration + 1,
+                },
               }),
             );
           } else {
