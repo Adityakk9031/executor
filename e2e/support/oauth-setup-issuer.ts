@@ -37,6 +37,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   /** Google signs RS256; a declared server advertises no algorithms, so RS256 is the only default. */
   let idTokenAlgorithm: "ES256" | "RS256" | "none" = "ES256";
   let refreshTokens = false;
+  /** Replace the refresh token on every renewal and refuse the replaced one, as rotating providers do. */
+  let rotateRefreshTokens = false;
   /** The `expires_in` of issued tokens; undefined omits it. */
   let expiresIn: number | undefined = 3600;
   let tokenExchanges = 0;
@@ -72,7 +74,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   }> = [];
   const keyPair = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   let rsaKey: KeyObject | undefined;
-  /** Refresh tokens issued for each client; like Google, refreshes do not rotate them. */
+  /** Refresh tokens issued for each client; unless rotation is configured, refreshes keep them. */
   const refreshGrants = new Map<string, string>();
   const refreshedAccessTokens = new Set<string>();
   const clients = new Map<
@@ -289,7 +291,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           : "synthetic-access-token";
         if (refreshing) refreshedAccessTokens.add(accessToken);
         const refreshToken =
-          refreshTokens && !refreshing ? `synthetic-refresh-${randomUUID()}` : undefined;
+          refreshTokens && (!refreshing || rotateRefreshTokens)
+            ? `synthetic-refresh-${randomUUID()}`
+            : undefined;
+        if (refreshing && refreshToken !== undefined && presentedRefresh !== null)
+          refreshGrants.delete(presentedRefresh);
         if (refreshToken !== undefined) refreshGrants.set(refreshToken, clientId);
         const lifetime = refreshing ? (refreshedExpiresIn ?? expiresIn) : expiresIn;
         return yield* HttpServerResponse.json({
@@ -529,6 +535,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly idTokenIssuer?: string | null;
       readonly idTokenAlgorithm?: typeof idTokenAlgorithm;
       readonly refreshTokens?: boolean;
+      /** Issue a new refresh token on every renewal and refuse the one it replaces. */
+      readonly rotateRefreshTokens?: boolean;
       /** The `expires_in` of issued tokens; null omits it. */
       readonly expiresIn?: number | null;
       readonly invalidNonce?: boolean;
@@ -572,6 +580,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           idTokenIssuer = input.idTokenIssuer === null ? undefined : input.idTokenIssuer;
         if (input.idTokenAlgorithm !== undefined) idTokenAlgorithm = input.idTokenAlgorithm;
         if (input.refreshTokens !== undefined) refreshTokens = input.refreshTokens;
+        if (input.rotateRefreshTokens !== undefined)
+          rotateRefreshTokens = input.rotateRefreshTokens;
         if (input.expiresIn !== undefined)
           expiresIn = input.expiresIn === null ? undefined : input.expiresIn;
         if (input.invalidNonce !== undefined) invalidNonce = input.invalidNonce;

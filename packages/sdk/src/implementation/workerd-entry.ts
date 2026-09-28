@@ -150,7 +150,11 @@ const hostRequest = (env: Environment, command: WorkflowHostCommand) =>
     Effect.flatMap((reply) => (reply.ok ? Effect.succeed(reply.value) : Effect.fail(reply.error))),
   );
 
-/** Run a single authorized invocation through the same generated protocol as Cloud. */
+/**
+ * Run a single authorized invocation through the same generated protocol as Cloud. A deployed
+ * app's Worker is `retained` under its build and account selection; a one-off build that no later
+ * invocation can reuse is `single-use`, so workerd does not keep it for the process lifetime.
+ */
 const invoke = (
   env: Environment,
   outbound: Fetcher,
@@ -160,10 +164,11 @@ const invoke = (
   controls: Callback | null,
   execution?: WorkflowExecution,
   waitUntil?: (task: Promise<void>) => void,
+  worker: "retained" | "single-use" = "retained",
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const identity = yield* facetIdentity(input.build, JSON.stringify(input.accounts));
+      const identity = yield* facetIdentity(input.build, input.accounts);
       const body = JSON.stringify({
         command: input.command,
         accounts: input.accounts,
@@ -222,8 +227,9 @@ const invoke = (
           ),
         );
       }
-      const worker = env.LOADER.get(
-        `${input.app}:${execution?.runId ?? "call"}:${identity}`,
+      // The run, credentials and callbacks travel with this invocation, never in the Worker name.
+      const loaded = env.LOADER.get(
+        worker === "retained" ? `${input.app}:${identity}` : null,
         () => ({
           mainModule: "__executor_rpc.js",
           modules: {
@@ -235,7 +241,7 @@ const invoke = (
           globalOutbound: outbound,
         }),
       );
-      const entry = yield* Schema.decodeUnknownEffect(AppRpcEntrypoint)(worker.getEntrypoint());
+      const entry = yield* Schema.decodeUnknownEffect(AppRpcEntrypoint)(loaded.getEntrypoint());
       const workflow =
         execution === undefined ? null : yield* invocationWorkflow(execution, signal);
       const delivery =
@@ -331,6 +337,9 @@ class AppApi extends RpcTarget {
           this.#lifetime.signal,
           null,
           null,
+          undefined,
+          undefined,
+          "single-use",
         );
         const envelope = yield* Schema.decodeUnknownEffect(HostResponse)(response);
         if (!envelope.ok) return yield* failure();

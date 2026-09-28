@@ -326,6 +326,28 @@ export const makeFacetSupervisor = (
     };
   });
 
-/** A deployment and the host-serialized account bindings define one warm execution context. */
-export const facetIdentity = (build: string, accounts: string) =>
-  fingerprint(crypto, JSON.stringify([build, accounts]));
+/** A saved account as selected for one slot; only its stable identifier names a runtime. */
+interface SelectedAccount {
+  readonly id: string;
+}
+/**
+ * A deployment and its account selection define one warm execution context. Credential values
+ * and workflow runs are delivered with each invocation: a renewed token or another run must not
+ * load another Worker, which the runtime would keep for its lifetime.
+ */
+export const facetIdentity = (
+  build: string,
+  accounts: Readonly<Record<string, SelectedAccount | ReadonlyArray<SelectedAccount>>>,
+) =>
+  fingerprint(
+    crypto,
+    JSON.stringify([
+      build,
+      Object.entries(accounts)
+        .sort(([left], [right]) => (left < right ? -1 : 1))
+        .map(([slot, selected]) => [
+          slot,
+          "id" in selected ? selected.id : selected.map((account) => account.id),
+        ]),
+    ]),
+  );

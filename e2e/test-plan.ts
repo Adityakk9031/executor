@@ -812,6 +812,60 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  appWorkerCredentialRotation: {
+    fixtures: "actors",
+    file: "app-worker-reuse.spec.ts",
+    title:
+      "app Workers stay loaded across credential rotation without sharing one account's state with another",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("Local key replacement is covered by the local app Worker reuse scenario."),
+    },
+  },
+  appWorkerWorkflowRuns: {
+    fixtures: "actors",
+    file: "app-worker-reuse.spec.ts",
+    title: "workflow runs reuse the app Worker and deliver their own run context",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("Local workflow runs are covered by the local app Worker reuse scenario."),
+    },
+  },
+  appWorkerSharedContexts: {
+    fixtures: "actors",
+    file: "app-worker-reuse.spec.ts",
+    title:
+      "tool calls and workflow runs share one account's app Worker, its outbound fetch and no other account's state",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "Uses a loopback resource; Cloud app Workers fetch through one fixed service binding.",
+      ),
+      local: na("Local calls and runs are covered by the local app Worker reuse scenario."),
+    },
+  },
+  localAppWorkerReuse: {
+    file: "local-app-worker-reuse.spec.ts",
+    title:
+      "local key replacement, tool calls and workflow runs reuse one account's app Worker and its outbound fetch",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted Worker reuse is covered through organization routes."),
+      cloud: na("Hosted Worker reuse is covered through organization routes."),
+    },
+  },
+  appWorkerOAuthRefresh: {
+    fixtures: "actors",
+    file: "app-worker-reuse.spec.ts",
+    title: "OAuth token renewal reuses the app Worker and delivers each renewed token",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
   oauthRefreshResilience: {
     fixtures: "actors",
     file: "oauth-refresh-resilience.spec.ts",

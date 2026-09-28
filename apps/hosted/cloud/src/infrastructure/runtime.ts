@@ -141,7 +141,8 @@ export const cloudRuntime = Effect.fn(function* (
             Effect.sync(() => new AbortController()),
             (controller) => Effect.sync(() => controller.abort()),
           );
-          // The identity includes app, build and current credentials. Reuse never crosses account contexts.
+          // The identity includes app, build and account selection. Reuse never crosses account contexts;
+          // credentials and workflow runs arrive with each invocation.
           const worker = yield* loader
             .get(identity, () =>
               bundle.pipe(
@@ -309,10 +310,7 @@ export const cloudRuntime = Effect.fn(function* (
       Effect.scoped(
         Effect.gen(function* () {
           if (input.storage !== undefined) return yield* new RuntimeProtocolFailed();
-          const identity = yield* facetIdentity(
-            input.build,
-            JSON.stringify(Redacted.value(input.accounts)),
-          );
+          const identity = yield* facetIdentity(input.build, Redacted.value(input.accounts));
           yield* Effect.annotateCurrentSpan({
             "executor.runtime.mode": input.database ? "facet" : "worker",
             "executor.worker.identity": `${input.app}:${identity}`,
@@ -455,7 +453,7 @@ export const cloudRuntime = Effect.fn(function* (
         ),
       skills: ({ app, build, sources, ...context }) =>
         Effect.gen(function* () {
-          const identity = `${app}:${yield* facetIdentity(build, JSON.stringify(Redacted.value(context.accounts))).pipe(Effect.mapError(protocolFailed))}`;
+          const identity = `${app}:${yield* facetIdentity(build, Redacted.value(context.accounts)).pipe(Effect.mapError(protocolFailed))}`;
           yield* Effect.annotateCurrentSpan({
             "executor.runtime.mode": "worker",
             "executor.worker.identity": identity,
@@ -475,7 +473,7 @@ export const cloudRuntime = Effect.fn(function* (
         }).pipe(Effect.withSpan("runtime.cloud.skills")),
       inspect: ({ app, build, tools, scheduled, ...context }) =>
         Effect.gen(function* () {
-          const identity = `${app}:${yield* facetIdentity(build, JSON.stringify(Redacted.value(context.accounts))).pipe(Effect.mapError(protocolFailed))}`;
+          const identity = `${app}:${yield* facetIdentity(build, Redacted.value(context.accounts)).pipe(Effect.mapError(protocolFailed))}`;
           yield* Effect.annotateCurrentSpan({
             "executor.runtime.mode": "worker",
             "executor.worker.identity": identity,
@@ -495,7 +493,7 @@ export const cloudRuntime = Effect.fn(function* (
         }).pipe(Effect.withSpan("runtime.cloud.inspect")),
       index: ({ app, build, ...context }) =>
         Effect.gen(function* () {
-          const identity = `${app}:${yield* facetIdentity(build, JSON.stringify(Redacted.value(context.accounts))).pipe(Effect.mapError(protocolFailed))}`;
+          const identity = `${app}:${yield* facetIdentity(build, Redacted.value(context.accounts)).pipe(Effect.mapError(protocolFailed))}`;
           yield* Effect.annotateCurrentSpan({
             "executor.runtime.mode": "worker",
             "executor.worker.identity": identity,
@@ -513,7 +511,7 @@ export const cloudRuntime = Effect.fn(function* (
         }).pipe(Effect.withSpan("runtime.cloud.index")),
       workflow: ({ app, build, command, ...context }) =>
         Effect.gen(function* () {
-          const identity = `${app}:workflow:${context.workflow?.runId ?? "inspect"}:${yield* facetIdentity(build, JSON.stringify(Redacted.value(context.accounts))).pipe(Effect.mapError(protocolFailed))}`;
+          const identity = `${app}:${yield* facetIdentity(build, Redacted.value(context.accounts)).pipe(Effect.mapError(protocolFailed))}`;
           return yield* dispatch(
             load(build),
             command,
