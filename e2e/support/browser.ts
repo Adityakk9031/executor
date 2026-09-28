@@ -245,7 +245,8 @@ export class Browser extends Context.Service<
       // the outcome.
       // The check walks only comment nodes natively, so it stays cheap on a page with a very
       // large DOM. An evaluation that a navigation interrupts is repeated on the new document.
-      // Once a document responds, later steps skip the check until the page navigates again.
+      // Once a document responds or the wait expires, later steps skip the check until the page
+      // navigates again.
       const interactive = (page: Page) =>
         Effect.suspend(() =>
           responsive
@@ -288,6 +289,13 @@ export class Browser extends Context.Service<
                 Effect.retry({ schedule: Schedule.spaced("50 millis") }),
                 Effect.timeout("10 seconds"),
                 Effect.ignore,
+                // Wait once per document. A document that never responds is not waited on again
+                // by later steps until the page navigates.
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    responsive = true;
+                  }),
+                ),
               ),
         );
       const use = <A>(label: string, action: (page: Page) => Promise<A>) =>
