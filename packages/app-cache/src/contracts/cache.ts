@@ -1,5 +1,5 @@
 /** Serializable cache protocol. Hosts bind the application and build namespace separately. */
-import { Schema, type Effect } from "effect";
+import { Option, Schema, type Effect } from "effect";
 
 /** Expected cache failures never include keys, values or upstream exception text. */
 export class CacheError extends Schema.TaggedError<CacheError>()("CacheError", {
@@ -73,6 +73,20 @@ export const CacheCommand = Schema.Union([
 export type CacheCommand = typeof CacheCommand.Type;
 /** Replies remain JSON across Worker RPC and are decoded by each caller. */
 export type CacheTransport = (command: CacheCommand) => Effect.Effect<Schema.Json, CacheError>;
+
+/**
+ * Whether a command replaced or removed retained data: a published refresh, a direct write or an
+ * invalidation. Hosts report these so results evaluated from the earlier data are not reused.
+ */
+export const changesCache = (command: unknown) => {
+  const operation = Schema.decodeUnknownOption(CacheCommand)(command);
+  return (
+    Option.isSome(operation) &&
+    (operation.value.operation === "publish" ||
+      operation.value.operation === "write" ||
+      operation.value.operation === "invalidate")
+  );
+};
 
 /** Safe protocol envelope used at process boundaries. */
 export const CacheReply = Schema.Union([

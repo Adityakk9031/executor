@@ -60,7 +60,8 @@ const requestBackend: McpBackend<RequestError> = {
     Effect.flatMap(RequestBackend, (backend) => backend.authorizeElicitation(input)),
   listApps: (input) => Effect.flatMap(RequestBackend, (backend) => backend.listApps(input)),
   listTargets: (input) => Effect.flatMap(RequestBackend, (backend) => backend.listTargets(input)),
-  listTools: (input) => Effect.flatMap(RequestBackend, (backend) => backend.listTools(input)),
+  listTools: (input, options) =>
+    Effect.flatMap(RequestBackend, (backend) => backend.listTools(input, options)),
   callTool: (input, options) =>
     Effect.flatMap(RequestBackend, (backend) => backend.callTool(input, options)),
   resumeInvocation: (request, response, options) =>

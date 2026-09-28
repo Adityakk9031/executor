@@ -155,6 +155,11 @@ const errorMessage = Match.type<DashboardError>().pipe(
       ),
     ToolDiscoveryTimedOut: () =>
       message("The app took too long", "Its live tool catalog did not finish loading. Try again."),
+    ToolListingTimedOut: () =>
+      message(
+        "The app took too long",
+        "Its tool catalog is still loading in the background. Try again shortly.",
+      ),
     ToolCatalogChanged: () =>
       message("The tool catalog changed", "Try again to load the current tool catalog."),
     AppWorkflowsActive: () =>

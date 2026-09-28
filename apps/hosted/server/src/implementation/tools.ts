@@ -1,6 +1,11 @@
 import { authorizeTarget, authorizeTool } from "./authorization.ts";
 import { permitsTool } from "@executor-js/authorization";
-import { ToolApprovalRequired, ToolNotFound, type Executor } from "@executor-js/sdk/core";
+import {
+  ToolApprovalRequired,
+  ToolNotFound,
+  type Executor,
+  type ToolListOptions,
+} from "@executor-js/sdk/core";
 import { Effect } from "effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { HostedApi } from "../contracts/api.ts";
@@ -8,13 +13,16 @@ import { HostedExecutor } from "../contracts/executor.ts";
 import { currentOwner, selectedActiveDeployment } from "./access.ts";
 
 /** Discover the current account-dependent catalog after checking its saved selection. */
-export const listTools = (input: Parameters<Executor["tools"]["list"]>[0]) =>
+export const listTools = (
+  input: Parameters<Executor["tools"]["list"]>[0],
+  options?: ToolListOptions,
+) =>
   Effect.gen(function* () {
     const policy = yield* authorizeTarget(input.app, input.profile);
     const owner = yield* currentOwner;
     const executor = yield* Effect.flatten(HostedExecutor);
     const deployment = yield* selectedActiveDeployment(executor, owner, input);
-    const page = yield* executor.tools.list({ ...input, deployment, limit: 2000 });
+    const page = yield* executor.tools.list({ ...input, deployment, limit: 2000 }, options);
     return {
       ...page,
       items: page.items.filter((tool) =>

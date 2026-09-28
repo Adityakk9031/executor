@@ -28,6 +28,10 @@ These settings override the defaults:
 | `EXECUTOR_APP_UI_BASE_URL`           | no       | HTTPS origin that serves app web pages. See below.                       |
 | `EXECUTOR_APPS_ALLOW_PRIVATE_FETCH`  | no       | Let app code reach your private network. See below.                      |
 | `EXECUTOR_REGISTRY_URL`              | no       | Origin of the public app registry. The default is `https://v2.executor.sh`. |
+| `EXECUTOR_TOOL_LISTING_FRESH_SECONDS` | no     | Reuse an app's evaluated tool list this long before refreshing it in the background. The default is `30`. |
+| `EXECUTOR_TOOL_LISTING_MAX_AGE_SECONDS` | no  | Never serve an evaluated tool list older than this; `0` evaluates every list. The default is `60`. |
+| `EXECUTOR_TOOL_LISTING_LOAD_SECONDS` | no     | Stop evaluating an app's tool list after this long when no request is waiting for it; capped at the maximum age. The default is `45`. |
+| `EXECUTOR_EVALUATION_MEMORY_MB`      | no       | Memory for kept tool lists and app declarations. The default is `256`.  |
 | `SSO_DISCOVERY_URL`                  | no       | OIDC discovery document. Leave it empty to keep SSO off.                 |
 | `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET` | no       | Credentials for that identity provider.                                  |
 | `SSO_ALLOWED_DOMAINS`                | no       | Comma-separated email domains allowed to join through SSO.               |

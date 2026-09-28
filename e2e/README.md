@@ -109,14 +109,17 @@ Within a scenario, use `Effect.all` or `Effect.forEach` with a concurrency bound
 when operations are independent. Keep dependent actions ordered.
 
 The self-host load case creates 1,000 accounts through four concurrent API
-writers. CI gives it its own M4 runner, in parallel with the functional
-suite. The PGlite workload depends on single-thread speed. Running both workloads on one machine can consume its CPU budget and
+writers. The MCP catalog scale case deploys 29 apps with 7,000 tools and about
+46 MB of input schemas, plus three MCP apps with profiles whose server never answers, and bounds
+execute and search latency. CI gives both cases their own M4 runner, one after
+the other, in parallel with the functional suite. The PGlite workload depends on single-thread speed. Running both workloads on one machine can consume its CPU budget and
 invalidate the load timing. The normal self-host command still includes every
 applicable case. To reproduce the CI split, use separate machines:
 
 ```sh
-bun run e2e:self-host --test-name '^(?!.*(?:Claude Code connects|concurrent owners and admins save every account))'
+bun run e2e:self-host --test-name '^(?!.*(?:Claude Code connects|concurrent owners and admins save every account|MCP execute over 7,000 tools))'
 bun run e2e:self-host --test-name 'concurrent owners and admins save every account'
+bun run e2e:self-host --test-name 'MCP execute over 7,000 tools'
 ```
 
 ## Shared SDK and interactive CLI

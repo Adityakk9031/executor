@@ -1,4 +1,4 @@
-import { CacheCommand } from "@executor-js/app-cache/contracts";
+import { CacheCommand, changesCache } from "@executor-js/app-cache/contracts";
 import { invocationWorkflow, invocationWorkflowControls } from "../implementation/workflow-rpc.ts";
 /** Cloud apps use account-isolated cached Workers; explicitly declared databases run in facets. */
 import { appRpcBridge, appFacetBridge } from "../implementation/app-bridge.ts";
@@ -9,6 +9,7 @@ import {
 } from "../implementation/elicitation.ts";
 import { makeTelemetryForwarder, TelemetryBatch, traceHeaders } from "@executor-js/telemetry";
 import {
+  AppCacheChanges,
   BuildId,
   BlobStore,
   Json,
@@ -166,6 +167,8 @@ export const cloudRuntime = Effect.fn(function* (
           // Workers RPC structured-clones its arguments; Effect headers carry a prototype it rejects.
           const headers = Object.fromEntries(Object.entries(yield* traceHeaders));
           const services = yield* Effect.context<never>();
+          // Cache commands can arrive after the invocation, from a background refresh.
+          const changes = yield* AppCacheChanges;
           // Native RPC carries the live callback; the fetch payload remains the existing portable protocol.
           const entrypoint = yield* Schema.decodeUnknownEffect(AppRpcEntrypoint)(
             worker.getEntrypoint().raw,
@@ -203,7 +206,9 @@ export const cloudRuntime = Effect.fn(function* (
                           Effect.gen(function* () {
                             const parsed = yield* Schema.decodeUnknownEffect(CacheCommand)(command);
                             yield* Effect.annotateCurrentSpan("cache.operation", parsed.operation);
-                            return yield* databases.getByName(app).cache(build, parsed);
+                            const reply = yield* databases.getByName(app).cache(build, parsed);
+                            if (changesCache(parsed)) yield* changes.changed(app);
+                            return reply;
                           }).pipe(
                             Effect.provide(RuntimeContext.phantom),
                             Effect.withSpan("runtime.cloud.cache"),
@@ -390,6 +395,7 @@ export const cloudRuntime = Effect.fn(function* (
             );
           const value = yield* Schema.decodeUnknownEffect(Json)(envelope.value);
           if (command.operation === "query") input.observeRevision?.(result.revision);
+          if (result.cacheChanged === true) yield* (yield* AppCacheChanges).changed(input.app);
           return value;
         }),
       ).pipe(

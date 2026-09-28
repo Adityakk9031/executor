@@ -26,6 +26,7 @@ import {
   recoverAppRepositories,
   StorageError,
   BlobStore,
+  defaultToolListingPolicy,
   makeExecutorStorage,
 } from "@executor-js/sdk/core";
 import { makeExecutionMemo } from "alchemy/Runtime/ExecutionMemo";
@@ -141,6 +142,9 @@ export const cloudExecutor = Effect.fn(function* (
           workflows,
           // One store per isolate, shared by every executor built in it.
           declarations: isolateDeclarations,
+          // Background work lasts at most 20 s after its event closes. A listing nobody waits for
+          // stops well inside that, so a stalled app is remembered as timed out, not interrupted.
+          toolListings: { ...defaultToolListingPolicy, loadMillis: 15_000 },
           background,
         },
       ).pipe(Effect.provideContext(services), Effect.provide(BrowserCrypto.layer));

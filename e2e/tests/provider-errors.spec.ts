@@ -136,6 +136,9 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
           const tool = kind === "graphql" ? "queries.query_identity" : "queries.identity";
           const catalog = () =>
             api.request(actors.owner, "GET", `${path}/tools?profile=${profile.id}`);
+          // The dashboard's index evaluates on every read.
+          const index = () =>
+            api.request(actors.owner, "GET", `${path}/tools/index?profile=${profile.id}`);
           const call = () =>
             api.request(actors.owner, "POST", `${path}/tools/call`, {
               profile: profile.id,
@@ -191,10 +194,16 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
           }
           if (kind === "custom") {
             yield* upstream.configure({ status: 402 });
-            const forged = yield* body(Failure, yield* catalog());
+            // This factory fetches its upstream without the app cache, so nothing tells Executor
+            // that its listing changed: the full listing evaluated above is reused within its
+            // window, while the index shows the new failure.
+            const kept = yield* catalog();
+            expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+            expect(kept.body).toMatchObject({ items: [{ name: "queries.identity" }] });
+            const forged = yield* body(Failure, yield* index());
             expect(forged.account).toBeUndefined();
             yield* upstream.configure({ status: 400 });
-            const unknown = yield* catalog();
+            const unknown = yield* index();
             expect(unknown.body).toMatchObject({ _tag: "AppEvaluationFailed" });
             expect(JSON.stringify(unknown.body)).not.toContain(providerSecretMarker);
             yield* upstream.configure({ status: 400, phase: "call" });

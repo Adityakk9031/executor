@@ -86,6 +86,70 @@ export const scenarios = {
       local: na("Hosted deployment API scenario"),
     },
   },
+  mcpCatalogScale: {
+    fixtures: "actors",
+    file: "mcp-catalog-scale.spec.ts",
+    title:
+      "MCP execute over 7,000 tools loads only the apps a program uses and isolates stalled apps",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Loopback stalled MCP server; the shared execute path is covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
+  mcpListingCacheChanges: {
+    fixtures: "actors",
+    file: "mcp-catalog.spec.ts",
+    title:
+      "MCP execute lists an app's tools again after its cached catalog is refreshed or its server announces changed tools",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Loopback MCP fixture; the shared execute path is covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
+  mcpSlowListing: {
+    fixtures: "actors",
+    file: "mcp-catalog-scale.spec.ts",
+    title: "MCP execute pays for a slow app's tool listing once and reuses it",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Loopback slow upstream; the shared execute path is covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
+  mcpRememberedListingFailure: {
+    fixtures: "actors",
+    file: "mcp-catalog-scale.spec.ts",
+    title:
+      "MCP execute remembers a stalled tool listing's timeout, retries it once in the background and recovers",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Loopback held upstream; the shared execute path is covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
+  mcpListingInputs: {
+    fixtures: "actors",
+    file: "mcp-catalog-scale.spec.ts",
+    title:
+      "MCP execute lists tools again for a new deployment, profile revision, selection or credential, never across profiles or revoked access",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Shared execute path; covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
+  mcpExecuteReach: {
+    fixtures: "actors",
+    file: "mcp-execute-reach.spec.ts",
+    title: "MCP execute discovers every app a program reaches through dynamic access to tools",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Shared execute path; covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
   mcpCatalogRefresh: {
     fixtures: "actors",
     file: "mcp-catalog.spec.ts",
@@ -1067,7 +1131,8 @@ export const scenarios = {
   appDeclarationsOAuth: {
     fixtures: "actors",
     file: "app-declarations-oauth.spec.ts",
-    title: "kept app declarations are refused once an OAuth grant needs reconnecting",
+    title:
+      "kept app declarations and tool listings are refused once an OAuth grant needs reconnecting",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback token service; the grant check is shared SDK code."),

@@ -41,7 +41,12 @@ import {
 } from "../contracts/workerd-host.ts";
 import { BlobStore, type BlobStorage } from "../contracts/blobs.ts";
 import { BuildId, Json } from "../contracts/shared.ts";
-import { RuntimeBuildFailed, RuntimeProtocolFailed, type Runtime } from "../contracts/runtime.ts";
+import {
+  AppCacheChanges,
+  RuntimeBuildFailed,
+  RuntimeProtocolFailed,
+  type Runtime,
+} from "../contracts/runtime.ts";
 import type { Executor } from "../contracts/executor.ts";
 import { runtimeAdapter } from "./runtime.ts";
 import { invocationElicitation } from "./worker-elicitation.ts";
@@ -242,6 +247,7 @@ export const connectedWorkerdApps = (blobs: BlobStorage, transport: WorkerdTrans
           Schema.Struct({
             telemetry: Schema.optional(TelemetryBatch),
             executorRevision: Schema.optional(Schema.Int),
+            cacheChanged: Schema.optional(Schema.Boolean),
           }),
         )(body);
         if (telemetry.telemetry !== undefined) {
@@ -249,6 +255,7 @@ export const connectedWorkerdApps = (blobs: BlobStorage, transport: WorkerdTrans
           if (Option.isSome(span))
             yield* forward(telemetry.telemetry, span.value.traceId, input.build);
         }
+        if (telemetry.cacheChanged === true) yield* (yield* AppCacheChanges).changed(input.app);
         const reply = yield* Schema.decodeUnknownEffect(HostResponse)(body).pipe(
           Effect.mapError(protocolFailure),
         );

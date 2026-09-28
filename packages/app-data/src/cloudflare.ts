@@ -9,7 +9,7 @@ import type {
 import { Clock, Deferred, Effect, Exit, Result, Schema, Semaphore } from "effect";
 import { fingerprint } from "./implementation/cursor.ts";
 import { AppDatabaseError } from "./contracts/database.ts";
-import { CacheReply } from "@executor-js/app-cache/contracts";
+import { CacheReply, changesCache } from "@executor-js/app-cache/contracts";
 import { sqliteCache } from "@executor-js/app-cache/sqlite";
 
 /** Executable bytes, supplied by the trusted build store rather than a browser request. */
@@ -23,8 +23,15 @@ export const FacetInvocation = Schema.Struct({
   write: Schema.Boolean,
   headers: Schema.Record(Schema.String, Schema.String),
 });
-/** The supervisor attaches the revision before releasing its serialized invocation. */
-export const FacetResult = Schema.Struct({ value: Schema.Json, revision: Schema.Int });
+/**
+ * The supervisor attaches the revision before releasing its serialized invocation, and whether
+ * the invocation replaced or removed app cache data.
+ */
+export const FacetResult = Schema.Struct({
+  value: Schema.Json,
+  revision: Schema.Int,
+  cacheChanged: Schema.optionalKey(Schema.Boolean),
+});
 const causes = new WeakMap<AppDatabaseError, unknown>();
 /** Internal diagnostics, deliberately absent from the serialized error. */
 export const facetFailureCause = (error: AppDatabaseError): unknown => causes.get(error);
@@ -208,6 +215,7 @@ export const makeFacetSupervisor = (
           // Reads share the invocation lock with writes. Capture the revision before
           // execution so a later write cannot make an old query look current.
           const observedRevision = yield* revision;
+          let cacheChanged = false;
           if (invocation.write)
             yield* Effect.acquireRelease(begin, () => finish.pipe(Effect.catch(() => Effect.void)));
           const run = Effect.gen(function* () {
@@ -225,7 +233,15 @@ export const makeFacetSupervisor = (
                       invocation.cacheNamespace === undefined
                         ? null
                         : (command) =>
-                            Effect.runPromise(cache(invocation.cacheNamespace ?? "", command)),
+                            Effect.runPromise(
+                              cache(invocation.cacheNamespace ?? "", command).pipe(
+                                Effect.tap(() =>
+                                  Effect.sync(() => {
+                                    if (changesCache(command)) cacheChanged = true;
+                                  }),
+                                ),
+                              ),
+                            ),
                     ),
                   )
                   .then(Result.succeed, Result.fail);
@@ -255,7 +271,12 @@ export const makeFacetSupervisor = (
               Effect.mapError(failed),
             );
           });
-          return { value: yield* run, revision: observedRevision };
+          const value = yield* run;
+          return {
+            value,
+            revision: observedRevision,
+            ...(cacheChanged ? { cacheChanged: true } : {}),
+          };
         }),
       ).pipe(
         // Storage operations already serialize inside the facet. Queue here so aborting

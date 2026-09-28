@@ -127,7 +127,7 @@ export const hostedMcpBackend = Effect.gen(function* () {
         const accounts = yield* discoveryAccounts;
         return appTargets(app, profiles, accounts);
       }).pipe((work) => observe("listTargets", work)),
-    listTools: (input) => observe("listTools", listTools(input)),
+    listTools: (input, options) => observe("listTools", listTools(input, options)),
     callTool: (input, options?: ToolInvocationOptions) =>
       Effect.gen(function* () {
         const owner = yield* currentOwner;

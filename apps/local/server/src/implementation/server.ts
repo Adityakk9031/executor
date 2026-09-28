@@ -19,6 +19,7 @@ import {
   AppNotFound,
   createExecutor,
   makeDeclarationCache,
+  declarationConfig,
   toEffectRuntime,
   executorHandlers,
   webhookCallback,
@@ -95,9 +96,11 @@ export const localApi = (
       const repositories = nativeRepositories(path.join(directory, "repositories"));
       const sources = gitSourceStorage(repositories);
       const server = yield* Scope.Scope;
+      const evaluation = yield* declarationConfig;
       const executor = yield* createExecutor({
         // Stale declarations refresh on the server's own lifetime.
-        declarations: makeDeclarationCache(),
+        declarations: makeDeclarationCache(evaluation.limits),
+        toolListings: evaluation.toolListings,
         background: (work) => Effect.forkIn(work, server).pipe(Effect.as(true)),
         workflows,
         webhookOrigin:

@@ -41,6 +41,7 @@ import {
   invocationWorkflow,
 } from "../workerd.ts";
 import { workerModules } from "@executor-js/app-data/worker-bundle";
+import { changesCache } from "@executor-js/app-cache/contracts";
 import { compileWorkerApp } from "../workerd-build.ts";
 import {
   CompiledWorkerApp,
@@ -220,7 +221,13 @@ const invoke = (
           Effect.flatMap((result) =>
             Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))(
               result.value,
-            ).pipe(Effect.map((body) => ({ ...body, executorRevision: result.revision }))),
+            ).pipe(
+              Effect.map((body) => ({
+                ...body,
+                executorRevision: result.revision,
+                ...(result.cacheChanged === true ? { cacheChanged: true } : {}),
+              })),
+            ),
           ),
           Effect.onInterrupt(() =>
             Effect.promise(() => target.cancel(id)).pipe(Effect.catchCause(() => Effect.void)),
@@ -251,12 +258,16 @@ const invoke = (
               Schema.encodeSync(ElicitationReply)(
                 Schema.decodeUnknownSync(ElicitationReply)(await elicit(input)),
               );
+      // Cache writes after the result (background refreshes) are not reported to the host.
+      let cacheChanged = false;
       const call = yield* Effect.acquireRelease(
         Effect.tryPromise({
           try: () =>
-            entry.start(body, input.headers, delivery, workflow, controls, (command) =>
-              env.DATA.getByName(input.app).cache(input.build, command),
-            ),
+            entry.start(body, input.headers, delivery, workflow, controls, async (command) => {
+              const reply = await env.DATA.getByName(input.app).cache(input.build, command);
+              if (changesCache(command)) cacheChanged = true;
+              return reply;
+            }),
           catch: failure,
         }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(AppRpcInvocation))),
         (call, exit) =>
@@ -277,7 +288,10 @@ const invoke = (
             else await release();
           }).pipe(Effect.catchCause(() => Effect.void)),
       );
-      return yield* Effect.tryPromise({ try: () => call.result(), catch: failure });
+      const result = yield* Effect.tryPromise({ try: () => call.result(), catch: failure });
+      return cacheChanged && typeof result === "object" && result !== null && !Array.isArray(result)
+        ? { ...result, cacheChanged: true }
+        : result;
     }),
   );
 

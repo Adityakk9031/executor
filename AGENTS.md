@@ -122,9 +122,11 @@ single-threaded PGlite workload. Static checks use 4 vCPUs.
 - `e2e-local` and `e2e-self-host` run `bun run e2e:prepare`, then `e2e:local`
   under `xvfb-run` and `e2e:self-host` headlessly on macOS. The self-host run excludes the Claude
   Code MCP scenario, which needs a model API key that CI does not hold.
-- `e2e-self-host-scale` runs the 1,000-account workload on its own runner, in parallel
-  with the functional jobs. This preserves its four concurrent writers and
-  60-second deadline without competing with 15 independent product servers.
+- `e2e-self-host-scale` runs the 1,000-account workload and then the 7,000-tool MCP
+  catalog scenario and the slow and stalled tool listing scenarios on its own runner,
+  in parallel with the functional jobs. This preserves the four concurrent writers,
+  the catalog and listing latency bounds and the 60-second deadline without competing
+  with 15 independent product servers.
 - `e2e-cloud` runs Cloud onboarding and delivered observability scenarios. It starts the local Cloud
   Worker, a throwaway Postgres container and the service emulators, so it needs
   Docker but no credentials.

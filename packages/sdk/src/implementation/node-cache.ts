@@ -1,12 +1,20 @@
 /** Trusted Node adapter. Each cache transaction opens and closes its own SQLite handle. */
 import { DatabaseSync } from "node:sqlite";
 import { Effect, FileSystem, Path, Schema } from "effect";
-import { cacheKey, CacheError, CacheReply } from "@executor-js/app-cache";
+import { cacheKey, CacheError, CacheReply, changesCache } from "@executor-js/app-cache";
 import { sqliteCache } from "@executor-js/app-cache/sqlite";
 import { isolatedCacheSession } from "apps/host";
 
-/** Bind persistent storage to an app/build; refreshes are bounded and owned by the returned session. */
-export const nodeCacheSession = (directory: string, app: string, build: string) =>
+/**
+ * Bind persistent storage to an app/build; refreshes are bounded and owned by the returned
+ * session. `changed` runs after each command that replaced or removed retained data.
+ */
+export const nodeCacheSession = (
+  directory: string,
+  app: string,
+  build: string,
+  changed: Effect.Effect<void>,
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -53,7 +61,9 @@ export const nodeCacheSession = (directory: string, app: string, build: string) 
                 }
               },
             });
-            return yield* cache(build, command);
+            const reply = yield* cache(build, command);
+            if (changesCache(command)) yield* changed;
+            return reply;
           }),
         ).pipe(
           Effect.match({

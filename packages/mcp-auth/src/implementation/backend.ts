@@ -101,10 +101,10 @@ export const restrictMcpBackend = <E extends Error, G extends Error>(
           permitsTarget(policy, input.app, target.kind === "app" ? undefined : target.id),
         );
       }),
-    listTools: (input) =>
+    listTools: (input, options) =>
       Effect.gen(function* () {
         yield* checkApp(input.app, input.profile);
-        const page = yield* backend.listTools(input);
+        const page = yield* backend.listTools(input, options);
         const policy = yield* authority;
         return {
           ...page,
