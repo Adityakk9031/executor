@@ -19,7 +19,11 @@ import { ProfilePicker } from "@executor-js/ui/dashboard/profile-picker";
 import { ProfileStatus } from "@executor-js/ui/dashboard/profile-status";
 import { AppAccessSettings } from "./resource-settings.tsx";
 import { appAccessAtom } from "../../contracts/resource-access.ts";
-import { accountSelectionIssues, type AppView } from "@executor-js/ui/contracts/dashboard";
+import {
+  accountSelectionIssues,
+  unfilledAccountSlots,
+  type AppView,
+} from "@executor-js/ui/contracts/dashboard";
 import { AppSchedules } from "@executor-js/ui/dashboard/schedules";
 import { scheduleBindings } from "../../contracts/schedules.ts";
 import { AppDetailLoading, OverviewCardLoading } from "@executor-js/ui/dashboard/app-loading";
@@ -500,6 +504,11 @@ export function AppDetailPage({
                                   app={current}
                                   Failure={HostedFailure}
                                   empty={previewEmpty}
+                                  accountsNeeded={previewContexts.every(
+                                    (context) =>
+                                      unfilledAccountSlots(context.app, context.accounts).length >
+                                      0,
+                                  )}
                                   sources={previewContexts.map((context) => ({
                                     key: context.key,
                                     query: toolsAtom({

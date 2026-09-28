@@ -28,6 +28,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let registrationError: "invalid_client_metadata" | "invalid_redirect_uri" =
     "invalid_client_metadata";
   let omitSecretExpiry = false;
+  /** Vercel registers a public client whatever method the request names, as RFC 7591 allows. */
+  let issuePublicClients = false;
   let nonceRequested: boolean | undefined;
   let idTokenAlgorithms: readonly string[] | undefined;
   let includeIdToken = false;
@@ -530,15 +532,19 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (!malformedRegistration)
           clients.set(`synthetic-client-${registrations}`, {
             redirects: input.redirect_uris,
-            secret: "synthetic-client-secret",
-            methods: ["client_secret_basic"],
+            secret: issuePublicClients ? null : "synthetic-client-secret",
+            methods: issuePublicClients ? ["none"] : ["client_secret_basic"],
           });
         return yield* HttpServerResponse.json(
           {
             ...(malformedRegistration ? {} : { client_id: `synthetic-client-${registrations}` }),
-            client_secret: "synthetic-client-secret",
-            ...(omitSecretExpiry ? {} : { client_secret_expires_at: expiresAt }),
-            token_endpoint_auth_method: input.token_endpoint_auth_method,
+            ...(issuePublicClients
+              ? { token_endpoint_auth_method: "none" }
+              : {
+                  client_secret: "synthetic-client-secret",
+                  ...(omitSecretExpiry ? {} : { client_secret_expires_at: expiresAt }),
+                  token_endpoint_auth_method: input.token_endpoint_auth_method,
+                }),
             redirect_uris: input.redirect_uris,
           },
           { status: registrationStatus },
@@ -571,6 +577,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly malformedRegistration?: boolean;
       readonly registrationError?: typeof registrationError;
       readonly omitSecretExpiry?: boolean;
+      /** Register every client as public, replacing the requested token endpoint method. */
+      readonly issuePublicClients?: boolean;
       readonly idTokenAlgorithms?: readonly string[];
       readonly includeIdToken?: boolean;
       readonly idTokenIssuer?: string | null;
@@ -640,6 +648,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           malformedRegistration = input.malformedRegistration;
         if (input.registrationError !== undefined) registrationError = input.registrationError;
         if (input.omitSecretExpiry !== undefined) omitSecretExpiry = input.omitSecretExpiry;
+        if (input.issuePublicClients !== undefined) issuePublicClients = input.issuePublicClients;
         if (input.registration !== undefined) registration = input.registration;
         if (input.expiresAt !== undefined) expiresAt = input.expiresAt;
         if (input.discovery !== undefined) discovery = input.discovery;

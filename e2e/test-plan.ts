@@ -556,6 +556,16 @@ export const scenarios = {
       local: na("Shared picker exercised through hosted connections."),
     },
   },
+  emptyAccountTools: {
+    fixtures: "actors",
+    file: "empty-state-recovery.spec.ts",
+    title: "Apps that list tools per account ask for an account instead of reporting no tools",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Shared tool browser exercised through hosted profiles."),
+    },
+  },
   emptyStateMcp: {
     fixtures: "actors",
     file: "empty-state-mcp.spec.ts",

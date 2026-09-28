@@ -181,6 +181,12 @@ export function accountSelectionIssues(
     },
   );
 }
+/** Slots that accept many accounts and have none selected. Their tools list empty, not missing. */
+export const unfilledAccountSlots = (app: App, selection: SelectedAccounts): readonly string[] =>
+  Object.keys(app.requirements.accounts).filter((slot) => {
+    const selected = selection[slot];
+    return typeof selected !== "string" && selected?.length === 0;
+  });
 /** Account metadata can block tool discovery; missing credential-health metadata makes no claim. */
 export function appToolReadiness<A extends AccountSummary>(
   app: App,

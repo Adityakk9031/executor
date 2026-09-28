@@ -629,15 +629,18 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
             new Response(registrationBody(text), { status: 201, headers: response.headers }),
           );
         });
-        if (
-          registered.token_endpoint_auth_method !== undefined &&
-          registered.token_endpoint_auth_method !== advertised
-        )
+        const issued = registered.token_endpoint_auth_method;
+        if (issued === undefined || issued === advertised)
+          return yield* decode(OAuthRegistration, {
+            ...registered,
+            token_endpoint_auth_method: method,
+          });
+        // RFC 7591 section 3.2.1: the server may replace requested metadata, and the client
+        // uses what was issued. Vercel registers a public client when asked for a secret one.
+        // A method the app configured is a requirement, so a replacement there is a mismatch.
+        if (configured !== undefined)
           return yield* new OAuthProtocolFailed({ reason: "invalid_response" });
-        return yield* decode(OAuthRegistration, {
-          ...registered,
-          token_endpoint_auth_method: method,
-        });
+        return yield* decode(OAuthRegistration, registered);
       }).pipe(protocolStage("register")),
     authorize: (input: {
       server: OAuthServer;

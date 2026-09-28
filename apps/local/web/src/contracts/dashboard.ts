@@ -3,6 +3,7 @@ import type { DashboardError } from "./errors.ts";
 export {
   accountNeedsSignIn,
   appToolReadiness,
+  unfilledAccountSlots,
   selectedIds,
   accountSelectionIssues,
   displayDate,

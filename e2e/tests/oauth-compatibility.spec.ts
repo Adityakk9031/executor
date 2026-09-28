@@ -33,6 +33,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
           registrationStatus: 201,
           registrationError: "invalid_client_metadata",
           omitSecretExpiry: false,
+          issuePublicClients: false,
           basicCredentials: "form-decoded",
           malformedRegistration: false,
           scopes: ["read"],
@@ -47,6 +48,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
           readonly registrationStatus: 200 | 201 | 400 | 401;
           readonly registrationError: "invalid_client_metadata" | "invalid_redirect_uri";
           readonly omitSecretExpiry: boolean;
+          readonly issuePublicClients: boolean;
           readonly basicCredentials: "form-decoded" | "literal";
           readonly malformedRegistration: boolean;
           readonly scopes: readonly string[];
@@ -66,6 +68,8 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
             registrationStatus: 200,
             omitSecretExpiry: true,
           },
+          // Vercel answers a client_secret_basic registration with a public client.
+          { ...valid, name: "Public client issued", issuePublicClients: true },
           // Doorkeeper, which PlanetScale runs, compares HTTP Basic credentials without
           // form-decoding them, and its registered client IDs and secrets contain `-` and `_`.
           { ...valid, name: "Literal Basic credentials", basicCredentials: "literal" },
