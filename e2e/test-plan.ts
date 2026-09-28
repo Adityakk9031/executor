@@ -618,6 +618,16 @@ export const scenarios = {
       local: na("The shared source browser is exercised through hosted organization routes."),
     },
   },
+  skillCodeHighlighting: {
+    fixtures: "actors",
+    file: "source-highlighting.spec.ts",
+    title: "Skill reader and editor highlight fenced code like the source browser",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("The shared skill reader is exercised through hosted organization routes."),
+    },
+  },
   appFilters: {
     fixtures: "actors",
     file: "app-filters.spec.ts",
