@@ -33,6 +33,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
           registrationStatus: 201,
           registrationError: "invalid_client_metadata",
           omitSecretExpiry: false,
+          basicCredentials: "form-decoded",
           malformedRegistration: false,
           scopes: ["read"],
           includeIdToken: false,
@@ -46,6 +47,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
           readonly registrationStatus: 200 | 201 | 400 | 401;
           readonly registrationError: "invalid_client_metadata" | "invalid_redirect_uri";
           readonly omitSecretExpiry: boolean;
+          readonly basicCredentials: "form-decoded" | "literal";
           readonly malformedRegistration: boolean;
           readonly scopes: readonly string[];
           readonly includeIdToken: boolean;
@@ -64,6 +66,9 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
             registrationStatus: 200,
             omitSecretExpiry: true,
           },
+          // Doorkeeper, which PlanetScale runs, compares HTTP Basic credentials without
+          // form-decoding them, and its registered client IDs and secrets contain `-` and `_`.
+          { ...valid, name: "Literal Basic credentials", basicCredentials: "literal" },
           { ...valid, name: "ES256 OIDC", scopes: ["openid", "read"], includeIdToken: true },
           // Executor does not use the ID token, so a service may omit it after `openid`.
           { ...valid, name: "OpenID without ID token", scopes: ["openid", "read"] },

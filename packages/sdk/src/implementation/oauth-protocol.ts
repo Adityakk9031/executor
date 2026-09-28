@@ -193,19 +193,30 @@ const metadata = (server: OAuthTokenServer): oauth.AuthorizationServer => ({
     : { token_endpoint_auth_methods_supported: [...server.token_endpoint_auth_methods_supported] }),
 });
 
+const basicAuth =
+  (secret: string, encode: (value: string) => string): oauth.ClientAuth =>
+  (_server, registered, _body, headers) => {
+    headers.set(
+      "authorization",
+      `Basic ${Encoding.encodeBase64(new TextEncoder().encode(`${encode(registered.client_id)}:${encode(secret)}`))}`,
+    );
+  };
+
+/**
+ * RFC 6749 section 2.3.1 form-encodes Basic credentials. The URL Standard's serializer leaves
+ * letters, digits and `*-._` as they are. Servers that decode read the same values, and
+ * Doorkeeper, which compares the header literally, accepts the IDs and secrets it issues.
+ */
+const formEncode = (value: string) => new URLSearchParams([["", value]]).toString().slice(1);
+
 const clientAuth = (client: OAuthRegistration) => {
   switch (client.token_endpoint_auth_method) {
     case "none":
       return oauth.None();
     case "client_secret_basic":
-      return oauth.ClientSecretBasic(client.client_secret);
+      return basicAuth(client.client_secret, formEncode);
     case "client_secret_basic_raw":
-      return ((_server, registered, _body, headers) => {
-        headers.set(
-          "authorization",
-          `Basic ${Encoding.encodeBase64(new TextEncoder().encode(`${registered.client_id}:${client.client_secret}`))}`,
-        );
-      }) satisfies oauth.ClientAuth;
+      return basicAuth(client.client_secret, (value) => value);
     case "client_secret_post":
       return oauth.ClientSecretPost(client.client_secret);
   }

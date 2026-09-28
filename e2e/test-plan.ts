@@ -991,6 +991,18 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  oauthPlanetscale: {
+    fixtures: "actors",
+    file: "oauth-planetscale.spec.ts",
+    title: "A registered PlanetScale client completes sign-in and reaches PlanetScale's MCP server",
+    targets: {
+      "self-host": na(
+        "PlanetScale accepts only HTTPS or bare loopback redirects; self-host tests a named loopback callback.",
+      ),
+      cloud: scheduled,
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
   oauthErrorResponses: {
     fixtures: "actors",
     file: "oauth-error-responses.spec.ts",

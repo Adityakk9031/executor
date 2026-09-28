@@ -125,6 +125,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let registrations = 0;
   let discoveries = 0;
   let authMethods = ["client_secret_basic"];
+  /**
+   * How the token endpoint reads HTTP Basic credentials. RFC 6749 section 2.3.1 form-decodes them;
+   * Doorkeeper, which PlanetScale runs, compares the decoded header literally.
+   */
+  let basicCredentials: "form-decoded" | "literal" = "form-decoded";
   let lastRegistration: { scope: string; method: string } | undefined;
   /** RFC 6749 section 2.3.1 client authentication presented at the token or revocation endpoint. */
   const presentedClient = (authorization: string | undefined, input: URLSearchParams) => {
@@ -132,14 +137,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       ? Buffer.from(authorization.slice(6), "base64").toString("utf8")
       : "";
     const separator = decoded.indexOf(":");
-    const username =
-      separator < 0
-        ? undefined
-        : decodeURIComponent(decoded.slice(0, separator).replace(/\+/g, " "));
-    const password =
-      separator < 0
-        ? undefined
-        : decodeURIComponent(decoded.slice(separator + 1).replace(/\+/g, " "));
+    const read = (value: string) =>
+      basicCredentials === "literal" ? value : decodeURIComponent(value.replace(/\+/g, " "));
+    const username = separator < 0 ? undefined : read(decoded.slice(0, separator));
+    const password = separator < 0 ? undefined : read(decoded.slice(separator + 1));
     const method: TokenAuth =
       authorization !== undefined
         ? "client_secret_basic"
@@ -592,6 +593,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly pathDiscovery?: typeof pathDiscovery;
       readonly scopes?: readonly string[];
       readonly authMethods?: readonly string[];
+      /** How the token endpoint reads HTTP Basic credentials. */
+      readonly basicCredentials?: typeof basicCredentials;
       readonly callbackIssuer?: string | null;
       readonly browserReturn?: string | null;
       /**
@@ -643,6 +646,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (input.pathDiscovery !== undefined) pathDiscovery = input.pathDiscovery;
         if (input.scopes !== undefined) scopes = [...input.scopes];
         if (input.authMethods !== undefined) authMethods = [...input.authMethods];
+        if (input.basicCredentials !== undefined) basicCredentials = input.basicCredentials;
         if (input.callbackIssuer !== undefined)
           callbackIssuer = input.callbackIssuer === null ? undefined : input.callbackIssuer;
         if (input.browserReturn !== undefined)
