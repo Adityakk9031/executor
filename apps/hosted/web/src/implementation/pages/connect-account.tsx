@@ -179,8 +179,12 @@ export function HostedAccountForm<A extends HostedOAuthSignIn>({
               }
               onAuthorized={(value) => {
                 refresh();
-                if (value.status === "completed") saved(value.account);
-                else onAuthorized(value);
+                if (value.status !== "completed") {
+                  onAuthorized(value);
+                  return "navigating";
+                }
+                saved(value.account);
+                return "done";
               }}
             />
           )}

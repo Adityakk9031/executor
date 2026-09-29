@@ -280,9 +280,32 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.getByRole("dialog").getByRole("alert").waitFor(),
         );
         yield* capture("Sign-in-start-failed");
+        // A page with a pending navigation cannot be inspected, so it reports the action itself.
+        const actionLabels: string[] = [];
+        yield* browser.use("Record the Connect action until the page leaves", (page) => {
+          page.on("console", (message) => {
+            if (message.text().startsWith("oauth-action:"))
+              actionLabels.push(message.text().slice("oauth-action:".length));
+          });
+          return page
+            .getByRole("dialog")
+            .getByRole("group", { name: "Connection options" })
+            .evaluate((group) => {
+              new MutationObserver(() =>
+                console.log(`oauth-action:${group.querySelector("button")?.textContent ?? ""}`),
+              ).observe(group, { childList: true, subtree: true, characterData: true });
+            });
+        });
+        const authorization = yield* holdQuery(["/authorize"], "continue");
         yield* click("Connect Sample service");
+        yield* authorization.requested;
+        yield* authorization.release;
         yield* heading("Connect Sample service");
         yield* ready("Allow access");
+        // Once sign-in starts, the action stays busy until the provider page replaces it.
+        const departing = actionLabels.indexOf("Preparing sign-in…");
+        expect(departing, "the action showed sign-in progress").toBeGreaterThanOrEqual(0);
+        expect(new Set(actionLabels.slice(departing))).toEqual(new Set(["Preparing sign-in…"]));
         yield* capture("Provider-consent");
         const completion = yield* holdQuery(completePattern, "continue", { method: "POST" });
         yield* issuer.configure({ tokenFails: true });

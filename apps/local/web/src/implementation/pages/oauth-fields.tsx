@@ -88,13 +88,15 @@ export function OAuthFields({
             refresh();
             if (value.status === "completed") {
               onSaved(value.account);
-              return;
+              return "done";
             }
             if (connection) Effect.runSync(openConnectionOAuth(value.authorizationUrl, connection));
             else if (value.connection !== undefined)
               Effect.runSync(
                 openOAuth(value.authorizationUrl, value.connection, account?.id, returnTo),
               );
+            else return "done";
+            return "navigating";
           }}
         />
       )}
