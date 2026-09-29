@@ -3,6 +3,7 @@ import { Effect, Redacted, Schema } from "effect";
 import { randomUUID } from "node:crypto";
 import { Api, body } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
+import { committedDocuments, recordAppOpening, screens } from "../support/app-open-timeline.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
@@ -97,12 +98,23 @@ layer(TestLive, { excludeTestServices: true })("Local app launch", (it) => {
         );
         if (ui === null) return yield* Effect.die(new Error("Missing app URL"));
         expect(new URL(ui).searchParams.get("profile")).toBe(personal.profile);
-        yield* browser.use("One account opens without a chooser", (page) =>
-          page.goto(new URL("/inbox?folder=unread#message", ui).href),
+        const { timeline } = yield* recordAppOpening(
+          Effect.gen(function* () {
+            yield* browser.use("One account opens without a chooser", (page) =>
+              page.goto(new URL("/inbox?folder=unread#message", ui).href),
+            );
+            yield* browser.use("Personal app data loads", (page) =>
+              page.locator("#identity").filter({ hasText: personal.account }).waitFor(),
+            );
+          }),
         );
-        yield* browser.use("Personal app data loads", (page) =>
-          page.locator("#identity").filter({ hasText: personal.account }).waitFor(),
-        );
+        // Sign-in is redirects only; no host-owned page renders before the app.
+        expect(screens(timeline)).not.toContain("Opening app…");
+        expect(
+          committedDocuments(timeline)
+            .map((url) => url.pathname)
+            .filter((path) => path.startsWith("/_executor/auth/")),
+        ).toEqual([]);
         const appOrigin = new URL(ui).origin;
         // Chromium maps *.localhost to loopback itself; Node relies on the OS resolver,
         // which does not on every platform. Local listens on 127.0.0.1.

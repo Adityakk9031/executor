@@ -29,7 +29,7 @@ import { appSessionCookie } from "../contracts/app-ui.ts";
 import type { ServerConfig } from "../contracts/config.ts";
 import type { LocalAuth } from "./auth.ts";
 import { appRequest } from "./app-auth.ts";
-import { AppReturnPath, appPrivateHeaders as privateHeaders, appSignInPage } from "apps/ui/auth";
+import { AppReturnPath, appPrivateHeaders as privateHeaders } from "apps/ui/auth";
 
 const failed = (reason: UiFailed["reason"] = "unavailable") => new UiFailed({ reason });
 const UiBuild = Schema.Struct({ id: DeploymentId, build: Deployment.fields.build });
@@ -41,6 +41,11 @@ export const appUi = (
   runtime: Runtime,
   config: ServerConfig,
   auth: LocalAuth,
+  beginSignIn: Effect.Effect<
+    HttpServerResponse.HttpServerResponse,
+    UiForbidden | UiFailed,
+    HttpServerRequest.HttpServerRequest
+  >,
 ) => {
   const native = runtime;
   const db = storage.orm("4.0.2");
@@ -255,8 +260,8 @@ export const appUi = (
         const navigation =
           request.headers["sec-fetch-mode"] === "navigate" ||
           request.headers.accept?.includes("text/html");
-        // This handler is registered only for the SPA, so APIs and retained assets never return a login document.
-        if (request.method === "GET" && navigation) return appSignInPage();
+        // This handler is registered only for the SPA, so APIs and retained assets never start sign-in.
+        if (request.method === "GET" && navigation) return yield* beginSignIn;
         return yield* error;
       }),
     ),

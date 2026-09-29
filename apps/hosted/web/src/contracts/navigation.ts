@@ -87,6 +87,13 @@ export function hostedPageTitle(
   return "Dashboard";
 }
 
+/**
+ * Sign-in finishes with a fresh document. Keep the current fragment, as an HTTP redirect without its
+ * own fragment would, so an app deep link's fragment survives signing in on the way.
+ */
+export const keepFragment = (url: string): string =>
+  url.includes("#") ? url : `${url}${window.location.hash}`;
+
 /** Return providers through sign-in completion without changing the encoded final destination. */
 export const signInCallback = (redirect: string): string =>
   `/login?redirect=${encodeURIComponent(redirect)}`;

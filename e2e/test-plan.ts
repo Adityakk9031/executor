@@ -2222,6 +2222,28 @@ export const scenarios = {
       local: na("This scenario uses hosted Better Auth and organization routes."),
     },
   },
+  appUiSignedOutOpen: {
+    fixtures: "actors",
+    file: "app-ui.spec.ts",
+    appOrigin: true,
+    title: "Opening an app while signed out records sign-in and every return step",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted Better Auth and organization routes."),
+    },
+  },
+  appUiDashboardOpen: {
+    fixtures: "actors",
+    file: "app-ui.spec.ts",
+    appOrigin: true,
+    title: "Open app from the dashboard records every sign-in step and a reload in the new tab",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted Better Auth and organization routes."),
+    },
+  },
   appReload: {
     fixtures: "actors",
     file: "app-reload.spec.ts",

@@ -349,7 +349,16 @@ export default Api.make(
       browserTelemetry.pipe(HttpRouter.provideRequest(auth.identity)),
       HttpRouter.add("GET", "/", homepage(auth.cookiePrefix, analytics.hero, cloudDashboard(null))),
       HttpRouter.add("GET", "/org/:organizationSlug", organizationRoot),
-      ...dashboardPageRoutes.map((route) => HttpRouter.add("GET", route, cloudDashboard(null))),
+      ...dashboardPageRoutes.map((route) =>
+        route === "/app-auth"
+          ? // Resolved on the server so opening an app never renders an intermediate page.
+            HttpRouter.add("GET", route, appUi.signIn(cloudDashboard(null))).pipe(
+              Layer.provide(requestServices(auth.appSessions).layer),
+              HttpRouter.provideRequest(executor),
+              HttpRouter.provideRequest(auth.identity),
+            )
+          : HttpRouter.add("GET", route, cloudDashboard(null)),
+      ),
       HttpRouter.add("*", "/api/webhooks/:appId/:subscriptionId", hostedWebhookCallback).pipe(
         HttpRouter.provideRequest(executor),
       ),

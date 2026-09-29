@@ -3,7 +3,6 @@ import type { LocalAppManagementApi } from "@executor-js/local-server/app-manage
 import type { LocalWebhookSetupApi } from "@executor-js/local-server/webhook-setup";
 import type { DashboardApi } from "@executor-js/local-server/contracts";
 import type { AccountConnectApi } from "@executor-js/local-server/account-connections";
-import type { AppAuthenticationApi } from "@executor-js/local-server/app-ui";
 import type { AccountId } from "@executor-js/sdk";
 import { Cause, Match, Option, type Schema } from "effect";
 import type { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
@@ -16,8 +15,7 @@ type Groups =
   | (typeof LocalAppManagementApi.groups)[keyof typeof LocalAppManagementApi.groups]
   | (typeof LocalWebhookSetupApi.groups)[keyof typeof LocalWebhookSetupApi.groups]
   | (typeof DashboardApi.groups)[keyof typeof DashboardApi.groups]
-  | (typeof AccountConnectApi.groups)[keyof typeof AccountConnectApi.groups]
-  | (typeof AppAuthenticationApi.groups)[keyof typeof AppAuthenticationApi.groups];
+  | (typeof AccountConnectApi.groups)[keyof typeof AccountConnectApi.groups];
 /** Derived from the public HTTP contracts; adding a failure requires a presentation below. */
 export type DashboardError =
   | HttpApiEndpoint.Errors<HttpApiGroup.Endpoints<Groups>>
@@ -286,13 +284,6 @@ const errorMessage = Match.type<DashboardError>().pipe(
       message(
         "Sign-in required",
         "Open Executor desktop, or run the CLI’s pair command to sign in.",
-      ),
-    UiUnauthorized: () => message("Session ended", "Reopen the app URL to sign in again."),
-    UiForbidden: () => message("App access denied", "This sign-in request cannot access the app."),
-    UiFailed: () =>
-      message(
-        "App could not open",
-        "Check the app’s deployment and account selection, then retry.",
       ),
   }),
 );

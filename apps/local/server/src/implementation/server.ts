@@ -57,9 +57,9 @@ import { localWebhookSetupHandlers } from "./webhook-setup.ts";
 import { accountConnectHandlers } from "./account-connections.ts";
 import { appUi } from "./app-ui.ts";
 import { appAuthentication, appRequest } from "./app-auth.ts";
-import { AppAuthenticationApi, appFromHost } from "../contracts/app-ui.ts";
+import { appFromHost } from "../contracts/app-ui.ts";
 import { AppUiApi } from "apps/ui/contracts";
-import { AppSignInApi, appSignInPage, appSignInScript } from "apps/ui/auth";
+import { appSignInCallbackPath } from "apps/ui/auth";
 import { DashboardApi, OAuthCallbackPath } from "../contracts/dashboard.ts";
 import { LocalAuthApi } from "../contracts/auth.ts";
 import { AccountConnectApi } from "../contracts/account-connections.ts";
@@ -222,8 +222,15 @@ export const localApi = (
           ),
         ),
       ).pipe(Layer.provide(access.layer));
-      const ui = appUi(executor, storage, toEffectRuntime(runtime, blobs), config, auth);
       const signIn = yield* appAuthentication(executor, auth, config, crypto);
+      const ui = appUi(
+        executor,
+        storage,
+        toEffectRuntime(runtime, blobs),
+        config,
+        auth,
+        signIn.begin,
+      );
       const privateResponses = HttpRouter.middleware((response) =>
         response.pipe(
           Effect.map((response) =>
@@ -247,15 +254,13 @@ export const localApi = (
       const notFound = HttpServerResponse.empty({ status: 404 });
       // App-host routes: typed APIs plus explicit browser, asset and SPA handlers.
       const appRoutes = Layer.mergeAll(
-        HttpApiBuilder.layer(AppSignInApi).pipe(Layer.provide(signIn.app)),
         HttpApiBuilder.layer(AppUiApi).pipe(
           Layer.provide(ui.api),
           Layer.provide(ui.authenticated.layer),
         ),
         HttpRouter.add("POST", "/_executor/api/telemetry/traces", ui.telemetry("traces")),
         HttpRouter.add("POST", "/_executor/api/telemetry/logs", ui.telemetry("logs")),
-        HttpRouter.add("GET", "/_executor/auth/callback", appSignInPage()),
-        HttpRouter.add("GET", "/_executor/auth/browser.js", appSignInScript()),
+        HttpRouter.add("GET", appSignInCallbackPath, signIn.callback),
         HttpRouter.add("GET", "/_executor/version", ui.versions),
         HttpRouter.add("GET", "/_executor/watch.js", ui.watch),
         HttpRouter.add("GET", "/_executor/assets/:deployment/*", ui.asset),
@@ -295,10 +300,6 @@ export const localApi = (
           browserTelemetry(config, "traces"),
         ),
         HttpRouter.add("POST", "/dashboard/api/telemetry/logs", browserTelemetry(config, "logs")),
-        HttpApiBuilder.layer(AppAuthenticationApi).pipe(
-          Layer.provide(signIn.dashboard),
-          Layer.provide(privateResponses.layer),
-        ),
         programmatic,
         HttpRouter.add("*", "/mcp", mcp.http),
         HttpRouter.add("*", "/api/auth/*", oauth.handler),
@@ -337,7 +338,7 @@ export const localApi = (
         HttpRouter.add("GET", "/apps", web.document),
         HttpRouter.add("GET", "/apps/add/custom", web.document),
         HttpRouter.add("GET", "/apps/:app", web.document),
-        HttpRouter.add("GET", "/app-auth", web.document),
+        HttpRouter.add("GET", "/app-auth", signIn.signIn(web.document)),
         HttpRouter.add("GET", "/apps/:app/setup", web.document),
         HttpRouter.add("GET", "/apps/:app/open", web.document),
         HttpRouter.add("GET", "/apps/:app/delete", web.document),

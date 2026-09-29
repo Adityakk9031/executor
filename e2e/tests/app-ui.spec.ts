@@ -7,7 +7,14 @@ import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
 import { openPrivateApp, waitForAppUrl } from "../support/app-pages.ts";
+import {
+  committedDocuments,
+  recordAppOpening,
+  screens,
+  type Entry,
+} from "../support/app-open-timeline.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
+import { password } from "../support/actors.ts";
 import { App } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 
@@ -67,6 +74,16 @@ const Completed = Schema.Struct({
   execution: Schema.Struct({ ok: Schema.Literal(true), value: Schema.Unknown }),
 });
 
+/** Sign-in is redirects only: no host-owned page renders and nothing says "Opening app…". */
+const expectNoSignInPages = (timeline: ReadonlyArray<Entry>) => {
+  expect(screens(timeline)).not.toContain("Opening app…");
+  expect(
+    committedDocuments(timeline)
+      .map((url) => url.pathname)
+      .filter((path) => path === "/app-auth" || path.startsWith("/_executor/auth/")),
+  ).toEqual([]);
+};
+
 const appFixture = Effect.gen(function* () {
   const api = yield* Api,
     actors = yield* Actors,
@@ -110,11 +127,8 @@ layer(HostedLive, { excludeTestServices: true })("Private app pages", (it) => {
         expect(Object.keys(apiDocument.paths)).toContain(
           "/api/organizations/{organization}/apps/{app}/ui",
         );
-        expect(Object.keys(apiDocument.paths)).toContain("/api/app-ui/authorize");
+        expect(Object.keys(apiDocument.paths)).not.toContain("/api/app-ui/authorize");
         expect(Object.keys(apiDocument.paths)).toContain("/api/viewer");
-        expect(apiDocument.paths["/api/app-ui/authorize"]?.post?.security).toEqual([
-          { browserSession: [] },
-        ]);
         const { app: management, profile } = yield* managementApp(actors.owner);
         expect(profile.accounts.service).toBeTypeOf("string");
         const tools = `tools.executor.profiles[${JSON.stringify(profile.id)}]`;
@@ -226,6 +240,121 @@ layer(HostedLive, { excludeTestServices: true })("Private app pages", (it) => {
         )(denied.structuredContent);
         expect(failed.execution.ok).toBe(false);
       }).pipe(Effect.provide(Layer.mergeAll(McpOAuth.layer, McpClient.layer))),
+    ),
+  );
+  it.effect(scenarios.appUiSignedOutOpen.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const { actors, browser, target, bookmark } = yield* appFixture;
+        const { timeline } = yield* recordAppOpening(
+          Effect.gen(function* () {
+            yield* browser.use("Open the app URL without an Executor session", (page) =>
+              page.goto(bookmark),
+            );
+            yield* browser.use("The app asks for the product sign-in", (page) =>
+              page
+                .getByRole("heading", {
+                  name: target.metadata.target === "cloud" ? "Sign in" : "Sign in to Executor",
+                  exact: true,
+                })
+                .waitFor(),
+            );
+            if (target.metadata.target === "self-host") {
+              yield* browser.use("Enter the owner's email", (page) =>
+                page.getByLabel("Email", { exact: true }).fill("owner@example.test"),
+              );
+              yield* browser.use("Enter the self-host password", (page) =>
+                page.getByLabel("Password", { exact: true }).fill(password),
+              );
+              yield* browser.use("Sign in", (page) =>
+                page.getByRole("button", { name: "Sign in", exact: true }).click(),
+              );
+            } else {
+              // Cloud fixture users cannot receive sign-in codes; the session arrives as a cookie
+              // and the sign-in page is reloaded to continue its return navigation.
+              // Keep the app's pending sign-in cookie; only the product session is added.
+              const cookies = yield* actors.owner.cookies;
+              yield* browser.use("Add the owner's product session", (page) =>
+                page.context().addCookies([...Redacted.value(cookies)]),
+              );
+              yield* browser.use("Continue from the sign-in page with a session", (page) =>
+                page.reload(),
+              );
+            }
+            yield* browser.use("Sign-in returns to the app and it renders", (page) =>
+              page.getByRole("status").filter({ hasText: "Ready" }).waitFor(),
+            );
+          }),
+        );
+        expect(
+          yield* browser.use("The bookmark survives sign-in", (page) =>
+            Promise.resolve(page.url()),
+          ),
+        ).toBe(bookmark);
+        expectNoSignInPages(timeline);
+      }),
+    ),
+  );
+  it.effect(scenarios.appUiDashboardOpen.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const { actors, browser, app, url } = yield* appFixture;
+        yield* browser.login(actors.owner);
+        yield* browser.use("Open the deployed app details", (page) =>
+          page.goto(`/org/${actors.organization.slug}/apps/${app.id}`),
+        );
+        yield* browser.use("The ready app link appears", (page) =>
+          page.getByRole("link", { name: "Open app", exact: true }).waitFor(),
+        );
+        const { result: opened, timeline } = yield* recordAppOpening(
+          browser.use("Open app opens a new tab that signs in and renders the app", (page) => {
+            const callbacks: string[] = [];
+            // Registered on the context so the new tab's first redirects are observed.
+            page.context().on("response", (response) => {
+              if (new URL(response.url()).pathname === "/_executor/auth/callback")
+                callbacks.push(response.url());
+            });
+            return Promise.all([
+              page.context().waitForEvent("page"),
+              page.getByRole("link", { name: "Open app", exact: true }).click(),
+            ]).then(([tab]) => {
+              return tab
+                .getByRole("status")
+                .filter({ hasText: "Ready" })
+                .waitFor()
+                .then(() => tab.reload())
+                .then(() => tab.getByRole("status").filter({ hasText: "Ready" }).waitFor())
+                .then(() => ({ url: tab.url(), callbacks }));
+            });
+          }),
+        );
+        expect(new URL(opened.url).origin).toBe(new URL(url).origin);
+        expectNoSignInPages(timeline);
+        expect(opened.callbacks).toHaveLength(1);
+        const callback = opened.callbacks[0] ?? "";
+        expect(
+          yield* browser.use("A used callback URL cannot sign in again", (page) =>
+            page
+              .context()
+              .request.get(callback, { maxRedirects: 0 })
+              .then((response) => response.status()),
+          ),
+        ).toBe(401);
+        expect(
+          yield* browser.use("A callback URL cannot sign in another browser", (page) =>
+            (
+              page.context().browser()?.newContext() ?? Promise.reject(new Error("No browser"))
+            ).then((other) =>
+              other.request
+                .get(callback, { maxRedirects: 0 })
+                .then((response) => response.status())
+                .finally(() => other.close()),
+            ),
+          ),
+        ).toBe(401);
+      }),
     ),
   );
   it.effect(scenarios.appUi.title, (context) =>
