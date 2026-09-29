@@ -8,7 +8,7 @@ import {
   DashboardOverview,
   DashboardTools,
 } from "@executor-js/local-server/contracts";
-import type { AppId, DeploymentId, ProfileId } from "@executor-js/sdk";
+import type { AppId, DeploymentId, Json, ProfileId, ToolName } from "@executor-js/sdk";
 import { Cause, Clock, Data, Effect, Option, Schedule, Schema, Stream } from "effect";
 import { HttpClientError } from "effect/unstable/http";
 import { AsyncResult, Atom, AtomHttpApi } from "effect/unstable/reactivity";
@@ -263,3 +263,21 @@ const toolDetails = Atom.family(({ tool, ...key }: ToolDetailKey) =>
 /** The live snapshot already carries schemas, so a selected tool reads from the same catalog. */
 export const toolDetailAtom = (key: ConstructorParameters<typeof ToolDetailKey>[0]) =>
   toolDetails(new ToolDetailKey(key));
+
+class CallKey extends Data.Class<{
+  readonly app: AppId;
+  readonly profile?: ProfileId | undefined;
+  readonly expectedProfileRevision?: number | undefined;
+  readonly deployment?: DeploymentId | undefined;
+  readonly tool: ToolName;
+}> {}
+const calls = Atom.family(({ app, ...target }: CallKey) =>
+  DashboardClient.runtime.fn((input: Json) =>
+    Effect.flatMap(DashboardClient, (client) =>
+      client.dashboard.callTool({ params: { app }, payload: { ...target, input } }),
+    ),
+  ),
+);
+/** Each tool call runs against the tab's exact profile revision and deployment. */
+export const callToolAtom = (key: ConstructorParameters<typeof CallKey>[0]) =>
+  calls(new CallKey(key));

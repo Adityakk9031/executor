@@ -677,6 +677,15 @@ export const scenarios = {
       cloud: na("Hosted uses its organization scenario."),
     },
   },
+  localToolRunner: {
+    file: "local-tool-runner.spec.ts",
+    title: "Local tools run from the Tools tab and show their result without bypassing approval",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted tool runs are covered by its organization scenarios."),
+      cloud: na("Hosted tool runs are covered by its organization scenarios."),
+    },
+  },
   appBrowser: {
     fixtures: "actors",
     file: "app-browser.spec.ts",

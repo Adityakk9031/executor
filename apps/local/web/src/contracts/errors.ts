@@ -190,6 +190,44 @@ const errorMessage = Match.type<DashboardError>().pipe(
         "Check the setup details and connected accounts, then try again.",
       ),
     RequestInvalid: () => message("Check the setup details", "Correct the fields and try again."),
+    ToolNotFound: () =>
+      message("Tool unavailable", "This tool is no longer in the app’s catalog. Choose another."),
+    InputInvalid: () =>
+      message(
+        "Check the input",
+        "The input does not match this tool’s schema. The tool did not run.",
+      ),
+    ToolCallFailed: () =>
+      message("The tool failed", "It may have already made changes. Check before trying again."),
+    ToolBlocked: () =>
+      message("Tool call blocked", "The tool’s approval policy blocked this call. It did not run."),
+    ToolApprovalRequired: () =>
+      message(
+        "Approval required",
+        "This call needs approval, which the dashboard cannot give yet. Run it from an MCP client.",
+      ),
+    ToolPolicyFailed: () =>
+      message(
+        "Approval policy failed",
+        "The tool’s approval policy could not be evaluated. The tool did not run.",
+      ),
+    ToolElicitationFailed: ({ reason }) =>
+      message(
+        "The tool needed more input",
+        `${Match.value(reason).pipe(
+          Match.when("transaction", () => "It requested input inside a database transaction."),
+          Match.when(
+            "unavailable",
+            () => "Run it from an MCP client that supports input requests.",
+          ),
+          Match.when("invalid-request", () => "It requested an invalid input form."),
+          Match.when("invalid-response", () => "The response did not match the requested form."),
+          Match.when("transport", () => "The input request could not be completed."),
+          Match.when("expired", () => "The input request expired."),
+          Match.when("forbidden", () => "Access changed while the tool was waiting."),
+          Match.exhaustive,
+        )} Earlier tool actions may have completed.`,
+      ),
     StorageError: () => message("Data could not load", "Check the local server, then retry."),
     CredentialsError: () =>
       message(

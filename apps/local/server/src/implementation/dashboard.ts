@@ -9,6 +9,7 @@ import {
   OwnerId,
   AppNameTaken,
   HttpUrl,
+  ToolApprovalRequired,
   type AppId,
   type ProfileId,
   type AccountId,
@@ -439,6 +440,22 @@ export const dashboard = (
         }),
       )
       .handle("completeOAuth", ({ payload }) => executor.accountConnections.completeOAuth(payload))
+      // Approval policy still applies: a call that needs review does not run from the dashboard.
+      .handle("callTool", ({ params, payload }) =>
+        executor.tools.call({ ...params, ...payload }).pipe(
+          Effect.flatMap((result) =>
+            result.status === "approval-required"
+              ? Effect.fail(
+                  new ToolApprovalRequired({
+                    app: result.invocation.app,
+                    deployment: result.invocation.deployment,
+                    tool: result.invocation.tool,
+                  }),
+                )
+              : Effect.succeed(result.value),
+          ),
+        ),
+      )
       .handle("tools", ({ params, query }) =>
         executor.tools.list({ ...params, ...query }).pipe(
           Effect.timeoutOrElse({

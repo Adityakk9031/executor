@@ -357,21 +357,15 @@ class CallKey extends Data.Class<{
   readonly organization: OrganizationReference;
   readonly app: AppId;
   readonly profile?: ProfileId | undefined;
+  readonly expectedProfileRevision?: number | undefined;
+  readonly deployment?: DeploymentId | undefined;
   readonly tool: ToolName;
 }> {}
-const calls = Atom.family((key: CallKey) =>
-  HostedClient.runtime.fn(
-    (input: {
-      input: Json;
-      deployment?: DeploymentId | undefined;
-      expectedProfileRevision?: number | undefined;
-    }) =>
-      Effect.flatMap(HostedClient, (client) =>
-        client.tools.call({
-          params: key,
-          payload: { ...input, tool: key.tool, profile: key.profile },
-        }),
-      ),
+const calls = Atom.family(({ organization, app, ...target }: CallKey) =>
+  HostedClient.runtime.fn((input: Json) =>
+    Effect.flatMap(HostedClient, (client) =>
+      client.tools.call({ params: { organization, app }, payload: { ...target, input } }),
+    ),
   ),
 );
 /** Each account and operation owns its invocation state. */
