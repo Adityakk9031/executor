@@ -137,6 +137,13 @@ export interface DeclarationCache {
   readonly outdated: (app: string, at: number) => boolean;
 }
 
+/**
+ * How long a read that missed this process's store waits for the durable copy before it also
+ * starts evaluating. A warm durable store answers well inside it, so a hit never evaluates; a slow
+ * one, such as a Durable Object waking up, delays a miss by at most this much.
+ */
+export const durableHeadStartMillis = 100;
+
 /** A result kept beyond this process: its JSON text and when the read that produced it began. */
 export interface DurableEntry {
   readonly at: number;

@@ -1,8 +1,9 @@
 /** Stale-while-revalidate reads of evaluated app declarations (skills, workflows, webhooks). */
-import { Clock, Deferred, Effect, Encoding, Option, Schema, type Crypto } from "effect";
+import { Clock, Deferred, Effect, Encoding, Fiber, Option, Schema, type Crypto } from "effect";
 import {
   declarationFreshness,
   declarationLimits,
+  durableHeadStartMillis,
   type BackgroundWork,
   type DeclarationCache,
   type DeclarationLimits,
@@ -221,85 +222,103 @@ export const makeDeclarations = (options: {
           entry?.kind === "json" && now - entry.at < declarationFreshness.maxStaleMillis
             ? entry
             : undefined;
+        const miss = Effect.annotateCurrentSpan("executor.declarations.cache", "miss").pipe(
+          Effect.andThen(load),
+        );
+        /** Serve a kept result by its age, the caller's `current` policy and access checks. */
+        const serve = (cached: KeptEntry & { readonly kind: "json" }) =>
+          Effect.gen(function* () {
+            const age = (yield* Clock.currentTimeMillis) - cached.at;
+            if (age >= declarationFreshness.maxStaleMillis) return yield* miss;
+            // A kept value this process cannot decode is replaced, never surfaced as a failure.
+            const decoded = yield* Schema.decodeEffect(JsonText)(cached.json).pipe(Effect.option);
+            if (Option.isNone(decoded)) {
+              yield* Effect.annotateCurrentSpan("executor.declarations.cache", "miss");
+              return yield* load;
+            }
+            const value = decoded.value;
+            if (policy.current !== undefined && !(yield* policy.current(value))) {
+              yield* Effect.annotateCurrentSpan("executor.declarations.cache", "outdated");
+              return yield* load;
+            }
+            const stale = age >= declarationFreshness.freshMillis;
+            const background = options.background;
+            if (stale && background === undefined) {
+              yield* Effect.annotateCurrentSpan("executor.declarations.cache", "expired");
+              return yield* load;
+            }
+            yield* authorize(state);
+            yield* Effect.annotateCurrentSpan({
+              "executor.declarations.cache": stale ? "stale" : "hit",
+              "executor.declarations.age_ms": age,
+            });
+            if (stale && background !== undefined)
+              // Registering and handing over the refresh happen together, so an interrupted request
+              // cannot leave a registration that no refresh will end.
+              yield* Effect.uninterruptible(
+                Effect.gen(function* () {
+                  if (options.cache.pending(id) !== undefined) return;
+                  const refresh: PendingLoad = {
+                    started: yield* Clock.currentTimeMillis,
+                    waiters: 0,
+                    overdue: false,
+                    unwatched: Deferred.makeUnsafe(),
+                    done: Deferred.makeUnsafe(),
+                  };
+                  options.cache.begin(id, refresh);
+                  const accepted = yield* background(
+                    load.pipe(
+                      Effect.timeout(declarationFreshness.refreshMillis),
+                      Effect.catchCause(() => Effect.logWarning("Declaration refresh failed")),
+                      Effect.asVoid,
+                      Effect.onExit(() =>
+                        Effect.suspend(() => {
+                          options.cache.end(id, refresh);
+                          return Deferred.succeed(refresh.done, undefined);
+                        }),
+                      ),
+                      Effect.withSpan("sdk.declarations.refresh"),
+                    ),
+                  );
+                  if (!accepted) options.cache.end(id, refresh);
+                }),
+              );
+            return value;
+          });
         const kept = current(yield* options.cache.get(id), yield* Clock.currentTimeMillis);
+        if (kept?.kind === "json") return yield* serve(kept);
+        if (options.durable === undefined) return yield* miss;
         // Another isolate's result, unless an invalidation seen here replaced it. It is kept here
         // too when it fits.
-        const recalled =
-          kept === undefined
-            ? yield* recall(state.app.id, id).pipe(
-                Effect.flatMap((found) =>
-                  Effect.gen(function* () {
-                    if (found === undefined || options.cache.outdated(state.app.id, found.at))
-                      return undefined;
-                    const entry: KeptEntry = { kind: "json", app: state.app.id, ...found };
-                    yield* options.cache.set(id, entry);
-                    return current(entry, yield* Clock.currentTimeMillis);
-                  }),
-                ),
+        const recalling = yield* Effect.forkChild(
+          recall(state.app.id, id).pipe(
+            Effect.flatMap((found) =>
+              Effect.gen(function* () {
+                if (found === undefined || options.cache.outdated(state.app.id, found.at))
+                  return undefined;
+                const entry = { kind: "json" as const, app: state.app.id, ...found };
+                yield* options.cache.set(id, entry);
+                return current(entry, yield* Clock.currentTimeMillis);
+              }),
+            ),
+          ),
+        );
+        const recalled = (found: KeptEntry | undefined) =>
+          found?.kind === "json"
+            ? Effect.annotateCurrentSpan("executor.declarations.source", "durable").pipe(
+                Effect.andThen(serve(found)),
               )
             : undefined;
-        const cached = kept ?? recalled;
-        if (recalled !== undefined)
-          yield* Effect.annotateCurrentSpan("executor.declarations.source", "durable");
-        const age = cached === undefined ? Infinity : (yield* Clock.currentTimeMillis) - cached.at;
-        if (cached === undefined || age >= declarationFreshness.maxStaleMillis) {
-          yield* Effect.annotateCurrentSpan("executor.declarations.cache", "miss");
-          return yield* load;
-        }
-        // A kept value this process cannot decode is replaced, never surfaced as a failure.
-        const decoded = yield* Schema.decodeEffect(JsonText)(cached.json).pipe(Effect.option);
-        if (Option.isNone(decoded)) {
-          yield* Effect.annotateCurrentSpan("executor.declarations.cache", "miss");
-          return yield* load;
-        }
-        const value = decoded.value;
-        if (policy.current !== undefined && !(yield* policy.current(value))) {
-          yield* Effect.annotateCurrentSpan("executor.declarations.cache", "outdated");
-          return yield* load;
-        }
-        const stale = age >= declarationFreshness.freshMillis;
-        const background = options.background;
-        if (stale && background === undefined) {
-          yield* Effect.annotateCurrentSpan("executor.declarations.cache", "expired");
-          return yield* load;
-        }
-        yield* authorize(state);
-        yield* Effect.annotateCurrentSpan({
-          "executor.declarations.cache": stale ? "stale" : "hit",
-          "executor.declarations.age_ms": age,
-        });
-        if (stale && background !== undefined)
-          // Registering and handing over the refresh happen together, so an interrupted request
-          // cannot leave a registration that no refresh will end.
-          yield* Effect.uninterruptible(
-            Effect.gen(function* () {
-              if (options.cache.pending(id) !== undefined) return;
-              const refresh: PendingLoad = {
-                started: yield* Clock.currentTimeMillis,
-                waiters: 0,
-                overdue: false,
-                unwatched: Deferred.makeUnsafe(),
-                done: Deferred.makeUnsafe(),
-              };
-              options.cache.begin(id, refresh);
-              const accepted = yield* background(
-                load.pipe(
-                  Effect.timeout(declarationFreshness.refreshMillis),
-                  Effect.catchCause(() => Effect.logWarning("Declaration refresh failed")),
-                  Effect.asVoid,
-                  Effect.onExit(() =>
-                    Effect.suspend(() => {
-                      options.cache.end(id, refresh);
-                      return Deferred.succeed(refresh.done, undefined);
-                    }),
-                  ),
-                  Effect.withSpan("sdk.declarations.refresh"),
-                ),
-              );
-              if (!accepted) options.cache.end(id, refresh);
-            }),
-          );
-        return value;
+        const early = yield* Fiber.join(recalling).pipe(
+          Effect.timeoutOption(durableHeadStartMillis),
+        );
+        if (Option.isSome(early)) return yield* recalled(early.value) ?? miss;
+        // A slow supervisor, often one waking up, would delay every miss: evaluate beside the
+        // read and answer with whichever settles first. A result the read finds still wins.
+        return yield* Effect.raceFirst(
+          miss,
+          Fiber.join(recalling).pipe(Effect.flatMap((found) => recalled(found) ?? Effect.never)),
+        );
       }).pipe(
         Effect.withSpan("sdk.declarations.read", {
           attributes: { "executor.declarations.command": command },
