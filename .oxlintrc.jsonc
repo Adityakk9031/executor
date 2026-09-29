@@ -16,12 +16,7 @@
     {
       // Exceptions kept here because a comment in these files changes the published apps
       // framework. openapi-source keeps an isolate-wide cache of content-addressed parts.
-      // browser-operations holds one id per browser document; server renders share it, and
-      // giving them none waits for the next apps release.
-      "files": [
-        "packages/apps/src/implementation/openapi-source.ts",
-        "packages/telemetry/src/browser-operations.ts",
-      ],
+      "files": ["packages/apps/src/implementation/openapi-source.ts"],
       "rules": { "executor/no-module-level-mutable-state": "off" },
     },
     {
