@@ -133,11 +133,11 @@ export default defineApp({ accounts: { service } }, async () => ({  }));
         yield* browser.use("Start connecting another account", (page) =>
           page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
-        const connectionDraft = "Keep this unsaved connection name";
-        yield* browser.use("Name the connection without saving", (page) =>
+        const connectionDraft = "keep-this-unsaved-connection-token";
+        yield* browser.use("Enter a credential without saving", (page) =>
           page
             .getByRole("dialog", { name: "Connect Draft test service", exact: true })
-            .getByRole("textbox", { name: "Account name", exact: true })
+            .getByLabel("Token", { exact: true })
             .fill(connectionDraft),
         );
         expect(
@@ -158,10 +158,10 @@ export default defineApp({ accounts: { service } }, async () => ({  }));
           ),
         ).toBe(1);
         expect(
-          yield* browser.use("The unsaved connection name remains available", (page) =>
+          yield* browser.use("The unsaved credential remains available", (page) =>
             page
               .getByRole("dialog", { name: "Connect Draft test service", exact: true })
-              .getByRole("textbox", { name: "Account name", exact: true })
+              .getByLabel("Token", { exact: true })
               .inputValue(),
           ),
         ).toBe(connectionDraft);

@@ -47,7 +47,10 @@ export const openOAuth = (
     else window.sessionStorage.removeItem(returnKey);
     window.location.assign(authorizationUrl);
   });
-/** Return to setup with a saved account candidate; setup still validates provider compatibility. */
+/**
+ * Return to setup with a saved account candidate; setup still validates provider compatibility.
+ * A reconnect returns to its account and keeps its name.
+ */
 export const oauthDestination = (account: AccountId) =>
   Effect.sync(() => {
     const saved = window.sessionStorage.getItem(returnKey);
@@ -56,15 +59,18 @@ export const oauthDestination = (account: AccountId) =>
       saved === null
         ? Option.none()
         : Schema.decodeUnknownOption(Schema.fromJsonString(OAuthReturn))(saved);
-    return Option.isSome(target) && "app" in target.value
-      ? ({
-          to: "/apps/$appId/setup",
-          params: { appId: target.value.app },
-          search: {
-            selected: account,
-            slot: target.value.slot,
-            ...(target.value.profile === undefined ? {} : { profile: target.value.profile }),
-          },
-        } as const)
-      : ({ to: "/accounts/$accountId", params: { accountId: account } } as const);
+    const reconnect = Option.isSome(target) && "account" in target.value;
+    const destination =
+      Option.isSome(target) && "app" in target.value
+        ? ({
+            to: "/apps/$appId/setup",
+            params: { appId: target.value.app },
+            search: {
+              selected: account,
+              slot: target.value.slot,
+              ...(target.value.profile === undefined ? {} : { profile: target.value.profile }),
+            },
+          } as const)
+        : ({ to: "/accounts/$accountId", params: { accountId: account } } as const);
+    return { destination, reconnect };
   });

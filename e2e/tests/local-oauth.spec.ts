@@ -8,6 +8,7 @@ import { Target } from "../support/platform.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { clientCredentialsIssuer, machineClient } from "../support/client-credentials-issuer.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
+import { nameAccountDialog } from "../support/name-account.ts";
 
 const Published = Schema.Struct({
   app: Schema.Struct({
@@ -141,7 +142,6 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             .then((counts) => {
               expect(counts).toEqual([0, 0]);
             })
-            .then(() => page.getByLabel("Account name", { exact: true }).fill("Local reports"))
             .then(() => page.getByLabel("Client ID", { exact: true }).fill(machineClient.clientId))
             .then(() =>
               page.getByLabel("Client secret", { exact: true }).fill(machineClient.clientSecret),
@@ -165,7 +165,13 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           ),
         );
         saved = completed.state.account.id;
-        expect(completed.state.account.label).toBe("Local reports");
+        expect(completed.state.account.label).toBe("Default");
+        // The limited connection page sits outside the dashboard, so nothing asks for a name.
+        expect(
+          yield* browser.use("The connection link does not ask for a name", (page) =>
+            nameAccountDialog(page).count(),
+          ),
+        ).toBe(0);
         expect((yield* issuer.metrics).generation).toBe(1);
         yield* browser.checkpoint("Local client-credentials connection completed");
         const discovery = yield* oauthSetupIssuer;
@@ -223,8 +229,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
                 .getByRole("alert")
                 .getByText("OAuth settings not found", { exact: true })
                 .waitFor(),
-            )
-            .then(() => page.getByLabel("Account name", { exact: true }).fill("Local draft")),
+            ),
         );
         const explanation = yield* browser.use("Local uses the shared cause and recovery", (page) =>
           page.getByRole("alert", { name: "OAuth settings not found", exact: true }).innerText(),
@@ -248,13 +253,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         expect(fixPrompt).toContain("OAuthSetupFailed");
         expect(fixPrompt).toContain("provider definition");
         expect(fixPrompt).toContain("Verify the failed operation");
-        expect(fixPrompt).not.toContain("Local draft");
         expect(fixPrompt).not.toContain(discoveryLink.url);
-        expect(
-          yield* browser.use("Local error details preserve the draft", (page) =>
-            page.getByLabel("Account name", { exact: true }).inputValue(),
-          ),
-        ).toBe("Local draft");
       }),
     ),
   );

@@ -71,23 +71,20 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         );
         yield* browser.omitNetworkTrace;
         const returned = yield* browser.use("Sign in through a service that adds #_=_", (page) =>
-          page
-            .goto(link.url)
-            .then(() => page.getByLabel("Account name", { exact: true }).fill("Fragment account"))
-            .then(() => {
-              // Capture the committed callback URL before the page replaces it.
-              let callback: string | undefined;
-              return Promise.all([
-                page.waitForEvent("framenavigated", (frame) => {
-                  if (frame !== page.mainFrame()) return false;
-                  const url = frame.url();
-                  if (new URL(url).pathname !== "/api/oauth/callback") return false;
-                  callback = url;
-                  return true;
-                }),
-                page.getByRole("button", { name: "Connect Fragment service", exact: true }).click(),
-              ]).then(() => callback ?? "");
-            }),
+          page.goto(link.url).then(() => {
+            // Capture the committed callback URL before the page replaces it.
+            let callback: string | undefined;
+            return Promise.all([
+              page.waitForEvent("framenavigated", (frame) => {
+                if (frame !== page.mainFrame()) return false;
+                const url = frame.url();
+                if (new URL(url).pathname !== "/api/oauth/callback") return false;
+                callback = url;
+                return true;
+              }),
+              page.getByRole("button", { name: "Connect Fragment service", exact: true }).click(),
+            ]).then(() => callback ?? "");
+          }),
         );
         // The browser really arrived with the service's fragment.
         expect(new URL(returned).hash).toBe("#_=_");
@@ -110,7 +107,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           yield* api.request(agent, "GET", `/v1/account-connections/${link.connection}`),
         );
         account = completed.state.account.id;
-        expect(completed.state.account.label).toBe("Fragment account");
+        expect(completed.state.account.label).toBe("Default");
         expect((yield* facebook.metrics).tokenRequests).toEqual([
           { resource: `${facebook.origin}/mcp`, issued: true },
         ]);

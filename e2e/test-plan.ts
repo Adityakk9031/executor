@@ -1640,6 +1640,37 @@ export const scenarios = {
       local: na("This journey checks hosted account connection and app query invalidation."),
     },
   },
+  pastedCredentialsNamedAfterSaving: {
+    fixtures: "actors",
+    file: "account-naming.spec.ts",
+    title:
+      "Pasted credentials are named in a dialog over the app after saving, default to the first free name, and keep the name when replaced",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local naming is covered by the local account naming scenarios."),
+    },
+  },
+  localPastedCredentialsNamedAfterSaving: {
+    file: "local-account-naming.spec.ts",
+    title:
+      "Local pasted credentials are named in a dialog after Add account and from the app's accounts, and keep the name when replaced",
+    targets: {
+      local: scheduled,
+      "self-host": na("Paired local dashboard; hosted naming has its own scenario."),
+      cloud: na("Paired local dashboard; hosted naming has its own scenario."),
+    },
+  },
+  localOAuthNamedAfterReturn: {
+    file: "local-account-naming.spec.ts",
+    title:
+      "A new local OAuth account is named in a dialog after sign-in returns, and a reconnect keeps its name",
+    targets: {
+      local: scheduled,
+      "self-host": na("Paired local dashboard; hosted OAuth naming has its own scenario."),
+      cloud: na("Paired local dashboard; hosted OAuth naming has its own scenario."),
+    },
+  },
   localAppLaunch: {
     file: "local-app-launch.spec.ts",
     title: "local app launch chooses accounts per tab and opens no-provider apps directly",
@@ -1709,6 +1740,17 @@ export const scenarios = {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback OAuth issuer for controlled capture."),
       local: na("Hosted account dialogs and callback recovery."),
+    },
+  },
+  oauthNameAfterConnect: {
+    fixtures: "actors",
+    file: "oauth-connect-storyboard.spec.ts",
+    title:
+      "A new OAuth account returns to its app to be named, keeps its default name when closed, and a reconnect keeps its name",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Hosted redirect returns to the app; local OAuth naming has its own scenario."),
     },
   },
   oauthSetupErrors: {
@@ -1922,7 +1964,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "app-account-picker.spec.ts",
     title:
-      "App account sign-in names the account before OAuth and returns cancellation to the same app",
+      "App account sign-in starts OAuth without asking for a name and returns cancellation to the same app",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,

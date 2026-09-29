@@ -9,6 +9,7 @@ import { Browser } from "../support/browser.ts";
 import { waitForAppUrl } from "../support/app-pages.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
+import { nameConnectedAccount } from "../support/name-account.ts";
 import {
   advanceToReconciliation,
   holdQuery,
@@ -208,14 +209,14 @@ layer(HostedLive, { excludeTestServices: true })("Profile picker", (it) => {
               .getByRole("button", { name: "Connect new account", exact: true })
               .click(),
           );
-          yield* browser.use("Name this saved account", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).fill(label),
-          );
           yield* browser.use("Enter the synthetic credential", (page) =>
             page.getByLabel("Token", { exact: true }).fill("synthetic-inbox-key"),
           );
           yield* browser.use("Complete account connection", (page) =>
             page.getByRole("button", { name: "Connect account", exact: true }).click(),
+          );
+          yield* browser.use("Name this saved account", (page) =>
+            nameConnectedAccount(page, label),
           );
           yield* browser.use("Open the newly connected account's tools", (page) =>
             page.getByRole("link", { name: "Tools", exact: true }).click(),

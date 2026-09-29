@@ -11,7 +11,6 @@ import {
 } from "../../contracts/credentials.ts";
 import { CredentialFields } from "../components/credential-fields.tsx";
 import { Button } from "../components/button.tsx";
-import { Input } from "../components/input.tsx";
 import {
   Select,
   SelectContent,
@@ -20,7 +19,7 @@ import {
   SelectValue,
 } from "../components/select.tsx";
 
-/** One credential form for creation, reconnection and agent handoff; the host owns saving and navigation. */
+/** One credential form for creation, reconnection and agent handoff; the host owns saving, naming and navigation. */
 export function AccountForm<A, E>({
   provider,
   account,
@@ -33,11 +32,10 @@ export function AccountForm<A, E>({
   Failure,
   onPendingChange,
   initialMethod,
-  initialLabel = "Default",
   disabled = false,
 }: {
   readonly provider: Provider;
-  readonly account?: Pick<Account, "method" | "label">;
+  readonly account?: Pick<Account, "method">;
   readonly header?: ReactNode;
   readonly actions?: ReactNode;
   readonly submitLabel: string;
@@ -48,13 +46,11 @@ export function AccountForm<A, E>({
   readonly disabled?: boolean;
   readonly onPendingChange?: (pending: boolean) => void;
   readonly initialMethod?: string | undefined;
-  readonly initialLabel?: string | undefined;
 }) {
   const methods = Object.entries(provider.definition.auth).sort(
     ([, a], [, b]) => Number(b.type === "oauth2") - Number(a.type === "oauth2"),
   );
   const [method, setMethod] = useState(account?.method ?? initialMethod ?? methods[0]?.[0] ?? "");
-  const [label, setLabel] = useState(account?.label ?? initialLabel);
   const [values, setValues] = useState<Readonly<Record<string, string>>>({});
   const [submitting, setPending] = useState(false);
   const pending = submitting || disabled;
@@ -71,12 +67,11 @@ export function AccountForm<A, E>({
       className="setup-form flex max-w-145 flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!fields || pending || !label.trim() || !credentialsComplete(fields, values)) return;
+        if (!fields || pending || !credentialsComplete(fields, values)) return;
         updatePending(true);
         setError(undefined);
         void submit({
           method,
-          label: label.trim(),
           fields: Redacted.make(credentialValues(fields, values)),
         }).then((exit) => {
           updatePending(false);
@@ -131,25 +126,13 @@ export function AccountForm<A, E>({
             onChange={setValues}
             pending={pending}
           />
-          {!account && (
-            <label className="flex flex-col gap-2 text-[13px] font-medium">
-              Account name
-              <Input
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
-                required
-                maxLength={120}
-                disabled={pending}
-              />
-            </label>
-          )}
           {error && <Failure cause={error} />}
           <div className="form-actions flex items-center gap-5 pt-1 text-[13px] [&_a]:text-muted-foreground max-[740px]:[&_>_a]:min-h-11 max-[740px]:[&_>_a]:inline-flex max-[740px]:[&_>_a]:items-center max-[740px]:flex-wrap max-[740px]:gap-[12px_20px] max-[480px]:[&_>_button]:basis-full">
             <Button
               type="submit"
               className="w-full"
               loading={pending}
-              disabled={!label.trim() || !credentialsComplete(fields, values)}
+              disabled={!credentialsComplete(fields, values)}
             >
               {submitLabel}
             </Button>

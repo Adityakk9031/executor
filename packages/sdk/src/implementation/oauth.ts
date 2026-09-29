@@ -65,7 +65,7 @@ import {
   makeOAuthProtocol,
   type OAuthProtocolFailed,
 } from "./oauth-protocol.ts";
-import { ownedAccount } from "./accounts.ts";
+import { defaultLabel, ownedAccount } from "./accounts.ts";
 import type { OAuthCallbackField, OAuthFailureDetail } from "./oauth-diagnostics.ts";
 
 const decode = <A>(schema: Schema.Decoder<A>, value: unknown) =>
@@ -588,7 +588,6 @@ export const makeOAuth = (
           owner: input.owner,
           provider: input.provider,
           method: input.method,
-          label: input.label,
           createdAt: new Date(completedAt),
         };
         const grant = yield* decode(OAuthGrant, {
@@ -610,7 +609,10 @@ export const makeOAuth = (
               existing === undefined
                 ? undefined
                 : yield* ownedAccount(tx, { account: account.id, owner: input.owner });
-            const saved = stored ?? account;
+            const saved = stored ?? {
+              ...account,
+              label: input.label ?? (yield* defaultLabel(tx, input.owner, input.provider)),
+            };
             if (stored === undefined) {
               yield* query(() => tx.create("accounts", { ...saved, encryptedCredentials }));
               if (lifecycle) yield* lifecycle.accountCreated(saved);
@@ -717,12 +719,15 @@ export const makeOAuth = (
           provider: connection.provider,
           method: input.method,
         });
+      const { label: requested, ...rest } = input;
+      const label = existing?.label ?? requested;
       return yield* beginOAuth(
         {
-          ...input,
+          ...rest,
           owner: connection.owner,
           provider: connection.provider,
-          label: existing?.label ?? input.label,
+          // Attempts are encrypted as JSON, so an unnamed account omits the key.
+          ...(label === undefined ? {} : { label }),
         },
         existing,
       );
@@ -870,16 +875,8 @@ export const makeOAuth = (
         ...(tokens.refresh_token === undefined ? {} : { refreshToken: tokens.refresh_token }),
         ...expiry(completedAt, tokens.expires_in),
       });
-      const account = yield* decode(Account, {
-        id: attempt.account,
-        provider: attempt.provider,
-        owner: attempt.owner,
-        label: attempt.label,
-        method: attempt.method,
-        createdAt: new Date(completedAt),
-      });
-      const encryptedCredentials = yield* encrypt(account.id, fields);
-      const encryptedGrant = yield* encrypt(account.id, grant);
+      const encryptedCredentials = yield* encrypt(attempt.account, fields);
+      const encryptedGrant = yield* encrypt(attempt.account, grant);
       const savedClient =
         attempt.clientKey === undefined
           ? undefined
@@ -899,7 +896,16 @@ export const makeOAuth = (
           if (current.oauthAttempt !== id) return yield* failed("sign_in_replaced");
           // Read again after the remote exchange: deletion must win, and a concurrent rename must survive.
           const target = attempt.reconnect ? yield* reconnectTarget(tx, attempt) : undefined;
-          const saved = target ?? account;
+          const saved =
+            target ??
+            (yield* decode(Account, {
+              id: attempt.account,
+              provider: attempt.provider,
+              owner: attempt.owner,
+              label: attempt.label ?? (yield* defaultLabel(tx, attempt.owner, attempt.provider)),
+              method: attempt.method,
+              createdAt: new Date(completedAt),
+            }));
           if (target !== undefined) {
             // A reconnect may sign in as another upstream identity: start a new generation.
             yield* query(() =>

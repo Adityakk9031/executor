@@ -10,6 +10,7 @@ import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { Evidence } from "../support/evidence.ts";
 import { oauthRecoveryIssuer, recoveryClients } from "../support/oauth-recovery-issuer.ts";
+import { nameConnectedAccount } from "../support/name-account.ts";
 import { scenarios } from "../test-plan.ts";
 
 const App = Schema.Struct({
@@ -133,7 +134,6 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page
             .getByLabel("Client secret", { exact: true })
             .waitFor({ state: "visible" })
-            .then(() => page.getByLabel("Account name", { exact: true }).fill("Recovery account"))
             .then(() =>
               page.getByLabel("Client ID", { exact: true }).fill(recoveryClients.original.clientId),
             )
@@ -162,16 +162,10 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* browser.use("Retry reopens the unsaved client fields", (page) =>
           page.getByRole("link", { name: "Try again", exact: true }).click(),
         );
-        expect(
-          yield* browser.use("Keep the account name across the retry", (page) =>
-            page.getByLabel("Account name", { exact: true }).inputValue(),
-          ),
-        ).toBe("Recovery account");
         yield* browser.use("Enter a rejected secret", (page) =>
           page
             .getByLabel("Client secret", { exact: true })
             .waitFor({ state: "visible" })
-            .then(() => page.getByLabel("Account name", { exact: true }).fill("Recovery account"))
             .then(() =>
               page.getByLabel("Client ID", { exact: true }).fill(recoveryClients.original.clientId),
             )
@@ -192,11 +186,6 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* browser.use("Reopen the client fields", (page) =>
           page.getByRole("link", { name: "Update client details", exact: true }).click(),
         );
-        expect(
-          yield* browser.use("Keep the account name across the callback", (page) =>
-            page.getByLabel("Account name", { exact: true }).inputValue(),
-          ),
-        ).toBe("Recovery account");
         // Pasted secrets often carry surrounding whitespace; the issuer compares secrets exactly.
         yield* browser.use("Correct the client and finish connecting", (page) =>
           page
@@ -210,6 +199,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             .then(() =>
               page.getByRole("button", { name: "Connect Recoverable OAuth", exact: true }).click(),
             )
+            .then(() => nameConnectedAccount(page, "Recovery account"))
             .then(() =>
               page
                 .getByRole("radio", { name: "Recovery account", exact: true, checked: true })

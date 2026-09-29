@@ -109,8 +109,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             page
               .getByRole("button", { name: "Connect new account", exact: true })
               .click()
-              .then(() => page.getByRole("alert").getByText(title, { exact: true }).waitFor())
-              .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports")),
+              .then(() => page.getByRole("alert").getByText(title, { exact: true }).waitFor()),
           );
           expect(
             yield* browser.use("Retry follows the cause", (page) =>
@@ -156,7 +155,6 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             expect(copied).not.toContain("PRIVATE_UPSTREAM_DIAGNOSTIC");
             expect(copied).not.toContain("with its author");
             expect(copied).not.toContain(issuer.origin);
-            expect(copied).not.toContain("Work reports");
             yield* browser.use("Review the full error card on mobile", (page) =>
               page.setViewportSize({ width: 390, height: 844 }),
             );
@@ -185,10 +183,10 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             );
           }
           expect(
-            yield* browser.use("Reading the error preserves the form", (page) =>
-              page.getByLabel("Account name", { exact: true }).inputValue(),
+            yield* browser.use("Reading the error keeps the connection form open", (page) =>
+              page.getByRole("dialog").getByRole("alert", { name: title, exact: true }).count(),
             ),
-          ).toBe("Work reports");
+          ).toBe(1);
         }
         yield* issuer.configure({ discovery: "available" });
         yield* browser.use("Retry recovers through the real setup endpoint", (page) =>
@@ -200,11 +198,6 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             )
             .then(() => page.getByRole("alert").waitFor({ state: "hidden" })),
         );
-        expect(
-          yield* browser.use("Retry preserves the name", (page) =>
-            page.getByLabel("Account name", { exact: true }).inputValue(),
-          ),
-        ).toBe("Work reports");
         expect((yield* issuer.metrics).registrations).toBe(0);
         yield* browser.checkpoint("OAuth-setup-recovered");
         // Registration failures are split by who can act. Services that refuse Executor
@@ -255,7 +248,6 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             page
               .getByRole("button", { name: "Connect new account", exact: true })
               .click()
-              .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports"))
               .then(() =>
                 page.getByRole("button", { name: "Connect Sample service", exact: true }).click(),
               )

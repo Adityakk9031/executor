@@ -833,7 +833,8 @@ export const OAuthAttempt = Schema.Struct({
   owner: OwnerId,
   provider: ProviderId,
   method: Schema.NonEmptyString,
-  label: Schema.String,
+  /** Absent when the account is named after sign-in. */
+  label: Schema.optionalKey(Schema.String),
   reconnect: Schema.optional(Schema.Boolean),
   redirectUri: HttpUrl,
   state: Schema.NonEmptyString,

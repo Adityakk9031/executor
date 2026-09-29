@@ -8,6 +8,7 @@ import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { saveAndDeploy, Workspace } from "../support/app-authoring.ts";
 import { App, Resource } from "../support/contracts.ts";
+import { nameConnectedAccount } from "../support/name-account.ts";
 import { holdQuery, refreshVisiblePage } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
 
@@ -272,13 +273,10 @@ export default defineApp({ accounts: { primary: service, mailboxes: service.many
             Promise.resolve(page.getByRole("dialog", { name: "Connect Account fixture" })),
           );
           expect(
-            yield* browser.use("New accounts can be named in the first dialog", () =>
-              dialog.getByLabel("Account name", { exact: true }).inputValue(),
+            yield* browser.use("New accounts are named after they connect, not before", () =>
+              dialog.getByLabel("Account name", { exact: true }).count(),
             ),
-          ).toBe("Default");
-          yield* browser.use("Name the new mailbox", () =>
-            dialog.getByLabel("Account name", { exact: true }).fill("Third account"),
-          );
+          ).toBe(0);
           yield* browser.use("Enter the synthetic token", () =>
             dialog.getByLabel("Token", { exact: true }).fill("synthetic-token"),
           );
@@ -287,6 +285,9 @@ export default defineApp({ accounts: { primary: service, mailboxes: service.many
           );
           yield* browser.use("The dialog closes after connecting", () =>
             dialog.waitFor({ state: "hidden" }),
+          );
+          yield* browser.use("Name the new mailbox", (page) =>
+            nameConnectedAccount(page, "Third account"),
           );
         });
         const connected = yield* bindings;
@@ -425,17 +426,19 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
             page.getByRole("button", { name: "Connect new account", exact: true }).click(),
           );
         });
-        yield* browser.use("The account name is available before OAuth", (page) =>
-          page
-            .getByRole("dialog")
-            .getByRole("textbox", { name: "Account name", exact: true })
-            .waitFor({ state: "visible" }),
-        );
         yield* browser.use("Wait for setup status to resolve", (page) =>
           page
             .getByRole("status", { name: "Preparing connection", exact: true })
             .waitFor({ state: "hidden" }),
         );
+        expect(
+          yield* browser.use("OAuth does not ask for an account name before sign-in", (page) =>
+            page
+              .getByRole("dialog")
+              .getByRole("textbox", { name: "Account name", exact: true })
+              .count(),
+          ),
+        ).toBe(0);
         expect(
           yield* browser.use("Required client fields are present before submission", (page) =>
             page.getByRole("textbox", { name: "Client ID", exact: true }).count(),
@@ -469,11 +472,6 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
             page.evaluate(() => location.pathname + location.search),
           ),
         ).toBe(`${appUrl}?view=accounts`);
-        yield* browser.use("Name the account before authorization", (page) =>
-          page
-            .getByRole("textbox", { name: "Account name", exact: true })
-            .fill("Work browser account"),
-        );
         const cachedSetup = yield* body(
           Schema.Struct({ accountSetup: Schema.Struct({ redirectUri: Schema.String }) }),
           yield* api.request(actors.owner, "GET", `${prefix}/inventory`),
@@ -504,25 +502,31 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
             return route.fulfill({ status: 302, headers: { location: callback.href } });
           }),
         );
-        const attempted = yield* browser.use("Enter submits the name and client together", (page) =>
+        const attempted = yield* browser.use("Connect submits the client without a name", (page) =>
           Promise.all([
             page.waitForResponse(
               (response) =>
                 new URL(response.url()).pathname.endsWith("/oauth/start") &&
                 response.request().method() === "POST",
             ),
-            page.getByRole("textbox", { name: "Account name", exact: true }).press("Enter"),
+            page
+              .getByRole("dialog")
+              .getByRole("button", { name: "Connect Browser fixture", exact: true })
+              .click(),
           ]).then(([response]) => ({
             status: response.status(),
             input: response.request().postDataJSON(),
           })),
         );
         expect(attempted.status).toBe(200);
-        expect(
-          (yield* Schema.decodeUnknownEffect(Schema.Struct({ label: Schema.String }))(
-            attempted.input,
-          )).label,
-        ).toBe("Work browser account");
+        const submitted = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            method: Schema.String,
+            client: Schema.Struct({ clientId: Schema.String }),
+          }),
+        )(attempted.input);
+        expect(submitted.client.clientId).toBe("synthetic-browser-client");
+        expect(Object.keys(submitted).sort()).toEqual(["client", "method"]);
         yield* browser.use("Cancellation has a useful recovery action", (page) =>
           page
             .getByRole("heading", { name: "Connection cancelled", exact: true })
@@ -567,11 +571,6 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
             .getByRole("textbox", { name: "Client ID", exact: true })
             .fill("synthetic-browser-client"),
         );
-        yield* browser.use("Keep a draft while the app changes", (page) =>
-          page
-            .getByRole("textbox", { name: "Account name", exact: true })
-            .fill("Draft before provider change"),
-        );
         const appPath = `${prefix}/apps/${app.id}`;
         const workspace = yield* body(
           Workspace,
@@ -586,7 +585,10 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
         expect(changed.status).toBe(200);
         const attemptsBeforeChange = starts;
         yield* browser.use("Submit the stale draft", (page) =>
-          page.getByRole("textbox", { name: "Account name", exact: true }).press("Enter"),
+          page
+            .getByRole("dialog")
+            .getByRole("button", { name: "Connect Browser fixture", exact: true })
+            .click(),
         );
         yield* browser.use("A changed provider cannot receive the stale form", (page) => {
           const form = page.getByRole("dialog");
@@ -605,9 +607,9 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
         expect(starts).toBe(attemptsBeforeChange);
         expect(
           yield* browser.use("The rejected draft remains available", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
+            page.getByRole("textbox", { name: "Client ID", exact: true }).inputValue(),
           ),
-        ).toBe("Draft before provider change");
+        ).toBe("synthetic-browser-client");
         yield* browser.checkpoint("Cached form rejected after provider changed");
       }),
     ),

@@ -130,9 +130,18 @@ export default defineApp({accounts: {service}}, async () => ({queries: {}}));`,
             return advanced
               .focus()
               .then(() => advanced.press("Space"))
-              .then(() => dialog.getByLabel("Account name", { exact: true }).inputValue())
-              .then((label) => {
-                expect(label).toBe("Default");
+              .then(() =>
+                page
+                  .getByRole("region", { name: "Required permissions", exact: true })
+                  .waitFor({ state: "hidden" }),
+              )
+              .then(() =>
+                dialog
+                  .getByRole("button", { name: "Connect Permissions fixture", exact: true })
+                  .isVisible(),
+              )
+              .then((open) => {
+                expect(open).toBe(true);
               });
           });
         }

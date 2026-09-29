@@ -8,6 +8,7 @@ import { Browser } from "../support/browser.ts";
 import { Target } from "../support/platform.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
+import { nameConnectedAccount } from "../support/name-account.ts";
 import { Profile } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
 
@@ -218,18 +219,14 @@ layer(TestLive, { excludeTestServices: true })("Local profile picker", (it) => {
                 .getByRole("button", { name: "Connect new account", exact: true })
                 .click(),
             );
-            yield* browser.use(`Name ${label}`, (page) =>
-              page
-                .getByRole("dialog", { name: "Connect Mail", exact: true })
-                .getByRole("textbox", { name: "Account name", exact: true })
-                .fill(label),
-            );
             yield* browser.use(`Enter the credential for ${label}`, (page) =>
               page.getByLabel("Token", { exact: true }).fill("synthetic"),
             );
             yield* browser.use(`Save ${label}`, (page) =>
               page.getByRole("button", { name: "Add account", exact: true }).click(),
             );
+            // A new account is named once saved, in the dialog that replaces the connection form.
+            yield* browser.use(`Name ${label}`, (page) => nameConnectedAccount(page, label));
             yield* browser.use(`The connection dialog closes for ${label}`, (page) =>
               page.getByRole("dialog").waitFor({ state: "hidden" }),
             );

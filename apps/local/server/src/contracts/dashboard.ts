@@ -505,7 +505,7 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
         payload: Schema.Struct({
           provider: ProviderId,
           method: AuthMethodName,
-          label: Schema.NonEmptyString,
+          label: Schema.optional(Schema.NonEmptyString),
           fields: AccountFieldsInput,
         }),
         success: Account,
@@ -606,7 +606,7 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
         payload: Schema.Struct({
           provider: ProviderId,
           method: AuthMethodName,
-          label: Schema.NonEmptyString,
+          label: Schema.optional(Schema.NonEmptyString),
           client: Schema.optional(OAuthClientInput),
         }),
         success: ConnectionSignIn,

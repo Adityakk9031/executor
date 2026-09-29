@@ -54,7 +54,8 @@ export const AccountInputs = {
     owner: OwnerId,
     provider: ProviderId,
     method: AuthMethodName,
-    label: Schema.String,
+    /** Without a label, the account is named when created and can be renamed once connected. */
+    label: Schema.optional(Schema.String),
     fields: AccountFieldsInput,
   }),
   get: Schema.Struct({ account: AccountId, owner: Schema.optional(OwnerId) }),

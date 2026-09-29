@@ -9,6 +9,7 @@ import type { OrganizationReference } from "@executor-js/hosted-server/organizat
 import { Data, Effect, Option } from "effect";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { acknowledge, upsert, invalidate } from "@executor-js/ui/contracts/mutations";
+import type { AccountToName } from "@executor-js/ui/dashboard/name-account";
 import { HostedClient } from "./api.ts";
 import { inventoryAtom } from "./organization.ts";
 import { connectionAtom, toolsAtom } from "./apps.ts";
@@ -36,6 +37,13 @@ const renameAccount = Atom.family((key: AccountKey) =>
     ),
   ),
 );
+/**
+ * A new account waiting to be named. The organization layout shows the prompt, so page refreshes
+ * after saving, and the OAuth return navigation, cannot dismiss it.
+ */
+export const accountToNameAtom = Atom.make<
+  (AccountToName & { readonly organization: OrganizationReference }) | undefined
+>(undefined).pipe(Atom.keepAlive);
 /** A different account cannot supersede this account's rename request. */
 export const renameAccountAtom = (key: {
   organization: OrganizationReference;

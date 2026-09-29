@@ -111,11 +111,11 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
         );
         yield* check.requested;
-        yield* browser.use("Open the name form before setup resolves", (page) =>
+        yield* browser.use("Open the connection form before setup resolves", (page) =>
           page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
-        yield* browser.use("A draft remains editable during the setup check", (page) =>
-          page.getByRole("textbox", { name: "Account name", exact: true }).fill("Preserved name"),
+        yield* browser.use("The setup check shows its pending action", (page) =>
+          page.getByRole("status", { name: "Preparing connection", exact: true }).waitFor(),
         );
         expect(
           yield* browser.use("Unknown setup cannot start sign-in", (page) =>
@@ -160,11 +160,6 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           ),
         ).toBe(true);
         expect(
-          yield* browser.use("Retry preserves the typed name", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
-          ),
-        ).toBe("Preserved name");
-        expect(
           yield* browser.use("Automatic setup has no manual-client option", (page) =>
             page.getByRole("button", { name: "Use your own OAuth client", exact: true }).count(),
           ),
@@ -178,7 +173,8 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         );
         yield* browser.use("The reopened form is ready", (page) =>
           page
-            .getByRole("textbox", { name: "Account name", exact: true })
+            .getByRole("dialog")
+            .getByRole("button", { name: "Connect Setup fixture", exact: true })
             .waitFor({ state: "visible" }),
         );
         expect((yield* issuer.metrics).discoveries).toBe(cached.discoveries);

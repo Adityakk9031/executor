@@ -164,7 +164,7 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
       params: connection,
       payload: Schema.Struct({
         method: Schema.NonEmptyString,
-        label: Schema.NonEmptyString,
+        label: Schema.optional(Schema.NonEmptyString),
         fields: AccountFieldsInput,
       }),
       success: Account,
@@ -176,7 +176,7 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
       params: connection,
       payload: Schema.Struct({
         method: Schema.NonEmptyString,
-        label: Schema.NonEmptyString,
+        label: Schema.optional(Schema.NonEmptyString),
         client: Schema.optional(OAuthClientInput),
       }),
       success: HostedOAuthStartResult,

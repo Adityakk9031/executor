@@ -69,7 +69,6 @@ export function OAuthFields<A, E>({
   manualClient = false,
   setup,
   setupAction,
-  initialLabel = "Default",
   disabled = false,
 }: {
   readonly providerName: string;
@@ -86,9 +85,7 @@ export function OAuthFields<A, E>({
   readonly setup: OAuthClientSetup | "unresolved";
   /** Setup progress covers the Connect action and collapsed Advanced options. */
   readonly setupAction?: ReactNode;
-  readonly initialLabel?: string | undefined;
 }) {
-  const [label, setLabel] = useState(account?.label ?? initialLabel);
   const [customClient, setManual] = useState(manualClient);
   const manual = customClient || (setup !== "unresolved" && setup.mode === "client-required");
   const machine = setup !== "unresolved" && setup.grant === "client_credentials";
@@ -105,7 +102,6 @@ export function OAuthFields<A, E>({
     setupAction !== undefined ||
     setup === "unresolved" ||
     pending ||
-    !label.trim() ||
     (manual && (!clientId.trim() || (needsSecret && !clientSecret.trim())));
   const connect = () => {
     if (blocked) return;
@@ -120,7 +116,7 @@ export function OAuthFields<A, E>({
             : {}),
         }
       : undefined;
-    const operation = start({ label: label.trim(), ...(client ? { client } : {}) });
+    const operation = start(client ? { client } : {});
     void operation.then((exit) => {
       setPending(false);
       onPendingChange?.(false);
@@ -175,24 +171,6 @@ export function OAuthFields<A, E>({
             </div>
           )}
         </>
-      )}
-      {account === undefined && (
-        <label className="flex flex-col gap-2 text-[13px] font-medium">
-          Account name
-          <Input
-            autoFocus
-            value={label}
-            onChange={(event) => setLabel(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                connect();
-              }
-            }}
-            disabled={pending || disabled}
-            maxLength={120}
-          />
-        </label>
       )}
       {manual && (
         <>

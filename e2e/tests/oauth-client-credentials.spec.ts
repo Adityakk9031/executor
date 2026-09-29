@@ -10,6 +10,11 @@ import { clientCredentialsIssuer, machineClient } from "../support/client-creden
 import { scenarios } from "../test-plan.ts";
 import { Browser } from "../support/browser.ts";
 import { managementApp } from "../support/management-app.ts";
+import {
+  accountNameField,
+  accountNamePrompt,
+  nameConnectedAccount,
+} from "../support/name-account.ts";
 
 const Completed = Schema.Struct({
   status: Schema.Literal("completed"),
@@ -75,7 +80,10 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             .then((counts) => {
               expect(counts).toEqual([0, 0, 1]);
             })
-            .then(() => dialog.getByLabel("Account name", { exact: true }).fill("Team reports"))
+            .then(() => dialog.getByLabel("Account name", { exact: true }).count())
+            .then((nameFields) => {
+              expect(nameFields).toBe(0);
+            })
             .then(() =>
               dialog.getByLabel("Client ID", { exact: true }).fill(machineClient.clientId),
             )
@@ -122,18 +130,9 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           return dialog
             .getByRole("alert")
             .waitFor({ state: "visible" })
-            .then(() =>
-              Promise.all([
-                dialog.getByLabel("Account name", { exact: true }).inputValue(),
-                dialog
-                  .getByLabel("Client secret", { exact: true })
-                  .inputValue()
-                  .then((value) => value === machineClient.clientSecret),
-              ]),
-            )
-            .then(([name, secretRetained]) => {
-              expect(name).toBe("Team reports");
-              expect(secretRetained).toBe(true);
+            .then(() => dialog.getByLabel("Client secret", { exact: true }).inputValue())
+            .then((secret) => {
+              expect(secret === machineClient.clientSecret).toBe(true);
             });
         });
         yield* browser.use("Retry the same connection", (page) =>
@@ -142,15 +141,27 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             .getByRole("button", { name: "Connect Reporting", exact: true })
             .click(),
         );
-        yield* browser.use("Immediate completion updates the app", (page) =>
+        // Immediate completion closes the connection dialog and asks for a name over the app.
+        const prompt = yield* browser.use("Immediate completion asks to name the account", (page) =>
           page
-            .getByRole("dialog")
+            .getByRole("dialog", { name: "Connect Reporting", exact: true })
             .waitFor({ state: "hidden" })
+            .then(() => accountNamePrompt(page))
             .then(() =>
-              page
-                .getByRole("radio", { name: "Team reports", exact: true, checked: true })
-                .waitFor({ state: "visible" }),
-            )
+              accountNameField(page)
+                .inputValue()
+                .then((name) => ({ name, url: new URL(page.url()) })),
+            ),
+        );
+        expect(prompt.name).toBe("Default");
+        expect(prompt.url.pathname).toBe(`/org/${actors.organization.slug}/apps/${app.id}`);
+        expect(prompt.url.searchParams.has("rename")).toBe(false);
+        yield* browser.checkpoint("Machine account asks for a name");
+        yield* browser.use("Keep the default name", (page) => nameConnectedAccount(page));
+        yield* browser.use("The app shows the account without navigation", (page) =>
+          page
+            .getByRole("radio", { name: "Default", exact: true, checked: true })
+            .waitFor({ state: "visible" })
             .then(() => {
               expect(page.url()).toContain(`/apps/${app.id}`);
             }),
@@ -367,6 +378,57 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
           expect(after.accounts.map((account) => account.id).sort()).toEqual(
             before.accounts.map((account) => account.id).sort(),
           );
+          // Unnamed machine accounts take the owner's next free default name for the provider.
+          const unnamed = [];
+          for (const expected of ["Default", "Default 2"]) {
+            const next = yield* body(
+              Resource,
+              yield* api.request(actors.owner, "POST", `${prefix}/apps/${app.id}/connections`, {
+                requirement: "service",
+                profile: profile.id,
+                ...(authMethod === "client_secret_post"
+                  ? { destination: { kind: "shared", audience: { kind: "everyone" } } }
+                  : {}),
+              }),
+            );
+            const named = yield* body(
+              Completed,
+              yield* api.request(
+                actors.owner,
+                "POST",
+                `${prefix}/connections/${next.id}/oauth/start`,
+                { method: "machine", client: machineClient },
+              ),
+            );
+            yield* Effect.addFinalizer(() =>
+              api
+                .request(actors.owner, "DELETE", `${prefix}/accounts/${named.account.id}`)
+                .pipe(Effect.orDie),
+            );
+            expect(named.account.label).toBe(expected);
+            unnamed.push(named.account);
+          }
+          const [firstDefault] = unnamed;
+          if (firstDefault === undefined) return yield* Effect.die("Missing default account");
+          const unnamedReconnect = yield* body(
+            Resource,
+            yield* api.request(
+              actors.owner,
+              "POST",
+              `${prefix}/accounts/${firstDefault.id}/connections`,
+            ),
+          );
+          expect(
+            (yield* body(
+              Completed,
+              yield* api.request(
+                actors.owner,
+                "POST",
+                `${prefix}/connections/${unnamedReconnect.id}/oauth/start`,
+                { method: "machine" },
+              ),
+            )).account,
+          ).toEqual(firstDefault);
         }
       }),
     ),

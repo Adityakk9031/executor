@@ -16,9 +16,9 @@ There are two kinds of credential, and the provider decides which it accepts:
 ## From the hosted dashboard
 
 Choose **Connect new account** at the end of a provider's list on the app's
-**Accounts** tab. Set **Account name** in the compact dialog, then choose **Connect** to
-start browser sign-in. If the provider needs credentials, enter them in the same
-dialog. The connection dialog contains the sign-in methods supported by the provider.
+**Accounts** tab, then choose **Connect** to start browser sign-in. If the provider
+needs credentials, enter them in the same dialog. The connection dialog contains the
+sign-in methods supported by the provider.
 
 The dialog uses the provider fields already loaded with the app. Opening it does
 not create a connection or fetch the fields again. A connection is created when
@@ -42,12 +42,14 @@ If saved OAuth client details are wrong, open **Advanced** below the Connect but
 choose **Change** next to OAuth client, and enter the replacement. Executor saves manual client details
 only after a successful sign-in. A failed replacement keeps the previous client
 and account. If browser sign-in rejects the client, **Update client details**
-opens the form again with the account name retained.
+opens the form again.
 
-The account name is optional during setup. New accounts use `Default`, then
-`Default 2`, and so on when that name is already in use for the provider. Use
-**Account name** in the form to choose a name such as “Work” or “Personal.” You can also rename
-an account later from its detail page.
+You name an account after it connects. Executor names each new account
+`Default`, then `Default 2`, and so on when that name is already in use for the
+provider. Once the account is saved, or browser sign-in returns, a **Name this
+account** dialog offers to rename it to something such as “Work” or “Personal.”
+Closing it keeps the default. Reconnecting keeps the existing name. You can also
+rename an account later from its detail page.
 
 Completing a connection saves the account and selects it for this app. There is
 no separate selection to save. Browser sign-in returns to the app's Accounts tab;

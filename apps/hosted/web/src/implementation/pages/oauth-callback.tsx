@@ -15,6 +15,7 @@ import { Button } from "@executor-js/ui/components/button";
 import { CopyButton } from "@executor-js/ui/dashboard/code";
 import { ConnectionStatusPage } from "../components/connection-status.tsx";
 import { appError, completeOAuthAtom, PendingOAuth } from "../../contracts/apps.ts";
+import { accountToNameAtom } from "../../contracts/accounts.ts";
 
 /** The SDK decides recovery for every completion reason; `setup` means the connection itself ended. */
 type Recovery = Exclude<OAuthCompletionRecovery, "cancelled"> | "setup";
@@ -57,7 +58,7 @@ export function OAuthCallbackPage() {
     }
     const callback = new URL(pending.value.redirectUri);
     callback.search = callbackSearch;
-    const { organization, organizationSlug, connection, app, profile } = pending.value;
+    const { organization, organizationSlug, connection, app, profile, reconnect } = pending.value;
     void (async () => {
       const mutation = completeOAuthAtom({ organization, connection });
       registry.set(mutation, { callbackUrl: Redacted.make(callback.href), app });
@@ -102,6 +103,8 @@ export function OAuthCallbackPage() {
         return;
       }
       sessionStorage.removeItem("executor:hosted:oauth");
+      // Reconnects keep their name; a new account is named on the page that follows.
+      if (!reconnect) registry.set(accountToNameAtom, { organization, account: result.value.id });
       if (app !== null) {
         await navigate({
           to: "/org/$organizationSlug/apps/$appId",
@@ -118,7 +121,6 @@ export function OAuthCallbackPage() {
   return (
     <ConnectionStatusPage
       status={state.status}
-      label={Option.isSome(pending) ? pending.value.label : undefined}
       message={
         state.status !== "connecting"
           ? state.message

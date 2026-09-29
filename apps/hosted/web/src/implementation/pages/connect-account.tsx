@@ -13,6 +13,7 @@ import { Button } from "@executor-js/ui/components/button";
 import { OAuthFields, OAuthSetup } from "@executor-js/ui/dashboard/oauth-fields";
 import { HostedFailure } from "../components/dashboard-bindings.tsx";
 import { AccountForm } from "@executor-js/ui/dashboard/account-form";
+import { accountToNameAtom } from "../../contracts/accounts.ts";
 import {
   oauthSetupAtom,
   startOAuthAtom,
@@ -32,14 +33,12 @@ export function ConnectionFields({
   connection,
   onSaved,
   initialMethod,
-  initialLabel,
   manualClient,
   onPendingChange,
 }: {
   readonly connection: HostedAccountConnection;
   readonly onSaved: (account: Account) => void;
   readonly initialMethod?: string | undefined;
-  readonly initialLabel?: string | undefined;
   readonly manualClient?: boolean | undefined;
   readonly onPendingChange?: (pending: boolean) => void;
 }) {
@@ -74,7 +73,6 @@ export function ConnectionFields({
       {...(connection.reconnectAccount ? { account: connection.reconnectAccount } : {})}
       redirectUri={connection.redirectUri}
       initialMethod={initialMethod}
-      initialLabel={initialLabel}
       manualClient={manualClient}
       submit={submit}
       start={startOAuth}
@@ -89,7 +87,7 @@ export function ConnectionFields({
             app: connection.target?.app ?? null,
             profile: connection.target?.profile,
             redirectUri: value.redirectUri,
-            label: value.label,
+            ...(connection.reconnectAccount ? { reconnect: true } : {}),
             manualClient: value.manualClient,
           },
           value.authorizationUrl,
@@ -105,7 +103,6 @@ export function HostedAccountForm<A extends HostedOAuthSignIn>({
   account,
   redirectUri,
   initialMethod,
-  initialLabel,
   manualClient,
   submit,
   start,
@@ -117,7 +114,6 @@ export function HostedAccountForm<A extends HostedOAuthSignIn>({
   readonly account?: Account;
   readonly redirectUri: string;
   readonly initialMethod?: string | undefined;
-  readonly initialLabel?: string | undefined;
   readonly manualClient?: boolean | undefined;
   readonly submit: (input: AccountSubmission) => Promise<Exit.Exit<Account, HostedError>>;
   readonly start: (
@@ -126,22 +122,26 @@ export function HostedAccountForm<A extends HostedOAuthSignIn>({
     Exit.Exit<A | Extract<HostedOAuthStartResult, { status: "completed" }>, HostedError>
   >;
   readonly onSaved: (account: Account) => void;
-  readonly onAuthorized: (
-    value: A & { readonly label: string; readonly manualClient: boolean },
-  ) => void;
+  readonly onAuthorized: (value: A & { readonly manualClient: boolean }) => void;
   readonly onPendingChange?: (pending: boolean) => void;
 }) {
   const { organization } = useOrganizationRoute();
+  const requestName = useAtomSet(accountToNameAtom);
+  // Reconnects keep their name; a new account is named once saved.
+  const saved = (value: Account) => {
+    if (!account)
+      requestName({ organization, account: value.id, saved: { account: value, provider } });
+    onSaved(value);
+  };
   return (
     <AccountForm
       provider={provider}
       {...(account ? { account } : {})}
       initialMethod={initialMethod}
-      initialLabel={initialLabel}
       Failure={HostedFailure}
       submitLabel={account ? "Save credentials" : "Connect account"}
       submit={submit}
-      onSaved={onSaved}
+      onSaved={saved}
       {...(onPendingChange ? { onPendingChange } : {})}
       oauth={({ method, disabled, onPendingChange }) => (
         <OAuthSetup query={oauthSetupAtom({ organization, provider: provider.id, method })}>
@@ -153,7 +153,6 @@ export function HostedAccountForm<A extends HostedOAuthSignIn>({
               setupAction={action}
               disabled={disabled}
               manualClient={manualClient}
-              initialLabel={initialLabel}
               {...(account ? { account } : {})}
               redirectUri={redirectUri}
               onPendingChange={onPendingChange}
@@ -174,14 +173,13 @@ export function HostedAccountForm<A extends HostedOAuthSignIn>({
                 start({ method, ...input }).then((exit) =>
                   Exit.map(exit, (value) => ({
                     ...value,
-                    label: input.label,
                     manualClient: input.client !== undefined,
                   })),
                 )
               }
               onAuthorized={(value) => {
                 refresh();
-                if (value.status === "completed") onSaved(value.account);
+                if (value.status === "completed") saved(value.account);
                 else onAuthorized(value);
               }}
             />

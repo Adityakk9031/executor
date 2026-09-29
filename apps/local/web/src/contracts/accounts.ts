@@ -4,6 +4,7 @@ import { DashboardAccountDetail } from "@executor-js/local-server/contracts";
 import { Effect, Option } from "effect";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { acknowledge, acknowledgedQuery, invalidate } from "@executor-js/ui/contracts/mutations";
+import type { AccountToName } from "@executor-js/ui/dashboard/name-account";
 import { DashboardClient, liveQueryAtom, overviewAtom, toolsAtom } from "./api.ts";
 
 export const accountAtom = Atom.family((account: AccountId) =>
@@ -15,6 +16,13 @@ export const accountAtom = Atom.family((account: AccountId) =>
       client.dashboard.liveAccount({ params: { account } }),
     ),
   }).pipe(acknowledgedQuery),
+);
+/**
+ * A new account waiting to be named. The dashboard layout shows the prompt, so page refreshes
+ * after saving, and the OAuth return navigation, cannot dismiss it.
+ */
+export const accountToNameAtom = Atom.make<AccountToName | undefined>(undefined).pipe(
+  Atom.keepAlive,
 );
 /** Each account owns its pending rename; metadata is confirmed before the editor resets. */
 export const renameAccountAtom = Atom.family((account: AccountId) =>

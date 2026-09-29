@@ -8,6 +8,7 @@ import { Actors } from "../support/actors.ts";
 import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
+import { nameConnectedAccount } from "../support/name-account.ts";
 import { scenarios } from "../test-plan.ts";
 
 const Access = Schema.Struct({ revision: Schema.String });
@@ -159,15 +160,13 @@ layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
               page.goto(`/org/${actors.organization.slug}/connections/${connection.id}`),
             );
           }
-          yield* browser.use("Name the account", (page) =>
-            page.getByLabel("Account name", { exact: true }).fill(label),
-          );
           yield* browser.use("Enter a synthetic token", (page) =>
             page.getByLabel("Token", { exact: true }).fill("synthetic"),
           );
           yield* browser.use("Authenticate the new account", (page) =>
             page.getByRole("button", { name: "Connect account", exact: true }).click(),
           );
+          yield* browser.use("Name the account", (page) => nameConnectedAccount(page, label));
           yield* browser.use("Wait for account setup to finish", (page) =>
             page.getByRole("dialog").waitFor({ state: "hidden" }),
           );

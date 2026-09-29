@@ -94,8 +94,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
                 .getByRole("region", { name: "Sample service", exact: true })
                 .getByRole("button", { name: "Connect new account", exact: true })
                 .click(),
-            )
-            .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports")),
+            ),
         );
         yield* emulatorRequest(issuer, "/_emulate/faults", {
           match: { method: "POST", pathPattern: "/register" },

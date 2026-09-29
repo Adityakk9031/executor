@@ -225,7 +225,6 @@ type ConnectionDialog = {
   readonly provider: Provider;
   readonly redirectUri: string;
   readonly method: string;
-  readonly label: string;
 };
 
 /** Keep one provider snapshot and draft from the first dialog through submission. */
@@ -254,21 +253,11 @@ function AppConnectionDialogContent({
   readonly onPendingChange: (pending: boolean) => void;
   readonly onSaved: () => void;
 }) {
-  const [form] = useState<ConnectionDialog>(() => {
-    const labels = new Set(
-      accounts
-        .filter((account) => account.provider === requirement.provider)
-        .map((account) => account.label),
-    );
-    let label = "Default";
-    for (let number = 2; labels.has(label); number++) label = `Default ${number}`;
-    return {
-      method,
-      label,
-      provider: { id: requirement.provider, definition: requirement.definition },
-      redirectUri,
-    };
-  });
+  const [form] = useState<ConnectionDialog>(() => ({
+    method,
+    provider: { id: requirement.provider, definition: requirement.definition },
+    redirectUri,
+  }));
   const selected = selection[slot];
   const currentAccount =
     typeof selected === "string" ? accounts.find((account) => account.id === selected) : undefined;
@@ -338,7 +327,6 @@ function AppConnectionFields({
       provider={form.provider}
       redirectUri={form.redirectUri}
       initialMethod={form.method}
-      initialLabel={form.label}
       submit={(input) =>
         submit(input).then((exit) =>
           Exit.map(exit, (saved) => {
@@ -366,7 +354,6 @@ function AppConnectionFields({
             connection: value.connection,
             profile: value.profile,
             redirectUri: value.redirectUri,
-            label: value.label,
             manualClient: value.manualClient,
           },
           value.authorizationUrl,

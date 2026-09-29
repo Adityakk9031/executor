@@ -77,12 +77,12 @@ export function OAuthFields({
             if (required) refresh();
             return required;
           }}
-          start={({ label, ...client }: OAuthSubmission) =>
+          start={(client: OAuthSubmission) =>
             connection
-              ? startConnection({ payload: { ...connection, method, label, ...client } })
+              ? startConnection({ payload: { ...connection, method, ...client } })
               : account
                 ? reconnect({ params: { account: account.id }, payload: client })
-                : start({ payload: { provider: provider.id, method, label, ...client } })
+                : start({ payload: { provider: provider.id, method, ...client } })
           }
           onAuthorized={(value) => {
             refresh();
