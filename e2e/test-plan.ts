@@ -826,6 +826,27 @@ export const scenarios = {
       local: na("Local runs the same step at its own startup; see the local scenario."),
     },
   },
+  cloudCronJobsPlaced: {
+    fixtures: "actors",
+    file: "cloud-database-placement.spec.ts",
+    title: "Cloud cron triggers run their jobs in the API Worker's placed fetch handler",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host runs its background jobs in its own server process."),
+      local: na("Local runs its background jobs in its own server process."),
+    },
+  },
+  cloudMcpObjectConnections: {
+    fixtures: "actors",
+    file: "cloud-database-placement.spec.ts",
+    title:
+      "Cloud MCP session objects hold their database connections across calls and close them when idle",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host MCP sessions run in its server process with its own pool."),
+      local: na("Local MCP sessions use the local database."),
+    },
+  },
   cloudAppFrameworkPin: {
     fixtures: "actors",
     file: "app-framework-pin.spec.ts",

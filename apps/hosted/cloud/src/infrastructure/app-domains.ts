@@ -46,7 +46,8 @@ const staleAfter = 15 * 60_000;
 /**
  * Team creation and renames wake provisioning through the durable provisioning outbox, and visitors
  * wake it on a missing record. The coordinator's own alarm runs a full pass every five minutes,
- * which also removes deleted teams; the cron heartbeat only restores that schedule if it was lost.
+ * which also removes deleted teams; the five-minute background job's heartbeat only restores that
+ * schedule if it was lost.
  */
 export const cloudAppDomains = Effect.gen(function* () {
   const coordinator = yield* AppDomainCoordinator.from(AppDomainController);
@@ -58,9 +59,6 @@ export const cloudAppDomains = Effect.gen(function* () {
   const heartbeat = Effect.suspend(() => coordinator.getByName("domains").heartbeat()).pipe(
     Effect.provide(RuntimeContext.phantom),
     Effect.withSpan("app_domains.heartbeat.rpc"),
-  );
-  yield* Cloudflare.Workers.cron("*/5 * * * *", () =>
-    heartbeat.pipe(Effect.catchCause(() => Effect.logError("App domain heartbeat failed"))),
   );
   const wake = Effect.suspend(() => coordinator.getByName("domains").wake()).pipe(
     Effect.provide(RuntimeContext.phantom),
@@ -97,5 +95,11 @@ export const cloudAppDomains = Effect.gen(function* () {
       yield* coordinator.getByName("domains")[operation]();
       return HttpServerResponse.empty({ status: 204 });
     }).pipe(Effect.catchCause(() => Effect.succeed(HttpServerResponse.empty({ status: 503 }))));
-  return { status, control };
+  return {
+    status,
+    control,
+    heartbeat: heartbeat.pipe(
+      Effect.catchCause(() => Effect.logError("App domain heartbeat failed")),
+    ),
+  };
 });

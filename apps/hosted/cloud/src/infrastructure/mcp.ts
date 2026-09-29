@@ -18,11 +18,12 @@ import { HttpServer, HttpServerRequest } from "effect/unstable/http";
 import type { cloudExecutor } from "./executor.ts";
 import { forwardMcpRequest } from "../implementation/mcp-forward.ts";
 import { observeMcpStream } from "../implementation/mcp-stream-observability.ts";
+import { cloudObjectDatabase, ObjectDatabase } from "./object-database.ts";
 
 /**
  * The API Worker's executor and MCP identity. Session objects run in the API Worker's
  * isolates, so they use the services it already built instead of building their own
- * auth and executor for every object. Both bind database work to the calling invocation.
+ * auth and executor for every object. Both use the session object's held database connections.
  */
 export interface McpSessionHost {
   readonly executor: Effect.Success<ReturnType<typeof cloudExecutor>>;
@@ -32,8 +33,11 @@ export interface McpSessionHost {
 const makeMcpSessions = Effect.fn(function* ({ executor, identity }: McpSessionHost) {
   const reportErrors = yield* cloudSentry;
   const analytics = yield* cloudAnalytics;
+  const objectDatabase = yield* cloudObjectDatabase;
   return Effect.gen(function* () {
     const state = yield* Cloudflare.DurableObjectState;
+    // Every request and MCP operation of this session shares the object's connections.
+    const database = yield* objectDatabase(`mcp ${state.id.toString()}`);
     // Opaque object identity is stable across activations; the random activation
     // identifies a fresh in-memory MCP registry without recording session tokens.
     const activation = yield* Effect.sync(() => crypto.randomUUID());
@@ -74,6 +78,7 @@ const makeMcpSessions = Effect.fn(function* ({ executor, identity }: McpSessionH
         }),
         analytics.wrap,
         reportErrors,
+        Effect.provideService(ObjectDatabase, database),
       ),
     };
   });

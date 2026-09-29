@@ -16,6 +16,7 @@ import { defaultScheduleWorkerOptions } from "@executor-js/sdk/scheduling";
 import { cloudExecutor } from "./executor.ts";
 import { appDataSupervisors } from "./app-data.ts";
 import { cloudAuthDatabase } from "./auth-database.ts";
+import { cloudObjectDatabase, ObjectDatabase } from "./object-database.ts";
 
 const makeScheduleCoordinator = Effect.gen(function* () {
   const analytics = yield* cloudAnalytics;
@@ -29,16 +30,19 @@ const makeScheduleCoordinator = Effect.gen(function* () {
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.Int.check(Schema.isGreaterThan(0)))),
     Effect.orDie,
   );
+  const objectDatabase = yield* cloudObjectDatabase;
   return Effect.gen(function* () {
     const state = yield* Cloudflare.DurableObjectState;
     const lifetime = yield* previewLifetime;
+    // Alarms, wakes and the dispatched runs share the coordinator's held connections.
+    const database = yield* objectDatabase("schedules");
     const pool = yield* Semaphore.make(concurrency);
     const lifecycle = yield* Semaphore.make(1);
     const alarms = yield* Semaphore.make(1);
     const dispatch = yield* makeScheduleDispatch;
     let initialized = false;
     const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      effect.pipe(Effect.provide(resources));
+      effect.pipe(Effect.provide(resources), Effect.provideService(ObjectDatabase, database));
     const arm = alarms.withPermits(1)(
       provide(
         Effect.gen(function* () {
@@ -166,7 +170,10 @@ export class ScheduleCoordinator extends Cloudflare.DurableObject<
 /** The API owns the coordinator and supplies its private service bindings. */
 export const ScheduleCoordinatorLive = ScheduleCoordinator.make(makeScheduleCoordinator);
 
-/** Route changes wake the coordinator promptly; a native cron heartbeat repairs missing alarms after failures. */
+/**
+ * Route changes wake the coordinator promptly; the minute background job repairs missing alarms
+ * after failures.
+ */
 export const cloudSchedules = Effect.gen(function* () {
   const coordinator = yield* ScheduleCoordinator;
   // Worker placement does not place Durable Objects. Keep new coordinators near
@@ -185,6 +192,5 @@ export const cloudSchedules = Effect.gen(function* () {
     Effect.catch(() => Effect.logError("Schedule coordinator wake failed")),
     Effect.provide(RuntimeContext.phantom),
   );
-  yield* Cloudflare.Workers.cron("* * * * *", () => wake.pipe(lifetime.background));
-  return Layer.succeed(ScheduleWakeup, wake);
+  return { layer: Layer.succeed(ScheduleWakeup, wake), wake: wake.pipe(lifetime.background) };
 });
