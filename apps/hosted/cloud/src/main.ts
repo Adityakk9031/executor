@@ -197,6 +197,26 @@ export default Api.make(
       ),
     );
     yield* Cloudflare.Workers.cron("* * * * *", () => dispatch.pipe(lifetime.background));
+    // Jobs are queued by triggers on users, teams and members. Only auth and dashboard API
+    // writes change those rows, so only their requests start the jobs at once. MCP, telemetry
+    // and the other routes skip the extra connection and query. Cron recovers any lost dispatch.
+    // Streamed responses close their HTTP scope before delivering EOF. Dispatch has its own
+    // scope and must not hold that EOF until background work finishes.
+    const dispatchAfterWrites = <E, R>(
+      handler: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
+    ) =>
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+          const execution = yield* Cloudflare.WorkerExecutionContext;
+          yield* Effect.addFinalizer(() =>
+            execution.waitUntil(
+              dispatch.pipe(lifetime.background, Effect.timeoutOption("10 seconds"), Effect.asVoid),
+            ),
+          );
+        }
+        return yield* handler;
+      });
     const dataSteps = yield* cloudDataSteps;
     yield* Cloudflare.Workers.cron("* * * * *", () =>
       dataSteps.pipe(
@@ -297,7 +317,7 @@ export default Api.make(
       HttpRouter.add("GET", "/openapi.json", apiRequest),
       ...Object.values(ExecutorCloudApi.groups).flatMap((group) =>
         Object.values(group.endpoints).map((endpoint) =>
-          HttpRouter.add(endpoint.method, endpoint.path, apiRequest),
+          HttpRouter.add(endpoint.method, endpoint.path, dispatchAfterWrites(apiRequest)),
         ),
       ),
     );
@@ -368,7 +388,7 @@ export default Api.make(
         "/api/auth/organization/list",
         auth.handler.pipe(Effect.flatMap(hideRemovedOrganizations), Effect.provide(executor)),
       ),
-      HttpRouter.add("*", "/api/auth/*", auth.handler),
+      HttpRouter.add("*", "/api/auth/*", dispatchAfterWrites(auth.handler)),
       HttpRouter.add("*", "/api/email/unsubscribe", welcomeEmails.unsubscribe),
       HttpRouter.add("GET", "/api/oauth/callback", hostedOAuthCallback).pipe(
         HttpRouter.provideRequest(auth.identity),
@@ -390,21 +410,7 @@ export default Api.make(
       Effect.provideService(Layer.CurrentMemoMap, memoMap),
     );
     return {
-      fetch: Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        // Streamed responses close their HTTP scope before delivering EOF.
-        // Dispatch has its own scope and must not hold that EOF until background work finishes.
-        // Cron recovers dispatch if the request ends before this finalizer runs.
-        if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
-          const execution = yield* Cloudflare.WorkerExecutionContext;
-          yield* Effect.addFinalizer(() =>
-            execution.waitUntil(
-              dispatch.pipe(lifetime.background, Effect.timeoutOption("10 seconds"), Effect.asVoid),
-            ),
-          );
-        }
-        return yield* handle;
-      }).pipe(
+      fetch: handle.pipe(
         Effect.tapCause(reportCloudFailure),
         Effect.catchTag("AuthenticationUnavailable", () =>
           Effect.succeed(HttpServerResponse.empty({ status: 503 })),
