@@ -286,7 +286,13 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
                 .click(),
             )
             .then(() =>
-              page.getByRole("heading", { name: /Recovery account/ }).waitFor({ state: "visible" }),
+              page
+                .waitForURL((url) => url.searchParams.get("account") === savedAccount)
+                .then(() =>
+                  page
+                    .getByRole("button", { name: /^Manage Recovery account/ })
+                    .waitFor({ state: "visible" }),
+                ),
             ),
         );
         expect(

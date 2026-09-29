@@ -113,8 +113,9 @@ export function OAuthCallbackPage() {
         });
       } else
         await navigate({
-          to: "/org/$organizationSlug/accounts/$accountId",
-          params: { organizationSlug, accountId: result.value.id },
+          to: "/org/$organizationSlug/accounts",
+          params: { organizationSlug },
+          search: { account: result.value.id },
         });
     })();
   }, [registry, navigate, pending]);
@@ -126,7 +127,7 @@ export function OAuthCallbackPage() {
           ? state.message
           : Option.isSome(pending) && pending.value.app !== null
             ? "Finishing sign-in. You’ll return to the app automatically."
-            : "Finishing sign-in. Your account will open automatically."
+            : "Finishing sign-in. You’ll return to your accounts automatically."
       }
     >
       {state.status !== "connecting" && (

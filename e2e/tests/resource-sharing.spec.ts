@@ -191,15 +191,17 @@ layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
         );
         for (const kind of ["personal", "shared"])
           yield* browser.use("Personal and shared accounts appear together", (page) =>
-            page.getByRole("link", { name: `${kind} ${suffix}`, exact: true }).waitFor(),
+            page.getByRole("button", { name: `Manage ${kind} ${suffix}`, exact: true }).waitFor(),
           );
         const deleting = connected[0];
         if (!deleting) throw new Error("The connected personal account is missing");
-        yield* browser.use("Open the personal account", (page) =>
-          page.goto(`/org/${actors.organization.slug}/accounts/${deleting}`),
-        );
-        yield* browser.use("Start deleting the account", (page) =>
-          page.getByRole("link", { name: "Delete account", exact: true }).click(),
+        yield* browser.use("Start deleting the personal account", (page) =>
+          page
+            .getByRole("button", { name: `Manage personal ${suffix}`, exact: true })
+            .click()
+            .then(() =>
+              page.getByRole("menuitem", { name: "Delete account", exact: true }).click(),
+            ),
         );
         const deleted = yield* browser.use("Confirm account deletion", (page) =>
           Promise.all([
@@ -212,23 +214,26 @@ layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
                     `/api/organizations/${organization}/accounts/${deleting}`,
                 ),
             ),
-            page.getByRole("button", { name: "Delete account", exact: true }).click(),
+            page
+              .getByRole("dialog")
+              .getByRole("button", { name: "Delete account", exact: true })
+              .click(),
           ]).then(([response]) => response.status()),
         );
         expect(deleted).toBe(200);
-        yield* browser.use("Deletion returns to the account list", (page) =>
-          page.waitForURL(`**/org/${actors.organization.slug}/accounts`),
+        yield* browser.use("Deletion closes the dialog on the account list", (page) =>
+          page.getByRole("dialog").waitFor({ state: "hidden" }),
         );
         yield* browser.use("Deleted accounts leave the list", (page) =>
           page
-            .getByRole("link", { name: `personal ${suffix}`, exact: true })
+            .getByRole("button", { name: `Manage personal ${suffix}`, exact: true })
             .waitFor({ state: "hidden" }),
         );
         const after = yield* api.request(actors.owner, "GET", `${prefix}/accounts/${deleting}`);
         expect([403, 404]).toContain(after.status);
         connected.splice(0, 1);
         yield* browser.use("The team account remains", (page) =>
-          page.getByRole("link", { name: `shared ${suffix}`, exact: true }).waitFor(),
+          page.getByRole("button", { name: `Manage shared ${suffix}`, exact: true }).waitFor(),
         );
       }),
     ),

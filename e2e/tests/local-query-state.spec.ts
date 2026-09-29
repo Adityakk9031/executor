@@ -80,7 +80,7 @@ export default defineApp({ accounts: { service } }, async () => ({  }));
             return account;
           });
         const first = yield* addAccount("First draft account");
-        const second = yield* addAccount("Second draft account");
+        yield* addAccount("Second draft account");
         const pairing = yield* session.send("POST", "/auth/pair", undefined, headers);
         expect(pairing.status).toBe(200);
         const { url } = yield* body(Schema.Struct({ url: Schema.String }), pairing);
@@ -88,45 +88,66 @@ export default defineApp({ accounts: { service } }, async () => ({  }));
         yield* browser.use("The paired inventory is visible", (page) =>
           page.getByRole("heading", { name: /^Apps/ }).waitFor({ state: "visible" }),
         );
-        yield* browser.use("Open the first account", (page) => page.goto(`/accounts/${first.id}`));
+        const rename = (label: string) =>
+          browser.use(`Rename ${label}`, (page) =>
+            page
+              .getByRole("button", { name: `Manage ${label}`, exact: true })
+              .click()
+              .then(() => page.getByRole("menuitem", { name: "Rename", exact: true }).click())
+              .then(() => page.getByRole("dialog").waitFor({ state: "visible" })),
+          );
+        yield* browser.use("Open the account list", (page) => page.goto("/accounts"));
+        yield* rename("First draft account");
         const draft = "Keep this unsaved account name";
         yield* browser.use("Edit the account name without saving", (page) =>
-          page.getByRole("textbox", { name: "Account name", exact: true }).fill(draft),
+          page
+            .getByRole("dialog")
+            .getByRole("textbox", { name: "Account name", exact: true })
+            .fill(draft),
         );
         expect(
           (yield* session.send("DELETE", `/v1/accounts/${first.id}`, undefined, headers)).status,
         ).toBe(200);
         yield* browser.use("The live account query reports removal", (page) =>
           page
-            .locator(".setup-page")
+            .getByRole("dialog")
             .getByRole("alert", { name: "Account no longer available", exact: true })
             .waitFor({ state: "visible" }),
         );
         expect(
           yield* browser.use("The failed live read keeps the editor", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).count(),
+            page
+              .getByRole("dialog")
+              .getByRole("textbox", { name: "Account name", exact: true })
+              .count(),
           ),
         ).toBe(1);
         expect(
           yield* browser.use("The unsaved name remains available", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
+            page
+              .getByRole("dialog")
+              .getByRole("textbox", { name: "Account name", exact: true })
+              .inputValue(),
           ),
         ).toBe(draft);
         yield* browser.checkpoint("Local account draft survives a live read failure");
-        yield* browser.use("Return to the account list", (page) =>
-          page.locator(".back-link").click(),
+        yield* browser.use("Close the rename dialog", (page) =>
+          page.keyboard
+            .press("Escape")
+            .then(() => page.getByRole("dialog").waitFor({ state: "hidden" })),
         );
-        yield* browser.use("Choose a different account", (page) =>
-          page.getByRole("link", { name: "Second draft account", exact: true }).click(),
-        );
-        yield* browser.use("The second resource is selected", (page) =>
-          page.waitForURL((url) => url.pathname === `/accounts/${second.id}`),
-        );
+        yield* rename("Second draft account");
         expect(
           yield* browser.use("A different account starts with its own name", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
+            page
+              .getByRole("dialog")
+              .getByRole("textbox", { name: "Account name", exact: true })
+              .inputValue(),
           ),
         ).toBe("Second draft account");
+        yield* browser.use("Close the second rename dialog", (page) =>
+          page.keyboard.press("Escape"),
+        );
         yield* browser.use("Open the app's accounts", (page) =>
           page.goto(`/apps/${app.id}?view=accounts`),
         );

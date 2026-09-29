@@ -129,10 +129,17 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
         yield* browser.checkpoint("Named account selected for the app");
 
         yield* browser.use("Open the named account", (page) =>
-          page.goto(`/org/${actors.organization.slug}/accounts/${created.id}`),
+          page.goto(`/org/${actors.organization.slug}/accounts?account=${created.id}`),
         );
+        yield* browser.use("Open the account's actions", (page) =>
+          page
+            .getByRole("button", { name: "Manage Work key", exact: true })
+            .click()
+            .then(() => page.getByRole("menu").waitFor({ state: "visible" })),
+        );
+        yield* browser.checkpoint("Account actions on the linked row");
         yield* browser.use("Replace its credentials", (page) =>
-          page.getByRole("button", { name: "Update credentials", exact: true }).click(),
+          page.getByRole("menuitem", { name: "Update credentials", exact: true }).click(),
         );
         const reconnect = yield* browser.use("The reconnect dialog opens", (page) => {
           const dialog = page.getByRole("dialog", {
@@ -155,11 +162,9 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
             nameAccountDialog(page).count(),
           ),
         ).toBe(0);
-        expect(
-          yield* browser.use("The account keeps its name", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
-          ),
-        ).toBe("Work key");
+        yield* browser.use("The account keeps its name", (page) =>
+          page.getByRole("button", { name: "Manage Work key", exact: true }).waitFor(),
+        );
         expect(yield* savedLabel(created.id)).toBe("Work key");
         yield* browser.checkpoint("Updated credentials keep the account name");
 

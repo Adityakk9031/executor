@@ -102,7 +102,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{identity},skil
           ["App source", `/apps/${app.id}?view=source`, "index.ts"],
           ["App deployments", `/apps/${app.id}?view=deployments`, "index.ts"],
           ["Accounts", "/accounts", "Rendered account"],
-          ["Account", `/accounts/${account.id}`, "Rendered account"],
+          ["Linked account", `/accounts?account=${account.id}`, "Rendered account"],
         ] as const;
         for (const [label, path, content] of pages) {
           const response = yield* browser.use(`Load ${label} from the server`, (page) =>

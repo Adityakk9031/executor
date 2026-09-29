@@ -106,7 +106,7 @@ export interface AppLinkProps {
   readonly "aria-label"?: string;
   readonly "aria-current"?: "page" | undefined;
 }
-/** Accounts without a detail route can still render their label. */
+/** Accounts have no page of their own; a link opens the account list at that account. */
 export interface AccountLinkProps {
   readonly className?: string;
   readonly account: AccountId;

@@ -366,7 +366,9 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           yield* api.request(actors.owner, "GET", `${prefix}/inventory`),
         )).accounts.find((account) => account.label === "Work reports")?.id;
         if (accountId === undefined) return yield* Effect.die("The saved account is missing");
-        const accountHref = `/org/${actors.organization.slug}/accounts/${accountId}`;
+        const accountsPath = `/org/${actors.organization.slug}/accounts`;
+        const onAccount = (url: URL) =>
+          url.pathname === accountsPath && url.searchParams.get("account") === accountId;
         yield* Effect.addFinalizer(() =>
           api.request(actors.owner, "DELETE", `${prefix}/accounts/${accountId}`).pipe(Effect.orDie),
         );
@@ -391,8 +393,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* ready("Reconnect Sample service");
         yield* browser.use("A direct reconnect link opens over its saved account", (page) =>
           page.waitForURL(
-            (url) =>
-              url.pathname === accountHref && url.searchParams.get("connection") === reconnect.id,
+            (url) => onAccount(url) && url.searchParams.get("connection") === reconnect.id,
           ),
         );
         yield* browser.use("Refresh preserves the connection modal", (page) => page.reload());
@@ -406,12 +407,10 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.getByRole("dialog").press("Escape"),
         );
         yield* browser.use("Closing a direct link returns to the saved account", (page) =>
-          page.waitForURL(
-            (url) => url.pathname === accountHref && !url.searchParams.has("connection"),
-          ),
+          page.waitForURL((url) => onAccount(url) && !url.searchParams.has("connection")),
         );
         expect(
-          yield* browser.use("The account page has no remaining modal", (page) =>
+          yield* browser.use("The account list has no remaining modal", (page) =>
             page.getByRole("dialog").count(),
           ),
         ).toBe(0);
@@ -468,7 +467,11 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* ready("Allow access");
         yield* click("Allow access");
         yield* browser.use("Wait for reconnect success", (page) =>
-          page.getByRole("heading", { name: /Work reports/ }).waitFor(),
+          page
+            .waitForURL((url) => onAccount(url) && !url.searchParams.has("connection"))
+            .then(() =>
+              page.getByRole("button", { name: "Manage Work reports", exact: true }).waitFor(),
+            ),
         );
         yield* capture("Reconnect-completed");
         yield* browser.use("Revisit the completed link", (page) => page.goto(connectionUrl));
@@ -657,9 +660,13 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* browser.use("A reconnect returns to its account", (page) =>
           page
             .waitForURL(
-              (url) => url.pathname === `/org/${actors.organization.slug}/accounts/${second}`,
+              (url) =>
+                url.pathname === `/org/${actors.organization.slug}/accounts` &&
+                url.searchParams.get("account") === second,
             )
-            .then(() => page.getByRole("heading", { name: /Work reports/ }).waitFor()),
+            .then(() =>
+              page.getByRole("button", { name: "Manage Work reports", exact: true }).waitFor(),
+            ),
         );
         expect(
           yield* browser.use("A reconnect does not ask for a name", (page) =>

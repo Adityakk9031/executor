@@ -71,6 +71,6 @@ export const oauthDestination = (account: AccountId) =>
               ...(target.value.profile === undefined ? {} : { profile: target.value.profile }),
             },
           } as const)
-        : ({ to: "/accounts/$accountId", params: { accountId: account } } as const);
+        : ({ to: "/accounts", search: { account } } as const);
     return { destination, reconnect };
   });

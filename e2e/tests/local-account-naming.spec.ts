@@ -171,7 +171,7 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
           nameConnectedAccount(page, "Personal key"),
         );
         yield* browser.use("Accounts lists the new name", (page) =>
-          page.getByRole("link", { name: "Personal key", exact: true }).waitFor(),
+          page.getByRole("button", { name: "Manage Personal key", exact: true }).waitFor(),
         );
         expect(yield* savedLabel(created.id)).toBe("Personal key");
         yield* browser.checkpoint("Named account in the account list");
@@ -187,13 +187,13 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
         );
         // A naming step would hold the page until it was answered.
         yield* browser.use("Replacing credentials returns to the account", (page) =>
-          page.waitForURL((url) => url.pathname === `/accounts/${created.id}`),
-        );
-        expect(
-          yield* browser.use("The account keeps its name", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
+          page.waitForURL(
+            (url) => url.pathname === "/accounts" && url.searchParams.get("account") === created.id,
           ),
-        ).toBe("Personal key");
+        );
+        yield* browser.use("The account keeps its name", (page) =>
+          page.getByRole("button", { name: "Manage Personal key", exact: true }).waitFor(),
+        );
         expect(
           yield* browser.use("Replacing credentials does not ask for a name", (page) =>
             nameAccountDialog(page).count(),
@@ -325,7 +325,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         );
         const returned = yield* browser.use("Return to the account to name it", (page) =>
           page
-            .waitForURL((url) => /^\/accounts\/[^/]+$/.test(url.pathname))
+            .waitForURL((url) => url.pathname === "/accounts" && url.searchParams.has("account"))
             .then(() => accountNamePrompt(page))
             .then(() =>
               nameAccountDialog(page)
@@ -337,26 +337,27 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             .then(() => accountNameField(page).inputValue())
             .then((name) => ({ name, url: new URL(page.url()) })),
         );
-        const account = returned.url.pathname.split("/").at(-1) ?? "";
+        const account = returned.url.searchParams.get("account") ?? "";
         accounts.push(account);
         expect(returned.name).toBe("Default");
-        expect([...returned.url.searchParams.keys()]).toEqual([]);
+        expect([...returned.url.searchParams.keys()]).toEqual(["account"]);
         yield* browser.checkpoint("Name a local OAuth account after sign-in returns");
         yield* browser.use("Name the OAuth account", (page) =>
           nameConnectedAccount(page, "Local reports"),
         );
-        expect(
-          yield* browser.use("The account page shows the saved name", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
-          ),
-        ).toBe("Local reports");
+        yield* browser.use("The account list shows the saved name", (page) =>
+          page.getByRole("button", { name: "Manage Local reports", exact: true }).waitFor(),
+        );
         expect(yield* savedLabel(account)).toBe("Local reports");
 
         // Client navigation: a direct load of an OAuth credential form renders "Action unavailable".
         yield* browser.use("Reconnect the named account", (page) =>
           page
-            .getByRole("link", { name: "Reconnect", exact: true })
+            .getByRole("button", { name: "Manage Local reports", exact: true })
             .click()
+            .then(() =>
+              page.getByRole("menuitem", { name: "Update credentials", exact: true }).click(),
+            )
             .then(() =>
               page.getByRole("button", { name: "Reconnect Sample service", exact: true }).click(),
             ),
@@ -364,15 +365,15 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* browser.use("Allow access again", (page) =>
           page.getByRole("button", { name: "Allow access", exact: true }).click(),
         );
-        expect(
-          yield* browser.use("A reconnect returns to its account", (page) =>
-            page
-              .waitForURL((url) => url.pathname === `/accounts/${account}`)
-              .then(() =>
-                page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
-              ),
-          ),
-        ).toBe("Local reports");
+        yield* browser.use("A reconnect returns to its account", (page) =>
+          page
+            .waitForURL(
+              (url) => url.pathname === "/accounts" && url.searchParams.get("account") === account,
+            )
+            .then(() =>
+              page.getByRole("button", { name: "Manage Local reports", exact: true }).waitFor(),
+            ),
+        );
         expect(
           yield* browser.use("A reconnect does not ask for a name", (page) =>
             nameAccountDialog(page).count(),

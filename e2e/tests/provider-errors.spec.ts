@@ -275,7 +275,13 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
             page
               .getByRole("link", { name: "Manage account" })
               .click()
-              .then(() => page.waitForURL(`**/accounts/${affected}`)),
+              .then(() =>
+                page.waitForURL(
+                  (url) =>
+                    url.pathname.endsWith("/accounts") &&
+                    url.searchParams.get("account") === affected,
+                ),
+              ),
           );
           yield* browser.use("Restore desktop", (page) =>
             page.setViewportSize({ width: 1365, height: 900 }),

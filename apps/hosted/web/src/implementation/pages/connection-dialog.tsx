@@ -136,9 +136,9 @@ function ResumedConnectionDialog({
                       replace: true,
                     }
                   : {
-                      to: "/org/$organizationSlug/accounts/$accountId",
-                      params: { organizationSlug, accountId: account.id },
-                      search: {},
+                      to: "/org/$organizationSlug/accounts",
+                      params: { organizationSlug },
+                      search: { account: account.id },
                       replace: true,
                     },
               );
@@ -175,9 +175,9 @@ export function ConnectionEntry({
           }
         : connection.reconnectAccount
           ? {
-              to: "/org/$organizationSlug/accounts/$accountId",
-              params: { organizationSlug, accountId: connection.reconnectAccount.id },
-              search,
+              to: "/org/$organizationSlug/accounts",
+              params: { organizationSlug },
+              search: { ...search, account: connection.reconnectAccount.id },
               replace: true,
             }
           : {
