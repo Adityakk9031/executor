@@ -392,11 +392,14 @@ interface Entry {
 /**
  * Group tools by the dotted parts of their names, keeping catalog order. Within a level, a
  * `prefix_` shared by several tools becomes a group too, e.g. `accounts_connect` and
- * `accounts_rename` under Accounts.
+ * `accounts_rename` under Accounts. A tool that repeats its group's name as a prefix, like
+ * MCP servers that namespace every tool (`planetscale.planetscale_list_databases`), drops the
+ * repeat instead of nesting a second group with the same name.
  */
 function buildTree(tools: readonly ToolSummary[]): readonly ToolNode[] {
   return nest(
     tools.map((tool) => ({ tool, segments: tool.name.split(".") })),
+    "",
     "",
   );
 }
@@ -406,7 +409,19 @@ const underscorePrefix = (segment: string) => {
   return at > 0 && at < segment.length - 1 ? segment.slice(0, at) : undefined;
 };
 
-function nest(entries: readonly Entry[], parent: string): readonly ToolNode[] {
+/** Removes a leading `name_` that only repeats the enclosing group's name. */
+const withoutGroupPrefix = (entry: Entry, group: string): Entry => {
+  const [only, ...rest] = entry.segments;
+  if (only === undefined || rest.length > 0) return entry;
+  const prefix = underscorePrefix(only);
+  return prefix !== undefined && prefix.toLowerCase() === group.toLowerCase()
+    ? { tool: entry.tool, segments: [only.slice(prefix.length + 1)] }
+    : entry;
+};
+
+function nest(nested: readonly Entry[], parent: string, parentGroup: string): readonly ToolNode[] {
+  const entries =
+    parentGroup === "" ? nested : nested.map((e) => withoutGroupPrefix(e, parentGroup));
   const shared = new Map<string, number>();
   for (const entry of entries) {
     const prefix = entry.segments.length === 1 ? underscorePrefix(entry.segments[0]!) : undefined;
@@ -442,7 +457,7 @@ function nest(entries: readonly Entry[], parent: string): readonly ToolNode[] {
       kind: "group",
       key,
       label: humanize(item.group),
-      children: nest(members, key),
+      children: nest(members, key, item.group),
       size: members.length,
     };
   });

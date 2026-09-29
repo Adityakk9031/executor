@@ -377,6 +377,16 @@ export const scenarios = {
       local: na("Cloudflare Durable Object memory investigation"),
     },
   },
+  toolTreePrefixes: {
+    fixtures: "actors",
+    file: "tool-tree-prefixes.spec.ts",
+    title: "The tool tree does not repeat a group whose tools restate its name",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("The hosted Tools page owns this tree."),
+    },
+  },
   toolsErrorState: {
     fixtures: "actors",
     file: "tools-error-state.spec.ts",
