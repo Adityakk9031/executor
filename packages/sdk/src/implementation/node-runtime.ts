@@ -6,6 +6,8 @@ import { Crypto, Effect, Exit, FileSystem, Path, Redacted, Schema } from "effect
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import {
   DatabaseFieldReserved,
+  AccountCheckResult,
+  HostAccountCheckError,
   HostRequirementsError,
   HostInspectError,
   HostCallError,
@@ -515,5 +517,19 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
           ),
         )
         .pipe(Effect.withSpan("runtime.node.call")),
+    checkAccount: ({ build, requirement, ...context }) =>
+      load(build).pipe(
+        Effect.flatMap((handler) =>
+          cachedDispatch(
+            handler,
+            { operation: "account-check", requirement },
+            context,
+            AccountCheckResult,
+            HostAccountCheckError,
+            build,
+          ),
+        ),
+        Effect.withSpan("runtime.node.checkAccount"),
+      ),
   };
 };

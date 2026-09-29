@@ -1,6 +1,7 @@
 import { folderSkillsEffect } from "./skill-files.ts";
 import { AppSkills, SkillFile, SkillLoadFailed } from "../contracts/skills.ts";
-import { parseProviderError } from "./provider-error.ts";
+import { accountProviderError, httpProviderError, parseProviderError } from "./provider-error.ts";
+import { ResponseStatusError } from "../contracts/http.ts";
 import { McpError } from "../contracts/mcp.ts";
 import { OpenapiResponseError } from "../contracts/api-response-error.ts";
 import { toPromise } from "./authoring.ts";
@@ -48,7 +49,12 @@ import {
   type AppHandler,
   type HostContext,
 } from "../contracts/host.ts";
-import { ManyAccounts, type AuthMethods, type Provider } from "../contracts/provider.ts";
+import {
+  AccountCheckResult,
+  ManyAccounts,
+  type AuthMethods,
+  type Provider,
+} from "../contracts/provider.ts";
 import { JsonValue } from "../contracts/schema.ts";
 import {
   approvalElicitation,
@@ -165,11 +171,11 @@ function requirements(slots: AccountSlots, database?: typeof DeclaredRequirement
   return Effect.gen(function* () {
     const accounts = new Map<string, DeclaredRequirements["accounts"][string]>();
     for (const [slot, selection] of Object.entries(slots)) {
+      const provider = selection instanceof ManyAccounts ? selection.provider : selection;
       accounts.set(slot, {
         cardinality: selection instanceof ManyAccounts ? "many" : "one",
-        definition: yield* providerDeclaration(
-          selection instanceof ManyAccounts ? selection.provider : selection,
-        ),
+        definition: yield* providerDeclaration(provider),
+        ...(provider.health === undefined ? {} : { health: true }),
       });
     }
     return yield* Schema.decodeUnknownEffect(DeclaredRequirements)({
@@ -312,6 +318,14 @@ function dispatch(
             return yield* new WorkflowFailure({ reason: "engine", retryable: true });
           return result;
         });
+      if (request.operation === "account-check")
+        return yield* checkAccount(
+          native.accounts,
+          declared,
+          request.requirement,
+          context,
+          invocationSignal,
+        ).pipe(withinDeadline);
       let running: InvocationTelemetry | undefined;
       let transactionOpen = false;
       const delivery: ElicitationHandler = (request, signal) =>
@@ -753,6 +767,65 @@ function dispatch(
       );
     }),
   );
+}
+
+/**
+ * Run one slot's provider check against the single account the host supplied, without evaluating
+ * the app. Failures are attributed to that account. HTTP status failures from `decodeJson` are
+ * classified like other provider responses; anything else means the check could not verify it.
+ */
+function checkAccount(
+  slots: AccountSlots,
+  declared: DeclaredRequirements,
+  requirement: string,
+  context: HostContext,
+  signal: AbortSignal,
+) {
+  return Effect.gen(function* () {
+    const selection = Object.hasOwn(slots, requirement) ? slots[requirement] : undefined;
+    const slot = Object.hasOwn(declared.accounts, requirement)
+      ? declared.accounts[requirement]
+      : undefined;
+    if (selection === undefined || slot === undefined) return yield* new HostAccountsInvalid();
+    const provider = selection instanceof ManyAccounts ? selection.provider : selection;
+    const health = provider.health;
+    if (health === undefined) return yield* new HostOperationNotFound();
+    const { accounts } = yield* bindAccounts(
+      { [requirement]: provider },
+      { accounts: { [requirement]: { ...slot, cardinality: "one" } } },
+      context,
+    ).pipe(Effect.withSpan("app.accounts.bind"));
+    const account = accounts[requirement];
+    if (account === undefined || !("id" in account)) return yield* new HostAccountsInvalid();
+    const result = yield* Effect.suspend(() =>
+      Effect.gen(function* () {
+        return yield* health.run({ account, fetch: yield* invocationFetch(signal), signal });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterrupts(cause)) return Effect.interrupt;
+        const error = Cause.squash(cause);
+        const status = Schema.decodeUnknownOption(ResponseStatusError)(error);
+        const classified = Option.isSome(status)
+          ? Option.fromNullishOr(httpProviderError(status.value.status))
+          : parseProviderError(error);
+        return Effect.fail(
+          Option.isSome(classified)
+            ? accountProviderError(classified.value, account.id)
+            : new HostOperationFailed(),
+        );
+      }),
+      Effect.withSpan("app.account.check"),
+    );
+    return yield* safe(
+      () =>
+        Schema.decodeUnknownEffect(AccountCheckResult)(result ?? {}).pipe(
+          Effect.flatMap(Schema.encodeEffect(AccountCheckResult)),
+          Effect.flatMap(Schema.decodeUnknownEffect(JsonValue)),
+        ),
+      new HostOutputInvalid(),
+    );
+  });
 }
 
 /** Rebuild only the allowlisted skill loader fields from an author-visible rejection. */

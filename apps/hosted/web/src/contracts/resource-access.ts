@@ -199,10 +199,11 @@ const inventory = Atom.family((key: ListKey) =>
       const profiles = data.apps
         .filter(({ app }) => apps.some((item) => item.id === app.id))
         .flatMap(({ profiles }) => profiles);
-      const accounts = data.accounts.map(({ account, provider }) => ({
+      const accounts = data.accounts.map(({ account, provider, health }) => ({
         ...account,
         providerName: provider.definition.name,
         providerUrl: providerDisplayUrl(provider.definition),
+        ...(health === undefined ? {} : { health }),
       }));
       return { apps, accounts, profiles, pendingApp: key.group !== "private" && data.pendingApp };
     }),

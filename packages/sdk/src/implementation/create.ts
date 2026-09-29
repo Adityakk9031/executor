@@ -10,6 +10,7 @@ import { makeWebhooks } from "./webhooks.ts";
 import { makeAppData } from "./app-storage.ts";
 import { makeAccountConnections } from "./account-connections.ts";
 import { makeAccounts } from "./accounts.ts";
+import { makeAccountHealth } from "./account-health.ts";
 import { makeProfiles } from "./profiles.ts";
 import { makeApps } from "./apps.ts";
 import { makeOwners } from "./owners.ts";
@@ -95,6 +96,7 @@ export const createExecutor = (
       workflows.controls,
       options.lifecycle,
     );
+    const { checkCredentials, ...accountHealth } = makeAccountHealth(db, runtime, oauth, apps.list);
     const schedules = makeSchedules(options.storage, apps, tools, options.credentials, crypto);
     const setup = makeProfileSetup(db, crypto, apps.profiles, {
       webhooks: webhooks.webhooks,
@@ -108,18 +110,15 @@ export const createExecutor = (
       [WorkflowHost]: workflows.host,
       scheduler: schedules.dispatcher,
       schedules: schedules.operations,
-      accounts: makeAccounts(
-        db,
-        options.credentials,
-        crypto,
-        options.lifecycle,
-        oauth.revokeRemoved,
-      ),
+      accounts: {
+        ...makeAccounts(db, options.credentials, crypto, options.lifecycle, oauth.revokeRemoved),
+        ...accountHealth,
+      },
       accountConnections: {
         ...makeAccountConnections(db, options.credentials, crypto, options.lifecycle),
         ...oauth.connections,
       },
-      apps: { ...apps, profiles: setup.operations },
+      apps: { ...apps, profiles: setup.operations, checkCredentials },
       owners: makeOwners(db),
       skills: makeSkills(db, runtime, crypto, declarations, options.blobs),
       webhooks: webhooks.webhooks,

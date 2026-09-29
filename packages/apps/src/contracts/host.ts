@@ -49,6 +49,8 @@ export { protocol1 } from "./protocols/1.ts";
 export { protocol2 } from "./protocols/2.ts";
 export { protocol3 } from "./protocols/3.ts";
 export { protocol4 } from "./protocols/4.ts";
+export { protocol5, AccountCheckCommand } from "./protocols/5.ts";
+export { AccountCheckResult, AccountInfo } from "./provider.ts";
 import {
   HostAccountsInvalid,
   HostDeclarationInvalid,
@@ -68,11 +70,11 @@ import {
   ResolvedAccounts,
   type SkillCatalogResponse,
   type TrustedToolApproval,
-} from "./protocols/4.ts";
+} from "./protocols/5.ts";
+export { DeclaredRequirements, HostRequest } from "./protocols/5.ts";
 export {
   DeclaredAuthMethod,
   DeclaredProvider,
-  DeclaredRequirements,
   ResolvedAccount,
   ResolvedAccounts,
   TrustedToolApproval,
@@ -85,7 +87,6 @@ export {
   HostedCatalogSummary,
   SkillSources,
   SkillCatalogResponse,
-  HostRequest,
   HostRequestInvalid,
   HostAccountsInvalid,
   HostDeclarationInvalid,
@@ -104,7 +105,7 @@ export {
   HostError,
   HostResponse,
   HostInvocation,
-} from "./protocols/4.ts";
+} from "./protocols/5.ts";
 /** Raw host inputs; the host boundary parses and redacts these immediately. */
 export type ResolvedAccountsInput = typeof ResolvedAccounts.Encoded;
 
@@ -190,6 +191,20 @@ export const HostCallError = Schema.Union([
   HostToolApprovalRequired,
   HostToolPolicyFailed,
   ElicitationFailed,
+]);
+/**
+ * An account check binds one account and runs the provider's check without evaluating the app.
+ * Timeouts arrive as WorkflowFailure from the shared deadline guard.
+ */
+export const HostAccountCheckError = Schema.Union([
+  ProviderError,
+  WorkflowFailure,
+  HostRequestInvalid,
+  HostDeclarationInvalid,
+  HostAccountsInvalid,
+  HostOperationNotFound,
+  HostOperationFailed,
+  HostOutputInvalid,
 ]);
 /** Queries, mutations and agent calls use the same operation failures. */
 export const HostDataError = HostCallError;

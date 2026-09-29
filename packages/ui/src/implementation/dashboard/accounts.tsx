@@ -2,6 +2,7 @@ import { LocalTime, shortMoment } from "../components/local-time.tsx";
 import { PageFrame, PageHeader } from "./page.tsx";
 import { Option } from "effect";
 import { AccountRowsSkeleton } from "./loading.tsx";
+import { AccountCheckDot, AccountIdentity } from "./account-health.tsx";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { QueryResult, useQuery, useDashboard } from "./context.tsx";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -148,6 +149,12 @@ function AccountsList({
                         </>
                       )}
                       <span>{account.method}</span>
+                      {account.health?.info && (
+                        <>
+                          <span aria-hidden>·</span>
+                          <AccountIdentity info={account.health.info} />
+                        </>
+                      )}
                       {accountMeta?.(account)}
                       {accountNeedsSignIn(account) && (
                         <span className="sign-in-status text-sign-in-warning text-[11px] font-medium whitespace-nowrap [.app-account-setup_h2_&]:ml-2">
@@ -171,6 +178,9 @@ function AccountsList({
                   ) : (
                     apps.map((app) => (
                       <AppLink app={app.id} view="accounts" key={app.id}>
+                        <AccountCheckDot
+                          health={account.health?.apps.find((entry) => entry.app === app.id)}
+                        />
                         {app.name}
                         <HugeiconsIcon
                           icon={ArrowUpRight01Icon}

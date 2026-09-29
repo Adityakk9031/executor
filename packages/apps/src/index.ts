@@ -46,6 +46,9 @@ export {
 } from "./implementation/schema.ts";
 
 export {
+  type AccountCheckContext,
+  type AccountCheckResult,
+  type AccountInfo,
   type AccountOf,
   type AuthMethod,
   type AuthMethodData,
@@ -54,7 +57,7 @@ export {
   type OAuth2Config,
   type Provider,
 } from "./contracts/provider.ts";
-export { defineProvider } from "./implementation/provider.ts";
+export { defineProvider, type ProviderOptions } from "./implementation/provider.ts";
 export { accountRouter } from "./implementation/account-router.ts";
 export {
   router,

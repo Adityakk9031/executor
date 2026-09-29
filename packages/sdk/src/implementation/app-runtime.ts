@@ -6,6 +6,8 @@
 import { Effect, Option, Redacted, Result, Schema, type Stream } from "effect";
 import { makeTelemetryForwarder, TelemetryBatch, traceHeaders } from "@executor-js/telemetry";
 import {
+  AccountCheckResult,
+  HostAccountCheckError,
   HostCallError,
   HostDataError,
   HostedCatalog,
@@ -232,6 +234,13 @@ export const appRuntime = (host: AppRuntimeHost) =>
         ).pipe(Effect.withSpan(span("call"))),
       webhook: (input) =>
         dispatch(input, input.command, Json, HostCallError).pipe(Effect.withSpan(span("webhook"))),
+      checkAccount: ({ requirement, ...input }) =>
+        dispatch(
+          { ...input, database: false },
+          { operation: "account-check", requirement },
+          AccountCheckResult,
+          HostAccountCheckError,
+        ).pipe(Effect.withSpan(span("checkAccount"))),
       workflow: (input) =>
         dispatch({ ...input, database: false }, input.command, Json, HostCallError).pipe(
           Effect.withSpan(span("workflow"), {

@@ -285,7 +285,12 @@ export const makeApps = (
         Object.entries(built.requirements.accounts),
         ([slot, value]) =>
           identifyProvider(value.definition, crypto).pipe(
-            Effect.map((provider) => ({ slot, provider, cardinality: value.cardinality })),
+            Effect.map((provider) => ({
+              slot,
+              provider,
+              cardinality: value.cardinality,
+              health: value.health,
+            })),
           ),
       );
       const requirements: AppRequirements = {
@@ -296,9 +301,14 @@ export const makeApps = (
           ? {}
           : { database: built.requirements.database }),
         accounts: Object.fromEntries(
-          entries.map(({ slot, provider, cardinality }) => [
+          entries.map(({ slot, provider, cardinality, health }) => [
             slot,
-            { provider: provider.id, definition: provider.definition, cardinality },
+            {
+              provider: provider.id,
+              definition: provider.definition,
+              cardinality,
+              ...(health === undefined ? {} : { health }),
+            },
           ]),
         ),
       };
@@ -586,6 +596,9 @@ export const makeApps = (
             );
             yield* query(() => tx.deleteMany("schedules", { where: (b) => b("app", "=", app.id) }));
             yield* query(() => tx.deleteMany("profiles", { where: (b) => b("app", "=", app.id) }));
+            yield* query(() =>
+              tx.deleteMany("accountChecks", { where: (b) => b("app", "=", app.id) }),
+            );
             yield* query(() => tx.deleteMany("apps", { where: (b) => b("id", "=", app.id) }));
           }
           return { app: input.app };

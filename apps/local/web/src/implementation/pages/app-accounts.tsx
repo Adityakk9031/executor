@@ -169,6 +169,7 @@ export function AppAccounts({
                 definition: connection.requirement.definition,
               }}
               returnTo={{ app: app.id, slot: connection.slot, profile: profile?.id }}
+              checkWith={connection.requirement.health === true ? app.id : undefined}
               onPendingChange={setConnecting}
               onSaved={(account) => {
                 const { slot, requirement } = connection;

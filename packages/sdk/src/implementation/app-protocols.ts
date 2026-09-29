@@ -43,17 +43,23 @@ export interface AppProtocol {
   readonly workflow: (execution: WorkflowExecution) => WorkflowExecution;
 }
 
-/** Protocol 4 is the host's current protocol, so its messages need no conversion. */
-const protocol4: AppProtocol = {
-  version: 4,
+/** Protocol 5 is the host's current protocol, so its messages need no conversion. */
+const protocol5: AppProtocol = {
+  version: 5,
   workerEntry: appBridge,
-  nodeEntry: nodeAppEntry(4),
+  nodeEntry: nodeAppEntry(5),
   invocation: (input) => JSON.stringify(input),
   request: (command) => command,
   refuse: () => undefined,
   response: (_command, body) => Effect.succeed(body),
   workflow: (execution) => execution,
 };
+
+/**
+ * Protocol 4 is protocol 5 without account checks. Its builds never declare a slot check, so the
+ * host never sends them `account-check`, and every other message and reply is unchanged.
+ */
+const protocol4: AppProtocol = { ...protocol5, version: 4, nodeEntry: nodeAppEntry(4) };
 
 /** The protocols released before routers and call kinds. */
 const legacyProtocols = { 1: protocol1, 2: protocol2, 3: protocol3 } as const;
@@ -119,10 +125,9 @@ const legacyProtocol = (version: LegacyVersion): AppProtocol => {
 };
 
 const protocols: ReadonlyMap<number, AppProtocol> = new Map(
-  [legacyProtocol(1), legacyProtocol(2), legacyProtocol(3), protocol4].map((protocol) => [
-    protocol.version,
-    protocol,
-  ]),
+  [legacyProtocol(1), legacyProtocol(2), legacyProtocol(3), protocol4, protocol5].map(
+    (protocol) => [protocol.version, protocol],
+  ),
 );
 
 /** Protocols this host builds and runs. */

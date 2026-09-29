@@ -15,11 +15,13 @@ import {
   RenameAccountForm,
 } from "@executor-js/ui/dashboard/account-actions";
 import { QueryView } from "@executor-js/ui/dashboard/context";
+import { AccountHealthPanel } from "@executor-js/ui/dashboard/account-health";
 import { Button } from "@executor-js/ui/components/button";
 import { DropdownMenuItem, DropdownMenuSeparator } from "@executor-js/ui/components/dropdown-menu";
 import type { AccountAccess } from "@executor-js/hosted-server/resource-access";
 import {
   accountAtom,
+  checkAccountAtom,
   disconnectAccountAtom,
   reconnectAccountAtom,
   renameAccountAtom,
@@ -29,7 +31,7 @@ import { HostedFailure } from "../components/dashboard-bindings.tsx";
 import { useOrganizationRoute } from "../components/organization.tsx";
 
 /** The list page owns an open dialog, so it outlives the row if the account changes underneath it. */
-export type AccountDialogKind = "rename" | "access" | "delete";
+export type AccountDialogKind = "rename" | "health" | "access" | "delete";
 
 /** Row actions replace the account page: credentials, name, access and deletion, in place. */
 export function HostedAccountActions({
@@ -65,6 +67,7 @@ export function HostedAccountActions({
       )}
       <AccountActionsMenu account={account}>
         <DropdownMenuItem onSelect={() => open("rename")}>Rename</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => open("health")}>Check health</DropdownMenuItem>
         <DropdownMenuItem
           disabled={credentialsReason !== undefined || reconnect.pending}
           onSelect={reconnect.start}
@@ -113,6 +116,7 @@ function useReconnect(account: AccountId) {
 
 const titles = {
   rename: "Rename account",
+  health: "Account health",
   access: "Manage access",
   delete: "Delete account?",
 } satisfies Record<AccountDialogKind, string>;
@@ -144,6 +148,8 @@ export function HostedAccountDialog({
         {(data) =>
           dialog === "rename" ? (
             <RenameDialogBody data={data} onPendingChange={setBusy} onClose={onClose} />
+          ) : dialog === "health" ? (
+            <HealthDialogBody data={data} onClose={onClose} />
           ) : dialog === "access" ? (
             <>
               <AccountDialogIdentity data={data} />
@@ -163,6 +169,31 @@ const cancelButton = (onClose: () => void): ReactNode => (
     Cancel
   </Button>
 );
+
+function HealthDialogBody({
+  data,
+  onClose,
+}: {
+  readonly data: AccountDetail;
+  readonly onClose: () => void;
+}) {
+  const { organization } = useOrganizationRoute();
+  const check = useAtomSet(checkAccountAtom({ organization, account: data.account.id }), {
+    mode: "promiseExit",
+  });
+  return (
+    <AccountHealthPanel<HostedError>
+      data={data}
+      check={() => check()}
+      Failure={HostedFailure}
+      actions={
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      }
+    />
+  );
+}
 
 function RenameDialogBody({
   data,

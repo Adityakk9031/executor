@@ -211,5 +211,6 @@ export const toEffectRuntime = (
     workflow: (input) => runtime.workflow(input).pipe(provide),
     webhook: (input) => runtime.webhook(input).pipe(provide),
     call: (input) => runtime.call(input).pipe(provide),
+    checkAccount: (input) => runtime.checkAccount(input).pipe(provide),
   };
 };

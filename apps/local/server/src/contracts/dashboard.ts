@@ -22,6 +22,8 @@ import {
   AccountConnectionNotFound,
   AccountConnectionClosed,
   Account,
+  AccountHealth,
+  CredentialCheck,
   AccountNotFound,
   AccountRequired,
   AccountSelectionInvalid,
@@ -190,6 +192,8 @@ export const DashboardAccount = Schema.Struct({
   providerName: Schema.String,
   providerUrl: Schema.NullOr(HttpUrl),
   signIn: AccountSignIn,
+  /** Checks by the apps that select the account; absent from single-account reads. */
+  health: Schema.optionalKey(AccountHealth),
 });
 export type DashboardAccount = typeof DashboardAccount.Type;
 /** Credential management uses the retained provider even when no installed app selects it. */
@@ -197,6 +201,8 @@ export const DashboardAccountDetail = Schema.Struct({
   account: DashboardAccount,
   provider: Provider,
   apps: Schema.Array(App),
+  /** The latest check by each app in `apps`; reading it never runs a check. */
+  health: AccountHealth,
   canManage: Schema.Boolean,
 });
 export type DashboardAccountDetail = typeof DashboardAccountDetail.Type;
@@ -525,6 +531,25 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
       HttpApiEndpoint.get("account", "/dashboard/api/accounts/:account", {
         params: { account: AccountId },
         success: DashboardAccountDetail,
+        error: [StorageError, AccountNotFound],
+      }),
+    )
+    .add(
+      HttpApiEndpoint.post("checkCredentials", "/dashboard/api/apps/:app/credential-checks", {
+        params: { app: AppId },
+        payload: Schema.Struct({
+          provider: ProviderId,
+          method: AuthMethodName,
+          fields: AccountFieldsInput,
+        }),
+        success: Schema.NullOr(CredentialCheck),
+        error: [StorageError, AppNotFound, AuthMethodInvalid, AccountFieldsInvalid],
+      }),
+    )
+    .add(
+      HttpApiEndpoint.post("checkAccount", "/dashboard/api/accounts/:account/health", {
+        params: { account: AccountId },
+        success: AccountHealth,
         error: [StorageError, AccountNotFound],
       }),
     )

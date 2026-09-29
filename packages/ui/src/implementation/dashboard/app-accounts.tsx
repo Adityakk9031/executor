@@ -6,6 +6,7 @@ import { Exit, type Cause } from "effect";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon, UserCircleIcon } from "@hugeicons/core-free-icons";
 import type {
+  AccountAppHealth,
   App,
   AccountId,
   AccountRequirement,
@@ -21,6 +22,7 @@ import {
   type FailureProps,
 } from "../../contracts/dashboard.ts";
 import { ProviderIcon } from "./common.tsx";
+import { AccountCheckResult } from "./account-health.tsx";
 import { EmptyState } from "./empty-state.tsx";
 import { Button } from "../components/button.tsx";
 import { Checkbox } from "../components/checkbox.tsx";
@@ -345,7 +347,11 @@ export function AppAccounts({
                           </span>
                         ) : account?.signIn?.state === "unavailable" ? (
                           <span className="text-xs text-sign-in-warning">Unavailable</span>
-                        ) : null;
+                        ) : (
+                          <AppCheck
+                            health={account?.health?.apps.find((entry) => entry.app === app.id)}
+                          />
+                        );
                       return (
                         <li
                           key={id}
@@ -420,4 +426,10 @@ export function AppAccounts({
       })}
     </div>
   );
+}
+
+/** This app's check of a selected account; apps without a check show nothing. */
+function AppCheck({ health }: { readonly health: AccountAppHealth | undefined }) {
+  if (health === undefined || (!health.checkable && health.check === null)) return null;
+  return <AccountCheckResult health={health} />;
 }

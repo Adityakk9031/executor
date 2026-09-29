@@ -3,6 +3,8 @@ import { Context, Effect, Schema, type Stream } from "effect";
 import {
   HostDeclarationInvalid,
   DeclaredRequirements,
+  type AccountCheckResult,
+  type HostAccountCheckError,
   type HostInspectError,
   type HostCallError,
   type HostDataError,
@@ -231,4 +233,19 @@ export interface Runtime<Requirements = never> {
       readonly input: Json;
     } & HostContext,
   ) => Effect.Effect<Json, RuntimeLoadError | typeof HostCallError.Type, Requirements>;
+  /**
+   * Run one slot's provider check with the single account in `accounts`, without evaluating the
+   * app. Send only to builds whose requirements declare a check for that slot.
+   */
+  readonly checkAccount: (
+    input: {
+      readonly app: string;
+      readonly build: BuildId;
+      readonly requirement: string;
+    } & HostContext,
+  ) => Effect.Effect<
+    AccountCheckResult,
+    RuntimeLoadError | typeof HostAccountCheckError.Type,
+    Requirements
+  >;
 }

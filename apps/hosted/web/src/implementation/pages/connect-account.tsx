@@ -1,7 +1,7 @@
 import type { HostedError } from "../../contracts/errors.ts";
 import type { AccountSubmission, OAuthSubmission } from "@executor-js/ui/contracts/credentials";
 import { useAtomSet } from "@effect/atom-react";
-import { oauthClientEntryReasons, type Account, type Provider } from "@executor-js/sdk";
+import { oauthClientEntryReasons, type Account, type AppId, type Provider } from "@executor-js/sdk";
 import type {
   HostedAccountConnection,
   HostedOAuthSignIn,
@@ -13,7 +13,7 @@ import { Button } from "@executor-js/ui/components/button";
 import { OAuthFields, OAuthSetup } from "@executor-js/ui/dashboard/oauth-fields";
 import { HostedFailure } from "../components/dashboard-bindings.tsx";
 import { AccountForm } from "@executor-js/ui/dashboard/account-form";
-import { accountToNameAtom } from "../../contracts/accounts.ts";
+import { accountToNameAtom, checkCredentialsAtom } from "../../contracts/accounts.ts";
 import {
   oauthSetupAtom,
   startOAuthAtom,
@@ -70,6 +70,7 @@ export function ConnectionFields({
   return (
     <HostedAccountForm
       provider={connection.provider}
+      app={connection.checkable ? connection.target?.app : undefined}
       {...(connection.reconnectAccount ? { account: connection.reconnectAccount } : {})}
       redirectUri={connection.redirectUri}
       initialMethod={initialMethod}
@@ -109,8 +110,11 @@ export function HostedAccountForm<A extends HostedOAuthSignIn>({
   onSaved,
   onAuthorized,
   onPendingChange,
+  app,
 }: {
   readonly provider: Provider;
+  /** The app that will use the account; its check confirms entered credentials. */
+  readonly app?: AppId | null | undefined;
   readonly account?: Account;
   readonly redirectUri: string;
   readonly initialMethod?: string | undefined;
@@ -127,6 +131,7 @@ export function HostedAccountForm<A extends HostedOAuthSignIn>({
 }) {
   const { organization } = useOrganizationRoute();
   const requestName = useAtomSet(accountToNameAtom);
+  const checkCredentials = useAtomSet(checkCredentialsAtom, { mode: "promiseExit" });
   // Reconnects keep their name; a new account is named once saved.
   const saved = (value: Account) => {
     if (!account)
@@ -141,6 +146,12 @@ export function HostedAccountForm<A extends HostedOAuthSignIn>({
       Failure={HostedFailure}
       submitLabel={account ? "Save credentials" : "Connect account"}
       submit={submit}
+      {...(app === undefined || app === null
+        ? {}
+        : {
+            check: (input: AccountSubmission) =>
+              checkCredentials({ organization, app, provider: provider.id, ...input }),
+          })}
       onSaved={saved}
       {...(onPendingChange ? { onPendingChange } : {})}
       oauth={({ method, disabled, onPendingChange }) => (

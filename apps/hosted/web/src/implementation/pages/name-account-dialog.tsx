@@ -1,5 +1,6 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Exit } from "effect";
 import type { Account, AccountId } from "@executor-js/sdk";
 import { DetailSkeleton } from "@executor-js/ui/dashboard/loading";
 import { QueryResult, useQuery } from "@executor-js/ui/dashboard/context";
@@ -7,8 +8,14 @@ import {
   NameAccountForm,
   NameAccountHeader,
   NameAccountModal,
+  suggestedAccountName,
 } from "@executor-js/ui/dashboard/name-account";
-import { accountAtom, accountToNameAtom, renameAccountAtom } from "../../contracts/accounts.ts";
+import {
+  accountAtom,
+  accountToNameAtom,
+  checkAccountAtom,
+  renameAccountAtom,
+} from "../../contracts/accounts.ts";
 import { useOrganizationRoute } from "../components/organization.tsx";
 import { HostedFailure } from "../components/dashboard-bindings.tsx";
 
@@ -101,12 +108,33 @@ function HostedNameAccount({
   const rename = useAtomSet(renameAccountAtom({ organization, account: account.id }), {
     mode: "promiseExit",
   });
+  const check = useAtomSet(checkAccountAtom({ organization, account: account.id }), {
+    mode: "promiseExit",
+  });
+  // A targeted connection is selected before this prompt opens, so one check can name it.
+  const [identity, setIdentity] = useState<
+    { readonly resolving: true } | { readonly resolving: false; readonly name: string | undefined }
+  >({ resolving: true });
+  useEffect(() => {
+    let active = true;
+    void check().then((exit) => {
+      if (active)
+        setIdentity({
+          resolving: false,
+          name: Exit.isSuccess(exit) ? suggestedAccountName(exit.value) : undefined,
+        });
+    });
+    return () => {
+      active = false;
+    };
+  }, [check]);
   return (
     <NameAccountForm
       account={account}
       providerName={providerName}
       rename={rename}
       Failure={HostedFailure}
+      identity={identity}
       {...(onPendingChange ? { onPendingChange } : {})}
       onDone={onDone}
     />

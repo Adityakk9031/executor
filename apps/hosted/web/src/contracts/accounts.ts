@@ -1,10 +1,10 @@
 import { hydrated } from "@executor-js/ui/contracts/http";
 import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { refreshProfiles } from "./profiles.ts";
-import { acknowledgeResourceAccount } from "./resource-access.ts";
+import { acknowledgeResourceAccount, resourceDirectoryAtom } from "./resource-access.ts";
 import { protectedQuery } from "./protected-query.ts";
 /** Account queries remain independent across organizations, including OAuth returns. */
-import type { Account, AccountId } from "@executor-js/sdk";
+import type { Account, AccountFieldsInput, AccountId, AppId, ProviderId } from "@executor-js/sdk";
 import type { OrganizationReference } from "@executor-js/hosted-server/organization";
 import { Data, Effect, Option } from "effect";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -37,6 +37,31 @@ const renameAccount = Atom.family((key: AccountKey) =>
     ),
   ),
 );
+const checkAccount = Atom.family((key: AccountKey) =>
+  HostedClient.runtime.fn((_: void, get) =>
+    Effect.flatMap(HostedClient, (client) => client.accounts.check({ params: key })).pipe(
+      Effect.tap((health) =>
+        Effect.sync(() => {
+          acknowledge(get, accountAtom(key), (data) => ({ ...data, health }));
+          // The account list reads the resource directory; reload it for the recorded results.
+          get.refresh(resourceDirectoryAtom(key.organization));
+          get.refresh(resourceDirectoryAtom(key.organization, "managed"));
+          acknowledge(get, inventoryAtom(key.organization), (data) => ({
+            ...data,
+            accounts: data.accounts.map((current) =>
+              current.id === key.account ? { ...current, health } : current,
+            ),
+          }));
+        }),
+      ),
+    ),
+  ),
+);
+/** Run the checks of the apps this member can use; the account query shows the results. */
+export const checkAccountAtom = (key: {
+  organization: OrganizationReference;
+  account: AccountId;
+}) => checkAccount(new AccountKey(key));
 /**
  * A new account waiting to be named. The organization layout shows the prompt, so page refreshes
  * after saving, and the OAuth return navigation, cannot dismiss it.
@@ -135,3 +160,23 @@ function refreshCredentialDependents(
       }
     }
 }
+
+/**
+ * Check unsaved credentials with an app's check. A newer check replaces an older one still
+ * running, which is what a form checking its latest input wants.
+ */
+export const checkCredentialsAtom = HostedClient.runtime.fn(
+  (input: {
+    readonly organization: OrganizationReference;
+    readonly app: AppId;
+    readonly provider: ProviderId;
+    readonly method: string;
+    readonly fields: typeof AccountFieldsInput.Type;
+  }) =>
+    Effect.flatMap(HostedClient, (client) =>
+      client.accounts.checkCredentials({
+        params: { organization: input.organization, app: input.app },
+        payload: { provider: input.provider, method: input.method, fields: input.fields },
+      }),
+    ),
+);

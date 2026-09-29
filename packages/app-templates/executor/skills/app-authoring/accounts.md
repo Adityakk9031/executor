@@ -46,6 +46,64 @@ const listProjects = query(
 export default defineApp(requirements, { tools: router({ listProjects }) });
 ```
 
+## Check an account
+
+Give a provider a `health` function so Executor can tell whether a saved account
+works before an agent's tool call fails. Make one safe authenticated read with no
+side effects, such as the service's current-user endpoint. Returning passes.
+Returning `accountInfo` also names the upstream account; Executor offers it as the
+account's name and shows it beside the account. Every field is optional:
+`externalId`, `displayName`, `username`, `email`, `avatarUrl` and `profileUrl`.
+
+```ts
+const User = object({ id: string(), username: string(), name: string(), email: string() });
+
+const vercel = defineProvider({
+  name: "Vercel",
+  auth: {
+    apiKey: secrets({
+      label: "API token",
+      fields: object({ token: string({ minLength: 1 }) }),
+    }),
+  },
+  async health({ account, fetch, signal }) {
+    const response = await fetch("https://api.vercel.com/v2/user", {
+      signal,
+      headers: { Authorization: `Bearer ${account.fields.token}` },
+    });
+    // Vercel answers an unknown or revoked token with 403 and `invalidToken: true`.
+    if (response.status === 403 && (await response.json()).error?.invalidToken === true)
+      throw new ProviderError({ reason: "unauthorized", status: 403 });
+    const { user } = await decodeJson(response, object({ user: User }));
+    return {
+      accountInfo: {
+        externalId: user.id,
+        displayName: user.name,
+        username: user.username,
+        email: user.email,
+      },
+    };
+  },
+});
+```
+
+`account` is typed from `auth`; with several methods, switch on `account.method`.
+A failed `decodeJson` status is classified for you: 401 means the credentials were
+refused, 429 and 5xx mean the service is unavailable. Throw
+`new ProviderError({ reason: "forbidden" })` only with explicit evidence of a
+missing permission, such as an `insufficient_scope` challenge; a bare 403 is not
+enough. Services that answer a bad token with something other than 401, as Vercel does, need
+an explicit `new ProviderError({ reason: "unauthorized" })`. Any other error or a timeout means
+the check could not verify the account.
+Executor never treats that as bad credentials.
+
+Account forms run the same check on entered credentials before saving them, so the user sees
+whether they work, and the name they belong to, before connecting.
+
+Each app checks with its own `health` function, so two apps can verify the same
+account differently. Adding or editing `health` does not change the provider's
+identity or disconnect accounts; it only makes earlier results outdated.
+
 ## OAuth sign-in
 
 Prefer discovery. When the service publishes OAuth authorization server or OpenID

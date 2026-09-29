@@ -17,7 +17,11 @@ export function OAuthCallbackPage() {
     if (!AsyncResult.isSuccess(result) || result.value === undefined) return;
     const { destination, reconnect } = Effect.runSync(oauthDestination(result.value.id));
     // A new account is named on the page that follows.
-    if (!reconnect) requestName({ account: result.value.id });
+    if (!reconnect)
+      requestName({
+        account: result.value.id,
+        ...(destination.to === "/apps/$appId/setup" ? { app: destination.params.appId } : {}),
+      });
     void navigate(destination);
   }, [result, navigate, requestName]);
   return (

@@ -284,6 +284,7 @@ function AppConnectionDialogContent({
         onSelected={onSelected}
         slot={slot}
         form={form}
+        checks={requirement.health === true}
         onPendingChange={onPendingChange}
         onSaved={onSaved}
       />
@@ -301,10 +302,13 @@ function AppConnectionFields({
   accounts,
   profile,
   onSelected,
+  checks,
 }: {
   readonly accounts: SelectedAccounts;
   readonly profile?: ProfileId | undefined;
   readonly onSelected: (id: ProfileId) => void;
+  /** The slot's provider defines a check, so entered credentials can be validated. */
+  readonly checks: boolean;
   readonly app: App["id"];
   readonly slot: string;
   readonly form: ConnectionDialog;
@@ -334,6 +338,7 @@ function AppConnectionFields({
       }
     >
       provider={form.provider}
+      app={checks ? app : undefined}
       redirectUri={form.redirectUri}
       initialMethod={form.method}
       submit={(input) =>

@@ -15,11 +15,17 @@ import type { AccountId } from "@executor-js/sdk";
 import type { DashboardAccountDetail } from "@executor-js/local-server/contracts";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { accountAtom, disconnectAccountAtom, renameAccountAtom } from "../../contracts/accounts.ts";
+import {
+  accountAtom,
+  checkAccountAtom,
+  disconnectAccountAtom,
+  renameAccountAtom,
+} from "../../contracts/accounts.ts";
+import { AccountHealthPanel } from "@executor-js/ui/dashboard/account-health";
 import { Failure, LoadingRows } from "../components/common.tsx";
 
 /** The list page owns an open dialog, so it outlives the row if the account changes underneath it. */
-export type AccountDialogKind = "rename" | "disconnect";
+export type AccountDialogKind = "rename" | "disconnect" | "health";
 
 const managed = "This account is managed by the local server.";
 
@@ -44,6 +50,7 @@ export function LocalAccountActions({
       )}
       <AccountActionsMenu account={account}>
         <DropdownMenuItem onSelect={() => open("rename")}>Rename</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => open("health")}>Check health</DropdownMenuItem>
         <DropdownMenuItem asChild>
           <Link to="/accounts/$accountId/credentials" params={{ accountId: account.id }}>
             {credentials}
@@ -69,7 +76,12 @@ export function LocalAccountDialog({
   readonly onClose: () => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const title = dialog === "rename" ? "Rename account" : "Disconnect account?";
+  const title =
+    dialog === "rename"
+      ? "Rename account"
+      : dialog === "health"
+        ? "Account health"
+        : "Disconnect account?";
   return (
     <AccountDialog
       title={title}
@@ -81,12 +93,36 @@ export function LocalAccountDialog({
         {(data) =>
           dialog === "rename" ? (
             <RenameBody data={data} onPendingChange={setBusy} onClose={onClose} />
+          ) : dialog === "health" ? (
+            <HealthBody data={data} onClose={onClose} />
           ) : (
             <DisconnectBody data={data} onPendingChange={setBusy} onClose={onClose} />
           )
         }
       </QueryView>
     </AccountDialog>
+  );
+}
+
+function HealthBody({
+  data,
+  onClose,
+}: {
+  readonly data: DashboardAccountDetail;
+  readonly onClose: () => void;
+}) {
+  const check = useAtomSet(checkAccountAtom(data.account.id), { mode: "promiseExit" });
+  return (
+    <AccountHealthPanel<DashboardError>
+      data={data}
+      check={() => check()}
+      Failure={Failure}
+      actions={
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      }
+    />
   );
 }
 
