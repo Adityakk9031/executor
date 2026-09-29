@@ -9,6 +9,7 @@ import { TestLive, withCase } from "../support/case.ts";
 import { clientCredentialsIssuer, machineClient } from "../support/client-credentials-issuer.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { nameAccountDialog } from "../support/name-account.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Published = Schema.Struct({
   app: Schema.Struct({
@@ -59,10 +60,11 @@ layer(TestLive, { excludeTestServices: true })("Local OAuth", (it) => {
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, defineProvider, oauth2 } from "apps";
+                content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Local reporting",auth:{machine:oauth2({grant:"client_credentials",tokenUrl:${JSON.stringify(issuer.origin + "/token")},scopes:["reports:read"],tokenEndpointAuthMethod:"client_secret_basic"})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
               },
+              appsManifest,
             ],
           },
           headers,
@@ -185,10 +187,11 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, defineProvider, oauth2 } from "apps";
+                content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Sample service",auth:{oauth:oauth2({discover:${JSON.stringify(discovery.origin + "/mcp")}})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
               },
+              appsManifest,
             ],
           },
           headers,

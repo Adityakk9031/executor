@@ -47,9 +47,10 @@ import {
   type AppHostCallbacks,
   type WorkflowHostCommand,
 } from "../contracts/workerd-host.ts";
-import { LoadedWorkerBuild, PublishedAppFramework } from "../contracts/worker-build.ts";
+import { LoadedWorkerBuild } from "../contracts/worker-build.ts";
 import {
   describeBuildCause,
+  RuntimeAppsDependencyMissing,
   RuntimeBuildFailed,
   RuntimeProtocolUnsupported,
 } from "../contracts/runtime.ts";
@@ -58,10 +59,6 @@ import {
   workflowFailureDetail,
   workflowFailureMessage,
 } from "../contracts/workflow-errors.ts";
-import hostFramework from "executor-framework";
-
-/** This runtime's own framework, for sources that do not declare one. */
-const framework = Schema.decodeUnknownSync(PublishedAppFramework)(hostFramework);
 
 declare const WebSocketPair: { new (): { 0: NativeWebSocket; 1: NativeWebSocket } };
 
@@ -249,9 +246,7 @@ class AppApi extends RpcTarget {
         ).pipe(Effect.mapError((cause) => buildFailed("source", cause)));
         const compiled = yield* compileWorkerApp(
           request.files,
-          this.#env.NPM_REGISTRY === ""
-            ? { framework }
-            : { framework, registry: this.#env.NPM_REGISTRY },
+          this.#env.NPM_REGISTRY === "" ? {} : { registry: this.#env.NPM_REGISTRY },
         );
         const { bundle, ui } = compiled;
         const requirements = yield* runner(this.#env, this.#context)
@@ -281,7 +276,9 @@ class AppApi extends RpcTarget {
           Effect.succeed({
             ok: false as const,
             error:
-              Schema.is(RuntimeBuildFailed)(error) || Schema.is(RuntimeProtocolUnsupported)(error)
+              Schema.is(RuntimeBuildFailed)(error) ||
+              Schema.is(RuntimeProtocolUnsupported)(error) ||
+              Schema.is(RuntimeAppsDependencyMissing)(error)
                 ? error
                 : buildFailed("compile", error),
           }),

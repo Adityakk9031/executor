@@ -10,6 +10,7 @@ import { App, Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const AppProvider = Schema.Struct({
   ...App.fields,
@@ -36,10 +37,11 @@ layer(HostedLive, { excludeTestServices: true })("OAuth client setup", (it) => {
               files: [
                 {
                   path: "index.ts",
-                  content: `import { defineApp, defineProvider, oauth2 } from "apps";
+                  content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:${JSON.stringify(name)},auth:{oauth:oauth2({discover:${JSON.stringify(issuer.origin + "/mcp")}})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
                 },
+                appsManifest,
               ],
             });
             expect(response.status).toBe(200);

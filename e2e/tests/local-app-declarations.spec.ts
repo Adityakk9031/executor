@@ -11,16 +11,17 @@ import { TestLive, withCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 /** Each evaluation names its workflow after the version, the stored token and the clock. */
 const source = (
   version: string,
-) => `import {defineApp,defineProvider,secrets,query,workflow,object,string} from "apps";
+) => `import {defineApp,defineProvider,secrets,query,workflow,object,string, router} from "apps";
 const service=defineProvider({name:"Declaration clock",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 const ping=query({input:object({})},async()=>"pong");
 const noop=workflow({input:object({})},async()=>null);
 export default defineApp({accounts:{service}}, async ctx => ({
-  queries:{ping},
+  tools: router({ ping }),
   workflows:{["${version}_"+ctx.accounts.service.fields.token+"_"+Date.now()]:noop},
 }));`;
 const Deployment = Schema.Struct({
@@ -67,7 +68,7 @@ layer(TestLive, { excludeTestServices: true })("Local app declarations", (it) =>
           const deployed = yield* api.request(agent, "POST", "/v1/apps/deploy", {
             owner,
             name: `Declarations ${randomUUID().slice(0, 8)}`,
-            files: [{ path: "index.ts", content: source("first") }],
+            files: [{ path: "index.ts", content: source("first") }, appsManifest],
           });
           expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
           const { app } = yield* body(Deployment, deployed);
@@ -116,7 +117,7 @@ layer(TestLive, { excludeTestServices: true })("Local app declarations", (it) =>
           const redeployed = yield* api.request(agent, "POST", "/v1/apps/deploy", {
             owner,
             app: app.id,
-            files: [{ path: "index.ts", content: source("second") }],
+            files: [{ path: "index.ts", content: source("second") }, appsManifest],
           });
           expect(redeployed.status, JSON.stringify(redeployed.body)).toBe(200);
           const current = yield* read;

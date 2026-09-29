@@ -1,9 +1,14 @@
 /**
  * The `1_app_framework_pin` data step commits `dependencies.apps` to every existing app without
  * redeploying it. Local and self-host run it at startup; this scenario starts its product with the
- * step held in report mode, deploys apps in every position, then checks the report, the applied
- * pins, a conflict retried at the next start, and that a later start changes nothing. Cloud runs
- * the step from the Worker's cron after deploy and reports until told to apply.
+ * step held in report mode and gives apps every position whose `main` lacks a declaration. This
+ * host builds only declared source, so the running deployments declare the published beta.0.
+ * Positions whose running build has no declaration need a host that built undeclared source, and
+ * are not reproduced here. It then applies the step and checks the report, the pins, a conflict
+ * retried at the next start, the catch-up step pinning an app created meanwhile to beta.5, a later
+ * start that changes nothing, and that pinned apps, the Executor app included, rebuild on their
+ * pinned release from before routers. Cloud runs the step from the
+ * Worker's cron after deploy and reports until told to apply.
  */
 import { expect, layer } from "@effect/vitest";
 import { Duration, Effect, FileSystem, Redacted, Schedule, Schema } from "effect";
@@ -24,15 +29,19 @@ import {
   type DataStepPass,
 } from "../support/data-steps.ts";
 import { Telemetry } from "../support/evidence.ts";
+import { appsVersion, declaredApps } from "../support/apps-release.ts";
 
 const step = "1_app_framework_pin";
-/** The protocol-1 release the step pins. The suite's loopback registry forwards it to npm. */
+/** The protocol-1 release the step pins, resolved from npm like every published release. */
 const release = "0.0.1-beta.2";
+const catchUpStep = "2_app_framework_pin_catch_up";
+/** The last release before routers, which the catch-up step pins. */
+const catchUpRelease = "0.0.1-beta.5";
 
 /**
  * Source written for the protocol-1 framework every app ran before routers. It reports which
  * framework its build runs: beta.1 added `dynamicTools` to beta.0, and routers replaced both. Later
- * protocol-1 releases, including the pinned one, report `dynamicTools`.
+ * releases before routers, including both pinned ones, report `dynamicTools`.
  */
 const index = (revision: string) => ({
   path: "index.ts",
@@ -45,6 +54,14 @@ export default defineApp({ accounts: {} }, {
 });
 const manifest = { name: "pin-fixture", private: true, type: "module", dependencies: {} };
 const pinnedManifest = `${JSON.stringify({ dependencies: { apps: release } }, null, 2)}\n`;
+/** Files a running deployment builds: the source, declaring the published protocol-1 beta.0. */
+const deployedFiles = (revision: string) => [
+  index(revision),
+  {
+    path: "package.json",
+    content: `${JSON.stringify({ ...manifest, dependencies: { apps: "0.0.1-beta.0" } }, null, 2)}\n`,
+  },
+];
 
 type Files = readonly { readonly path: string; readonly content: string }[];
 type Reply = { readonly status: number; readonly body: unknown };
@@ -56,6 +73,9 @@ const App = Schema.Struct({
 });
 type App = typeof App.Type;
 const Deployed = Schema.Struct({ app: App });
+const RunningSource = Schema.Struct({
+  files: Schema.Array(Schema.Struct({ path: Schema.String, content: Schema.String })),
+});
 
 /** The same app operations through each product's own API. */
 interface Surface {
@@ -71,6 +91,8 @@ interface Surface {
   readonly commit: (app: App, files: Files, message: string) => Effect.Effect<void, unknown, Api>;
   readonly framework: (app: App) => Effect.Effect<string, unknown, Api>;
   readonly executorApp: Effect.Effect<App, unknown, Api>;
+  /** The files of the running deployment. */
+  readonly running: (app: App) => Effect.Effect<Files, unknown, Api>;
   readonly cleanup: (app: App) => Effect.Effect<unknown, unknown, Api>;
 }
 
@@ -119,6 +141,11 @@ const hostedSurface = (actor: Session, organization: string): Surface => {
       Effect.flatMap(decoded(Schema.Array(App))),
       Effect.flatMap((apps) => Effect.fromNullishOr(apps.find((app) => app.name === "Executor"))),
     ),
+    running: (target) =>
+      request("GET", `/apps/${target.id}/source`).pipe(
+        Effect.flatMap(decoded(RunningSource)),
+        Effect.map((source) => source.files),
+      ),
     cleanup: (target) => request("DELETE", `/apps/${target.id}`),
   };
   return surface;
@@ -185,6 +212,11 @@ const localSurface = (session: Session, apiKey: string): Surface => {
       Effect.flatMap(decoded(Schema.Array(App))),
       Effect.flatMap((apps) => Effect.fromNullishOr(apps[0])),
     ),
+    running: (target) =>
+      request("GET", `/v1/apps/${target.id}/source?owner=${ownerOf(target)}`).pipe(
+        Effect.flatMap(decoded(RunningSource)),
+        Effect.map((source) => source.files),
+      ),
     cleanup: (target) => request("DELETE", `/v1/apps/${target.id}?owner=${owner}`),
   };
   return surface;
@@ -243,25 +275,24 @@ const startupPin = (surface: Surface) =>
       status: "complete",
     });
 
-    // Apps in every position against their running deployment, none declaring a framework.
-    const packaged = yield* track(
-      surface.deploy(unique("Packaged"), [
-        index("first"),
-        { path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` },
-      ]),
+    // Apps in every position against their running deployment whose main declares no framework.
+    // A manifest that dropped its declaration after the running build.
+    const packaged = yield* track(surface.deploy(unique("Packaged"), deployedFiles("first")));
+    yield* surface.commit(
+      packaged,
+      [index("first"), { path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` }],
+      "Drop the declaration",
     );
-    // A single-file app; another writer holds its main when the pin is applied.
-    const contended = yield* track(surface.deploy(unique("Contended"), [index("first")]));
-    // Main keeps the first files; the running deployment came from files supplied directly.
-    const behind = yield* track(surface.deploy(unique("Behind"), [index("first")]));
-    yield* surface.redeploy(behind, [index("deployed directly")]);
+    // A single-file main; another writer holds it when the pin is applied.
+    const contended = yield* track(surface.deploy(unique("Contended"), deployedFiles("first")));
+    yield* surface.commit(contended, [index("first")], "Single file");
     // Main moved on from the running source without deploying.
-    const unpublished = yield* track(surface.deploy(unique("Unpublished"), [index("first")]));
+    const unpublished = yield* track(surface.deploy(unique("Unpublished"), deployedFiles("first")));
     yield* surface.commit(unpublished, [index("unpublished")], "Unpublished edit");
     // Main has an undeployed edit and the running source came from other files.
-    const diverged = yield* track(surface.deploy(unique("Diverged"), [index("first")]));
+    const diverged = yield* track(surface.deploy(unique("Diverged"), deployedFiles("first")));
     yield* surface.commit(diverged, [index("saved")], "Saved edit");
-    yield* surface.redeploy(diverged, [index("deployed instead")]);
+    yield* surface.redeploy(diverged, deployedFiles("deployed instead"));
     const undeployed = yield* track(surface.create(unique("Undeployed"), [index("first")]));
     const declared = yield* track(
       surface.create(unique("Declared"), [
@@ -278,30 +309,13 @@ const startupPin = (surface: Surface) =>
         { path: "package.json", content: "[]" },
       ]),
     );
-    // The host-managed Executor app, edited to drop its framework declaration like every copy
-    // made before templates declared one. Self-host runs that edit. Local regenerates its
-    // Executor app from the template at each start, so there only main holds the edit.
+    // The host-managed Executor app with protocol-1 source and no declaration on main, like every
+    // copy made before templates declared one. Its running deployment is the template's.
     const executorApp = yield* surface.executorApp;
-    const executorFiles = (yield* surface.workspace(executorApp)).files.filter(
-      (file) => file.path !== "package.json",
-    );
+    const executorFiles = [index("executor")];
     yield* surface.commit(executorApp, executorFiles, "Edit the Executor app");
-    if (!local)
-      yield* surface.deployCommit(
-        executorApp,
-        (yield* surface.workspace(executorApp)).revision.commit,
-      );
 
-    const apps = [
-      packaged,
-      contended,
-      behind,
-      unpublished,
-      diverged,
-      undeployed,
-      declared,
-      invalid,
-    ];
+    const apps = [packaged, contended, unpublished, diverged, undeployed, declared, invalid];
     const read = Effect.forEach(apps, surface.workspace);
     const revisions = read.pipe(
       Effect.map((sources) => sources.map((source) => source.revision.commit)),
@@ -313,9 +327,7 @@ const startupPin = (surface: Surface) =>
     const report = yield* restart;
     expect(report).toMatchObject({ mode: "report", status: "complete", pass: 1 });
     expect(report.owners[surface.owner]).toEqual({
-      pin: local ? 2 : 3,
-      "pin-behind": 1,
-      "pin-unpublished": 1,
+      "pin-unpublished": local ? 3 : 4,
       "pin-diverged": 1,
       "pin-undeployed": 1,
       declared: 1,
@@ -327,15 +339,14 @@ const startupPin = (surface: Surface) =>
     // Apply while another writer holds one app's main: that app conflicts and is retried.
     const lock = `${repositories}/${contended.code}.git/refs/heads/main.lock`;
     yield* fs.writeFileString(lock, "");
+    // This release requires a declaration to build; the step runs at start, before anything builds.
     yield* serverControl("stop");
     yield* serverControl("data-steps", 200, { mode: "apply" });
     const seen = yield* summaries;
     yield* serverControl("start");
     const applied = yield* nextDataStepSummary(log, step, seen);
     const appliedCounts = {
-      pinned: local ? 1 : 2,
-      "pinned-behind": 1,
-      "pinned-unpublished": 1,
+      "pinned-unpublished": local ? 2 : 3,
       "pinned-diverged": 1,
       "pinned-undeployed": 1,
       declared: 1,
@@ -344,6 +355,13 @@ const startupPin = (surface: Surface) =>
     expect(applied).toMatchObject({ mode: "apply", run: "apply", status: "retrying", pass: 1 });
     expect(applied.owners[surface.owner]).toEqual({ ...appliedCounts, conflict: 1 });
     if (local) expect(applied.owners["executor-local"]).toEqual({ "pinned-unpublished": 1 });
+    // The catch-up step waits while the first retries. An app created now, without a declaration,
+    // is outside the first step's retry pass; only the catch-up step pins it.
+    const catchUpApplied = dataStepSummaries(log, catchUpStep).pipe(
+      Effect.map((all) => all.filter((summary) => summary.mode === "apply")),
+    );
+    expect(yield* catchUpApplied).toEqual([]);
+    const late = yield* track(surface.create(unique("Late"), [index("late")]));
 
     // Every position is pinned on top of main, as an Executor commit on the revision it read.
     // Git returns files in path order.
@@ -353,7 +371,6 @@ const startupPin = (surface: Surface) =>
         { path: "package.json", content: pinnedManifest },
       ].toSorted((left, right) => (left.path < right.path ? -1 : 1));
     for (const [app, files] of [
-      [behind, [index("deployed directly")]],
       [unpublished, [index("unpublished")]],
       [diverged, [index("saved")]],
       [undeployed, [index("first")]],
@@ -368,10 +385,6 @@ const startupPin = (surface: Surface) =>
       });
       expect(parent?.commit, app.name).toBe(before[apps.indexOf(app)]);
     }
-    // Main behind a direct file deploy now holds the running source, and its message says so.
-    expect((yield* history(behind))[0]?.message).toContain(
-      "saved the source of the running deployment",
-    );
     // An existing manifest keeps every field, its order and its formatting.
     const packagedFiles = (yield* surface.workspace(packaged)).files;
     expect(packagedFiles.find((file) => file.path === "package.json")?.content).toBe(
@@ -384,9 +397,9 @@ const startupPin = (surface: Surface) =>
         before[apps.indexOf(app)],
       );
 
-    // Nothing was redeployed: running deployments keep serving the host's framework.
+    // Nothing was redeployed: running deployments keep serving the framework they were built with.
     expect(yield* Effect.forEach(apps, surface.get)).toEqual(running);
-    expect(yield* surface.framework(behind)).toBe("dynamicTools");
+    expect(yield* surface.framework(diverged)).toBe("beta.0");
 
     // The next start retries only the conflicted app, then records the step as applied.
     yield* fs.remove(lock);
@@ -394,10 +407,33 @@ const startupPin = (surface: Surface) =>
     expect(retried).toMatchObject({ mode: "apply", run: "apply", status: "complete", pass: 2 });
     expect(retried.owners[surface.owner]).toEqual({
       ...appliedCounts,
-      pinned: appliedCounts.pinned + 1,
+      "pinned-unpublished": appliedCounts["pinned-unpublished"] + 1,
     });
     expect((yield* surface.workspace(contended)).files).toEqual(pinnedFiles([index("first")]));
     expect((yield* history(contended))[1]?.commit).toBe(before[apps.indexOf(contended)]);
+    // The catch-up step runs once the first completes. Everything the first pinned reads as
+    // declared; the late app is pinned to the last release before routers.
+    const catchUp = (yield* catchUpApplied).at(-1);
+    expect(catchUp).toMatchObject({ mode: "apply", run: "apply", status: "complete", pass: 1 });
+    expect(catchUp?.owners[surface.owner]).toEqual({
+      declared: local ? 6 : 7,
+      "invalid-manifest": 1,
+      "pinned-undeployed": 1,
+    });
+    if (local) expect(catchUp?.owners["executor-local"]).toEqual({ declared: 1 });
+    const lateSource = yield* surface.workspace(late);
+    expect(lateSource.files).toEqual([
+      index("late"),
+      {
+        path: "package.json",
+        content: `${JSON.stringify({ dependencies: { apps: catchUpRelease } }, null, 2)}\n`,
+      },
+    ]);
+    expect((yield* history(late))[0]).toMatchObject({
+      author: "Executor",
+      commit: lateSource.revision.commit,
+      message: expect.stringContaining(`Pin the apps framework to ${catchUpRelease}`),
+    });
 
     // A later start runs nothing and changes nothing.
     const settled = yield* revisions;
@@ -406,10 +442,14 @@ const startupPin = (surface: Surface) =>
     expect(yield* summaries).toBe(quiet);
     expect(yield* revisions).toEqual(settled);
 
-    // The next deploy of a pinned app resolves the declared release.
-    for (const app of [contended, behind]) {
+    // Local regenerated its Executor app from the router template, which declares this host's
+    // release; main keeps the pinned source.
+    if (local) expect(declaredApps(yield* surface.running(executorApp))).toBe(appsVersion);
+    // The next deploy of a pinned app, the Executor app included, resolves the declared
+    // release from before routers, so its source keeps building and running on the router host.
+    for (const app of [contended, diverged, executorApp, late]) {
       yield* surface.deployCommit(app, (yield* surface.workspace(app)).revision.commit);
-      expect(yield* surface.framework(app)).toBe("dynamicTools");
+      expect(yield* surface.framework(app), app.name).toBe("dynamicTools");
     }
   });
 
@@ -419,8 +459,10 @@ const startupPin = (surface: Surface) =>
  * route. The local Worker cannot reach Cloudflare Artifacts, so apps report `failed` and the
  * report is retried. Each retrying pass records its next start, 30 seconds after the first pass
  * and doubling; no pass starts before the previous one's time, and a tick before it starts none.
- * Nothing is ever applied. If the Worker's first tick ran before any app existed, that pass found
- * nothing to retry and completed this build's report, so there is no backoff to observe.
+ * Nothing is ever applied. Every deploy resumes one report run, `report:cloud`, rather than starting
+ * one per build: production deploys more often than a pass over every app takes. If the Worker's
+ * first tick ran before any app existed, that pass found nothing to retry and completed the
+ * report, so there is no backoff to observe.
  */
 const cloudReport = (surface: Surface) =>
   Effect.gen(function* () {
@@ -429,7 +471,10 @@ const cloudReport = (surface: Surface) =>
     const telemetry = yield* Telemetry;
     const log = `${target.directory}/cloud.log`;
     // At least this app and the organization's Executor app fail, so the report is retried.
-    const app = yield* surface.deploy(`Cloud pin ${randomUUID().slice(0, 8)}`, [index("cloud")]);
+    const app = yield* surface.deploy(
+      `Cloud pin ${randomUUID().slice(0, 8)}`,
+      deployedFiles("cloud"),
+    );
     yield* Effect.addFinalizer(() => surface.cleanup(app).pipe(Effect.ignore));
     const passes = dataStepPasses(log, step);
     // Delivered `data_step.advance` spans of ticks that found the step waiting out its backoff.
@@ -452,7 +497,8 @@ const cloudReport = (surface: Surface) =>
     const latest = (yield* passes).at(-1);
     expect(latest?.summary.mode).toBe("report");
     const run = latest?.summary.run ?? "";
-    expect(run).toMatch(/^report:/);
+    expect(run, "The report is not labelled with the build").not.toContain(target.metadata.commit);
+    expect(run).toBe("report:cloud");
     if (latest?.summary.status === "complete") {
       expect(latest.summary.outcomes).toEqual({});
       return;

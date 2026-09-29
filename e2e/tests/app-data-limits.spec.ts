@@ -7,11 +7,12 @@ import { Api, body } from "../support/api.ts";
 import { Actors } from "../support/actors.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const files = [
   {
     path: "index.ts",
-    content: `import { defineApp, defineDatabase, mutation, query, workflow, number, object, string, table } from "apps";
+    content: `import { defineApp, defineDatabase, mutation, query, router, workflow, number, object, string, table } from "apps";
 const database = defineDatabase({
   items: table({ group: string(), n: number() }).index("by_group", ["group"]),
 });
@@ -23,7 +24,7 @@ const lookup = async (db, times) => {
 };
 const scan = mutation({ input: object({}) }, async ({ db }) => (await lookup(db, 101)).length);
 export default defineApp({ accounts: {}, database }, {
-  queries: {
+  tools: router({
     count: query({ input: object({}) }, async ({ db }) => db.items.withIndex("by_creation").count()),
     lookups: query({ input: object({ times: number() }) }, async ({ db }, { times }) =>
       (await lookup(db, times)).filter((row) => row !== null).length),
@@ -31,8 +32,6 @@ export default defineApp({ accounts: {}, database }, {
       (await db.items.withIndex("by_group", (q) => q.eq("group", "g")).take(first)).length,
       (await db.items.withIndex("by_creation").take(second)).length,
     ]),
-  },
-  mutations: {
     seed: mutation({ input: object({ count: number() }) }, async ({ db }, { count }) => {
       for (let n = 0; n < count; n++) await db.items.insert({ group: "g", n });
       return count;
@@ -43,7 +42,7 @@ export default defineApp({ accounts: {}, database }, {
       return "unreachable";
     }),
     scan,
-  },
+  }),
   workflows: {
     // A retry waits a minute, longer than the scenario waits for the run to fail.
     scanRun: workflow({ input: object({}) }, async (ctx) =>
@@ -51,17 +50,19 @@ export default defineApp({ accounts: {}, database }, {
   },
 });`,
   },
+  appsManifest,
 ];
 
 const reserved = [
   {
     path: "index.ts",
-    content: `import { defineApp, defineDatabase, query, object, string, table } from "apps";
+    content: `import { defineApp, defineDatabase, query, object, router, string, table } from "apps";
 const database = defineDatabase({ events: table({ title: string(), createdAt: string() }) });
 export default defineApp({ accounts: {}, database }, {
-  queries: { list: query({ input: object({}) }, async ({ db }) => db.events.withIndex("by_creation").collect()) },
+  tools: router({ list: query({ input: object({}) }, async ({ db }) => db.events.withIndex("by_creation").collect()) }),
 });`,
   },
+  appsManifest,
 ];
 
 const CallFailed = Schema.Struct({ _tag: Schema.Literal("ToolCallFailed"), reason: Schema.String });
@@ -109,22 +110,31 @@ layer(HostedLive, { excludeTestServices: true })("App data limits", (it) => {
         yield* Effect.addFinalizer(() =>
           api.request(actors.owner, "DELETE", `${prefix}/${app.id}`).pipe(Effect.orDie),
         );
-        const call = (tool: string, input: Record<string, number> = {}) =>
-          api.request(actors.owner, "POST", `${prefix}/${app.id}/tools/call`, { tool, input });
-        const failure = (tool: string, input: Record<string, number> = {}) =>
+        const kinds = {
+          count: "query",
+          lookups: "query",
+          takes: "query",
+          seed: "mutation",
+          swallowed: "mutation",
+        } as const;
+        const call = (tool: keyof typeof kinds, input: Record<string, number> = {}) =>
+          api.request(actors.owner, "POST", `${prefix}/${app.id}/tools/call`, {
+            tool,
+            kind: kinds[tool],
+            input,
+          });
+        const failure = (tool: keyof typeof kinds, input: Record<string, number> = {}) =>
           Effect.gen(function* () {
             const response = yield* call(tool, input);
             expect(response.status, JSON.stringify(response.body)).toBe(502);
             return (yield* body(CallFailed, response)).reason;
           });
 
-        expect(yield* body(Schema.Number, yield* call("mutations.seed", { count: 7 }))).toBe(7);
+        expect(yield* body(Schema.Number, yield* call("seed", { count: 7 }))).toBe(7);
 
         // 100 index queries fit; the 101st names the budget instead of a generic failure.
-        expect(yield* body(Schema.Number, yield* call("queries.lookups", { times: 100 }))).toBe(
-          100,
-        );
-        const lookups = yield* failure("queries.lookups", { times: 101 });
+        expect(yield* body(Schema.Number, yield* call("lookups", { times: 100 }))).toBe(100);
+        const lookups = yield* failure("lookups", { times: 101 });
         expect(lookups).toContain("101 index queries; the limit is 100");
         expect(lookups).toContain("instead of one first() per item");
 
@@ -132,18 +142,16 @@ layer(HostedLive, { excludeTestServices: true })("App data limits", (it) => {
         expect(
           yield* body(
             Schema.Array(Schema.Number),
-            yield* call("queries.takes", { first: 200, second: 1000 }),
+            yield* call("takes", { first: 200, second: 1000 }),
           ),
         ).toEqual([7, 7]);
-        expect(yield* failure("queries.takes", { first: 1, second: 1001 })).toContain(
+        expect(yield* failure("takes", { first: 1, second: 1001 })).toContain(
           "One call asked for 1,001 rows; take(n) and paginate({ numItems }) accept at most 1,000",
         );
 
         // Catching the rejection neither hides the limit nor commits the mutation's insert.
-        expect(yield* failure("mutations.swallowed")).toContain(
-          "101 index queries; the limit is 100",
-        );
-        expect(yield* body(Schema.Number, yield* call("queries.count"))).toBe(7);
+        expect(yield* failure("swallowed")).toContain("101 index queries; the limit is 100");
+        expect(yield* body(Schema.Number, yield* call("count"))).toBe(7);
 
         // A workflow step that exceeds a budget fails the run with the named error at once. The
         // same step would exceed it again, so the engine does not wait a minute to retry it.

@@ -9,6 +9,7 @@ import {
   BuildMemoryExceeded,
   RuntimeProtocolUnsupported,
   describeBuildCause,
+  RuntimeAppsDependencyMissing,
   runtimeAdapter,
 } from "@executor-js/sdk/core";
 import { appRuntime, makeAppRunner } from "@executor-js/sdk/workerd";
@@ -190,7 +191,9 @@ export const cloudRuntime = Effect.fn(function* (
                   ? "compile"
                   : Schema.is(RuntimeProtocolUnsupported)(error)
                     ? "protocol"
-                    : error.stage,
+                    : Schema.is(RuntimeAppsDependencyMissing)(error)
+                      ? "dependencies"
+                      : error.stage,
                 "build.cause": error.message,
               }),
             ),

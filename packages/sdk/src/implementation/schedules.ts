@@ -741,6 +741,8 @@ export const makeSchedules = (
                     app: setting.app,
                     profile: setting.profile ?? undefined,
                     tool: declared.tool,
+                    // Schedules only target mutations; defineApp checks this.
+                    kind: "mutation",
                     input: declared.input,
                   });
                   if (response.status === "completed") {

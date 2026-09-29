@@ -22,18 +22,22 @@ import { McpOAuth } from "../support/mcp-oauth.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { managementApp } from "../support/management-app.ts";
 import { holdQuery } from "../support/query-transition.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const files = [
   {
     path: "index.ts",
-    content: `import { defineApp, defineDatabase, table, query, mutation, object, string } from "apps";
+    content: `import { defineApp, defineDatabase, table, query, mutation, object, string, router } from "apps";
 const database = defineDatabase({ messages: table({ body: string() }) });
 export const list = query({ input: object({}) }, async ({ db }) =>
   (await db.messages.withIndex("by_creation").collect()).map((row) => row.body));
 export const save = mutation({ input: object({ body: string() }) }, async ({ db }, input) => {
   await db.messages.insert(input); return input.body;
 });
-export default defineApp({ accounts: {}, database }, {  queries: { list }, mutations: { save } });`,
+export default defineApp({ accounts: {}, database }, {  tools: router({
+    list,
+    save,
+  }) });`,
   },
   {
     path: "ui/index.html",
@@ -65,6 +69,7 @@ document.querySelector('form').addEventListener('submit', (event) => {
 });
 load().catch(() => { status.textContent = "Load failed"; });`,
   },
+  appsManifest,
 ];
 const Location = Schema.Struct({ url: Schema.String });
 const OperationSecurity = Schema.Array(Schema.Record(Schema.String, Schema.Array(Schema.String)));
@@ -188,17 +193,11 @@ layer(HostedLive, { excludeTestServices: true })("Private app pages", (it) => {
             items: Schema.Array(Schema.Struct({ path: Schema.String })),
           }),
         )((yield* Schema.decodeUnknownEffect(Completed)(search.structuredContent)).execution.value);
-        expect(discovered.items.map((item) => item.path)).toContain(
-          `${tools}.queries.appUi.location`,
-        );
+        expect(discovered.items.map((item) => item.path)).toContain(`${tools}.appUi.location`);
+        expect(discovered.items.map((item) => item.path)).not.toContain(`${tools}.appUi.authorize`);
+        expect(discovered.items.map((item) => item.path)).not.toContain(`${tools}.viewer.get`);
         expect(discovered.items.map((item) => item.path)).not.toContain(
-          `${tools}.mutations.appUi.authorize`,
-        );
-        expect(discovered.items.map((item) => item.path)).not.toContain(
-          `${tools}.queries.viewer.get`,
-        );
-        expect(discovered.items.map((item) => item.path)).not.toContain(
-          `${tools}.mutations.appData.subscribe`,
+          `${tools}.appData.subscribe`,
         );
         const lookup = yield* client.use(
           "Get the canonical app URL using the MCP grant",
@@ -207,7 +206,7 @@ layer(HostedLive, { excludeTestServices: true })("Private app pages", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return await ${tools}.queries.appUi.location({ path: ${JSON.stringify({ organization: actors.organization.id, app: app.id })} });`,
+                  code: `return await ${tools}.appUi.location({ path: ${JSON.stringify({ organization: actors.organization.id, app: app.id })} });`,
                 },
               },
               undefined,
@@ -225,7 +224,7 @@ layer(HostedLive, { excludeTestServices: true })("Private app pages", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return await ${tools}.queries.appUi.location({ path: ${JSON.stringify({ organization: "other-organization", app: app.id })} });`,
+                  code: `return await ${tools}.appUi.location({ path: ${JSON.stringify({ organization: "other-organization", app: app.id })} });`,
                 },
               },
               undefined,

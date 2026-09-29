@@ -7,6 +7,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const App = Schema.Struct({ id: Schema.String });
 const EvaluationFailure = Schema.Struct({
@@ -33,11 +34,12 @@ layer(HostedLive, { excludeTestServices: true })("Tools errors", (it) => {
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp } from "apps";
+              content: `import { defineApp, router } from "apps";
 export default defineApp({ accounts: {} }, async () => {
   throw new Error("SYNTHETIC_FACTORY_FAILURE");
 });`,
             },
+            appsManifest,
           ],
         });
         expect(response.status).toBe(200);
@@ -136,11 +138,14 @@ export default defineApp({ accounts: {} }, async () => {
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, query, object } from "apps";
+                content: `import { defineApp, query, object, router } from "apps";
 export default defineApp({ accounts: {} }, async () => ({
-  queries: { status: query({ description: "Service status", input: object({}) }, async () => "ready") }
+  tools: router({
+    status: query({ description: "Service status", input: object({}) }, async () => "ready"),
+  })
 }));`,
               },
+              appsManifest,
             ],
           },
         );
@@ -173,7 +178,7 @@ export default defineApp({ accounts: {} }, async () => ({
         yield* browser.use("The real tool catalog returns after retry", (page) =>
           page
             .getByRole("navigation", { name: "App tools", exact: true })
-            .getByRole("button", { name: "queries.status", exact: true })
+            .getByRole("button", { name: "status", exact: true })
             .waitFor(),
         );
         yield* browser.use("The error clears after recovery", (page) =>

@@ -19,6 +19,7 @@ import {
   openapiDeniedMessage,
   openapiOAuthMessage,
 } from "../support/openapi-error-upstream.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Recovery = Schema.Struct({ action: Schema.String, instructions: Schema.String });
 const Failure = Schema.Struct({
@@ -119,7 +120,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].queries.failures.fail({query:{mode:${JSON.stringify(mode)}}});`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].failures.fail({query:{mode:${JSON.stringify(mode)}}});`,
                 },
               },
               undefined,
@@ -213,7 +214,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].queries.failures.fail({query:{mode:{hidden:${JSON.stringify(openapiSecretMarker)}}}});`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].failures.fail({query:{mode:{hidden:${JSON.stringify(openapiSecretMarker)}}}});`,
                 },
               },
               undefined,
@@ -237,7 +238,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `try { await tools[${JSON.stringify(app.slug)}].queries.failures.fail({query:{mode:"known"}}); } catch(error) { return JSON.parse(error.message); }`,
+                  code: `try { await tools[${JSON.stringify(app.slug)}].failures.fail({query:{mode:"known"}}); } catch(error) { return JSON.parse(error.message); }`,
                 },
               },
               undefined,
@@ -283,7 +284,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
                 {
                   name: "execute",
                   arguments: {
-                    code: `return await tools[${JSON.stringify(app.slug)}].mutations.wire.postWire(${JSON.stringify(input)});`,
+                    code: `return await tools[${JSON.stringify(app.slug)}].wire.postWire(${JSON.stringify(input)});`,
                   },
                 },
                 undefined,
@@ -362,7 +363,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               actors.owner,
               "POST",
               `${prefix}/${app.id}/tools/call`,
-              { tool: "queries.failures.fail", input: { query: { mode } } },
+              { tool: "failures.fail", kind: "query", input: { query: { mode } } },
             );
             expect(httpResult.body).toMatchObject({
               _tag: "AppProviderFailed",
@@ -397,6 +398,7 @@ export default defineApp({ accounts: {} }, async () => {
   throw new Error("Synthetic factory failure");
 });`,
               },
+              appsManifest,
             ],
           }),
         );

@@ -8,6 +8,7 @@ import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const files = [
   {
@@ -72,7 +73,7 @@ layer(HostedLive, { excludeTestServices: true })("Source highlighting", (it) => 
         const prefix = `/api/organizations/${actors.organization.id}/apps`;
         const created = yield* api.request(actors.owner, "POST", prefix, {
           name: `Highlighting ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: "export default {};" }, ...files],
+          files: [{ path: "index.ts", content: "export default {};" }, ...files, appsManifest],
         });
         expect(created.status).toBe(200);
         const app = yield* body(App, created);
@@ -143,6 +144,7 @@ layer(HostedLive, { excludeTestServices: true })("Source highlighting", (it) => 
               path: "skills/greet/SKILL.md",
               content: `---\nname: greet\ndescription: Greet someone.\n---\n# Greet\n\n\`\`\`ts\n${snippet}\n\`\`\`\n`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);

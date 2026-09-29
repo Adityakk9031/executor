@@ -15,7 +15,6 @@ import {
   makeDeclarationCache,
   declarationConfig,
   type Executor,
-  type SourceFile,
 } from "@executor-js/sdk/core";
 import {
   HostedExecutor,
@@ -51,7 +50,6 @@ export class SelfHostWorkflowRequests extends Context.Service<
 
 /** Database initialization finishes before this service is acquired. */
 export const selfHostExecutorServices = <E, R>(
-  skills: readonly SourceFile[],
   egress: HostEgress,
   acquire: (executor: Effect.Effect<Executor>) => Effect.Effect<SelfHostPlatform, E, R>,
 ) =>
@@ -113,7 +111,6 @@ export const selfHostExecutorServices = <E, R>(
         executor,
         origin,
         storage,
-        skills,
         lazyHostedApiDocument(() => executorSelfHostApiDocument(origin)).document,
         // Password registration is admitted locally; self-host does not send verification mail.
         false,

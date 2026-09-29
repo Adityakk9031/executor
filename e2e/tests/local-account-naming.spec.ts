@@ -15,6 +15,7 @@ import { Target } from "../support/platform.ts";
 import { oauthRecoveryIssuer } from "../support/oauth-recovery-issuer.ts";
 import { createProfile } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Account = Schema.Struct({ id: Schema.String, label: Schema.String });
 const Detail = Schema.Struct({ account: Account });
@@ -56,13 +57,14 @@ layer(TestLive, { excludeTestServices: true })("Local account naming", (it) => {
               {
                 path: "index.ts",
                 content: `
-import { defineApp, defineProvider, secrets, object, string } from "apps";
+import { defineApp, defineProvider, secrets, object, string, router } from "apps";
 const service = defineProvider({ name: "Local naming fixture", auth: {
   key: secrets({ label: "API key", fields: object({ token: string() }) })
 } });
-export default defineApp({ accounts: { service } }, async () => ({ queries: {} }));
+export default defineApp({ accounts: { service } }, async () => ({ tools: router({}) }));
 `,
               },
+              appsManifest,
             ],
           },
           headers,
@@ -279,10 +281,11 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, defineProvider, oauth2 } from "apps";
+                content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Sample service",auth:{oauth:oauth2({discover:${JSON.stringify(issuer.origin)},scopes:["reports:read"]})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools:router({})}));`,
               },
+              appsManifest,
             ],
           },
           headers,

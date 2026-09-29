@@ -37,6 +37,7 @@ export default AppCompiler.make(
           Effect.catchTags({
             RuntimeBuildFailed: (error) => Effect.succeed({ ok: false as const, error }),
             RuntimeProtocolUnsupported: (error) => Effect.succeed({ ok: false as const, error }),
+            RuntimeAppsDependencyMissing: (error) => Effect.succeed({ ok: false as const, error }),
           }),
           Effect.flatMap(Schema.encodeEffect(CloudCompileResult)),
           Effect.orDie,

@@ -11,6 +11,7 @@ import { McpClient } from "../support/mcp-client.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Token = Schema.Struct({ key: Schema.RedactedFromValue(Schema.String), id: Schema.String });
 const Executed = Schema.Struct({
@@ -52,7 +53,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth scheduled renewal", (it)
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, defineProvider, oauth2, query, mutation, object, interval, ProviderError } from "apps";
+                content: `import { defineApp, defineProvider, oauth2, query, mutation, object, interval, router, ProviderError } from "apps";
 import { always } from "apps/operations/approval";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(`${issuer.origin}/mcp`)} }) } });
 async function call(fetch, account, method) {
@@ -65,8 +66,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => {
   const reviewedWrite = mutation({ input: object({}), approval: always() }, async ({ fetch }) => call(fetch, accounts.service, "POST"));
   const reviewedRead = query({ input: object({}), approval: always() }, async ({ fetch }) => call(fetch, accounts.service, "GET"));
   return {
-    queries: { reviewedRead },
-    mutations: { write, reviewedWrite },
+    tools: router({ reviewedRead, write, reviewedWrite }),
     schedules: {
       write: interval({ minutes: 1 }, write, {}),
       reviewedWrite: interval({ minutes: 1 }, reviewedWrite, {}),
@@ -74,6 +74,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => {
   };
 });`,
               },
+              appsManifest,
             ],
           });
           expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -262,7 +263,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => {
                 {
                   name: "execute",
                   arguments: {
-                    code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].queries.reviewedRead({});`,
+                    code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].reviewedRead({});`,
                   },
                 },
                 undefined,

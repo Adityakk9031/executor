@@ -190,6 +190,11 @@ const errorMessage = Match.type<DashboardError>().pipe(
     RequestInvalid: () => message("Check the setup details", "Correct the fields and try again."),
     ToolNotFound: () =>
       message("Tool unavailable", "This tool is no longer in the app’s catalog. Choose another."),
+    ToolKindMismatch: () =>
+      message(
+        "Tool changed",
+        "This tool changed between a query and a mutation. Reload the app’s tools and try again.",
+      ),
     InputInvalid: () =>
       message(
         "Check the input",

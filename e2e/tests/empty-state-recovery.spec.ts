@@ -8,9 +8,10 @@ import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
-const source = `import { defineApp } from "apps";
-export default defineApp({ accounts: {} }, async () => ({ queries: {} }));`;
+const source = `import { defineApp, router } from "apps";
+export default defineApp({ accounts: {} }, async () => ({ tools: router({}) }));`;
 
 layer(HostedLive, { excludeTestServices: true })("Empty state recovery", (it) => {
   it.effect(scenarios.emptyStateRecovery.title, (context) =>
@@ -25,7 +26,7 @@ layer(HostedLive, { excludeTestServices: true })("Empty state recovery", (it) =>
           App,
           yield* api.request(actors.owner, "POST", `${prefix}/apps`, {
             name: `Empty app ${randomUUID().slice(0, 8)}`,
-            files: [{ path: "index.ts", content: source }],
+            files: [{ path: "index.ts", content: source }, appsManifest],
           }),
         );
         yield* Effect.addFinalizer(() =>
@@ -108,7 +109,7 @@ layer(HostedLive, { excludeTestServices: true })("Empty state recovery", (it) =>
           App,
           yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
             name: `Empty capabilities ${randomUUID().slice(0, 8)}`,
-            files: [{ path: "index.ts", content: source }],
+            files: [{ path: "index.ts", content: source }, appsManifest],
           }),
         );
         yield* Effect.addFinalizer(() =>
@@ -273,11 +274,13 @@ layer(HostedLive, { excludeTestServices: true })("Empty state recovery", (it) =>
             files: [
               {
                 path: "index.ts",
-                content: `import { accountOperations, defineApp, defineProvider, object, secrets, string } from "apps";
+                content: `import { accountRouter, defineApp, defineProvider, object, router, secrets, string } from "apps";
 const service = defineProvider({ name: "Per-account service", auth: { key: secrets({ label: "API key", fields: object({ token: string() }) }) } });
-export default defineApp({ accounts: { service: service.many() } }, async ({ accounts, signal }) =>
-  accountOperations(accounts.service, async () => ({ queries: {} }), { signal }));`,
+export default defineApp({ accounts: { service: service.many() } }, async ({ accounts, signal }) => ({
+  tools: await accountRouter(accounts.service, async () => router({}), { signal }),
+}));`,
               },
+              appsManifest,
             ],
           }),
         );

@@ -1,10 +1,10 @@
 /** Revisioned OpenAPI sources. Calls read a manifest, one operation and only its schema dependencies. */
-import { Effect, Schema, Duration } from "effect";
+import { Deferred, Effect, Option, Schema, Duration } from "effect";
+import { RouterMeta } from "../contracts/router.ts";
 import { parse } from "yaml";
 import type { AppCache, CacheLoadContext } from "../contracts/cache.ts";
 import { OpenapiOperation, OpenapiError, type OpenapiToolsOptions } from "../contracts/openapi.ts";
 import { JsonObject, JsonValue } from "../contracts/schema.ts";
-import type { DynamicTools } from "../contracts/dynamic-tools.ts";
 import type { HostedTool, HostedToolSummary } from "../contracts/host.ts";
 import { compileOpenApiDocument } from "./openapi-compile.ts";
 import {
@@ -16,12 +16,53 @@ import {
   type PreparedOpenapiOperation,
 } from "./openapi.ts";
 import { protocolOperations, type OperationKinds } from "./protocol-operations.ts";
+import { routerDeclaration, type RouterDeclaration } from "./router.ts";
 import { nativeOperation } from "./operations.ts";
 import { wrap } from "./schema.ts";
 import { fromPromise, toPromise } from "./authoring.ts";
 import { createRequest } from "./openapi-request.ts";
 
-const Manifest = Schema.Struct({ revision: Schema.String, pages: Schema.Number });
+/** `meta` describes the document for its router: its info and tag descriptions. */
+const Manifest = Schema.Struct({
+  revision: Schema.String,
+  pages: Schema.Number,
+  meta: Schema.optionalKey(RouterMeta),
+});
+
+const DocumentInfo = Schema.Struct({
+  info: Schema.optionalKey(
+    Schema.Struct({
+      title: Schema.optionalKey(Schema.String),
+      summary: Schema.optionalKey(Schema.String),
+      description: Schema.optionalKey(Schema.String),
+    }),
+  ),
+  tags: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.NonEmptyString,
+        description: Schema.optionalKey(Schema.String),
+      }),
+    ),
+  ),
+});
+
+/** Router metadata from a document's info and tags. A malformed section is left out. */
+const documentMeta = (document: unknown): RouterMeta | undefined => {
+  const parsed = Schema.decodeUnknownOption(DocumentInfo)(document);
+  if (Option.isNone(parsed)) return undefined;
+  const { info, tags } = parsed.value;
+  const description = info?.description ?? info?.summary;
+  const labels = (tags ?? []).flatMap((tag) =>
+    tag.description === undefined ? [] : [[tag.name, tag.description] as const],
+  );
+  const meta = {
+    ...(info?.title === undefined ? {} : { title: info.title }),
+    ...(description === undefined ? {} : { description }),
+    ...(labels.length === 0 ? {} : { tags: Object.fromEntries(labels) }),
+  };
+  return Object.keys(meta).length === 0 ? undefined : meta;
+};
 const Names = Schema.Array(Schema.String);
 const StoredEntry = Schema.fromJsonString(Schema.Struct({ value: JsonValue }));
 const schema = <A>(decoder: Schema.Decoder<A>) => wrap(decoder, false);
@@ -201,13 +242,7 @@ const download = (url: string, context: CacheLoadContext) =>
   });
 
 /** No I/O during app construction. All accounts share credential-free compilation. */
-export const liveOpenapiOperations = (
-  options: OpenapiSourceOptions,
-): {
-  readonly queries: {};
-  readonly mutations: {};
-  readonly dynamicTools: DynamicTools;
-} => {
+export const liveOpenapiRouter = (options: OpenapiSourceOptions): RouterDeclaration => {
   // Specs change rarely and compiling a large one takes seconds. Idle visits serve the
   // retained revision and refresh it in the background instead of waiting for a full load.
   const freshFor = options.freshFor ?? "5 minutes";
@@ -337,17 +372,33 @@ export const liveOpenapiOperations = (
         },
       );
       retain(revision, retained, retainedBytes);
-      return { revision, pages };
+      const meta = documentMeta(document);
+      return { revision, pages, ...(meta === undefined ? {} : { meta }) };
     });
-  const current = Effect.gen(function* () {
-    const key = yield* pointer;
-    return yield* fromPromise(options.cache.get)({
-      key,
-      schema: schema(Manifest),
-      freshFor,
-      staleFor,
-      load: toPromise(refresh),
-    });
+  // A router reads its metadata and its tools together; concurrent reads share one manifest
+  // round trip.
+  let reading: Deferred.Deferred<typeof Manifest.Type, unknown> | undefined;
+  const current = Effect.suspend(() => {
+    const shared = reading;
+    if (shared !== undefined) return Deferred.await(shared);
+    const deferred = Deferred.makeUnsafe<typeof Manifest.Type, unknown>();
+    reading = deferred;
+    return pointer.pipe(
+      Effect.flatMap((key) =>
+        fromPromise(options.cache.get)({
+          key,
+          schema: schema(Manifest),
+          freshFor,
+          staleFor,
+          load: toPromise(refresh),
+        }),
+      ),
+      Effect.onExit((exit) =>
+        Effect.sync(() => {
+          if (reading === deferred) reading = undefined;
+        }).pipe(Effect.andThen(Deferred.done(deferred, exit))),
+      ),
+    );
   });
   const read = <A>(
     revision: string,
@@ -429,8 +480,7 @@ export const liveOpenapiOperations = (
         ? "query"
         : "mutation";
   };
-  const qualified = (op: OpenapiOperation) =>
-    `${kindOf(op) === "query" ? "queries" : "mutations"}.${op.name}`;
+  const readOnly = (op: OpenapiOperation) => kindOf(op) === "query";
   const operationsFor = (manifest: typeof Manifest.Type) =>
     Effect.gen(function* () {
       const names = yield* namesFor(manifest);
@@ -451,10 +501,12 @@ export const liveOpenapiOperations = (
       }
       return all;
     });
-  const summarize = (operation: OpenapiOperation): HostedToolSummary => {
-    const name = qualified(operation);
-    return { name, description: operation.description, readOnly: name.startsWith("queries.") };
-  };
+  const summarize = (operation: OpenapiOperation): HostedToolSummary => ({
+    name: operation.name,
+    description: operation.description,
+    readOnly: readOnly(operation),
+    ...(operation.tags === undefined ? {} : { tags: operation.tags }),
+  });
   const describe = (
     operation: OpenapiOperation,
     bundle: ReturnType<typeof bundler>,
@@ -477,95 +529,89 @@ export const liveOpenapiOperations = (
       }
       return yield* invalid();
     });
-  return {
-    queries: {},
-    mutations: {},
-    dynamicTools: {
-      resolve: (name) =>
-        withRevision((manifest) =>
-          Effect.gen(function* () {
-            const raw = name.replace(/^(queries|mutations)\./, "");
-            const memoKey = `${manifest.revision}/${defaultedNames}/${raw}`;
-            const memo = resolved.get(memoKey);
-            const operation =
-              memo?.operation ??
-              (yield* read(manifest.revision, "operation", [raw], OpenapiOperation))[0];
-            if (operation === undefined) {
-              const names = yield* namesFor(manifest);
-              return names === undefined || names.includes(raw) ? undefined : { value: undefined };
-            }
-            if (qualified(operation) !== name) return { value: undefined };
-            const definitions =
-              memo?.definitions ?? (yield* definitionsFor(manifest.revision, operation));
-            if (definitions === undefined) return undefined;
-            const schemas =
-              memo?.schemas ??
-              (yield* prepareOpenapiOperation(operation, definitions, options.parameterDefaults));
-            if (memo === undefined) remember(memoKey, { operation, definitions, schemas });
-            const tools = yield* openapiToolsEffect(
-              { ...options, operations: [operation], definitions },
-              new Map([[operation.name, schemas]]),
-            );
-            const declarations = protocolOperations(tools, {
-              [operation.name]: kindOf(operation),
-            });
-            const declaration = declarations.queries[raw] ?? declarations.mutations[raw];
-            return { value: declaration === undefined ? undefined : nativeOperation(declaration) };
-          }),
-        ),
-      list: () =>
-        withRevision((manifest) =>
-          Effect.gen(function* () {
-            const all = yield* operationsFor(manifest);
-            if (all === undefined) return undefined;
-            const definitions = yield* definitionsFor(manifest.revision, all);
-            if (definitions === undefined) return undefined;
-            const bundle = bundler(definitions);
-            const request = createRequest(options);
-            return {
-              value: all
-                .filter((op) => request.available(op, options.account))
-                .map((operation) => describe(operation, bundle)),
-            };
-          }),
-        ),
-      summaries: () =>
-        withRevision((manifest) =>
-          Effect.gen(function* () {
-            const all = yield* operationsFor(manifest);
-            if (all === undefined) return undefined;
-            const request = createRequest(options);
-            return {
-              value: all
-                .filter((op) => request.available(op, options.account))
-                .map((operation) => summarize(operation)),
-            };
-          }),
-        ),
-      describe: (name) =>
-        withRevision((manifest) =>
-          Effect.gen(function* () {
-            const raw = name.replace(/^(queries|mutations)\./, "");
-            const operation = (yield* read(
-              manifest.revision,
-              "operation",
-              [raw],
-              OpenapiOperation,
-            ))[0];
-            if (operation === undefined) {
-              const names = yield* namesFor(manifest);
-              return names === undefined || names.includes(raw) ? undefined : { value: undefined };
-            }
-            if (
-              qualified(operation) !== name ||
-              !createRequest(options).available(operation, options.account)
-            )
-              return { value: undefined };
-            const definitions = yield* definitionsFor(manifest.revision, operation);
-            if (definitions === undefined) return undefined;
-            return { value: describe(operation, bundler(definitions)) };
-          }),
-        ),
-    },
-  };
+  return routerDeclaration({
+    kind: "dynamic",
+    meta: () => current.pipe(Effect.map((manifest) => manifest.meta ?? {})),
+    resolve: (name) =>
+      withRevision((manifest) =>
+        Effect.gen(function* () {
+          const raw = name;
+          const memoKey = `${manifest.revision}/${defaultedNames}/${raw}`;
+          const memo = resolved.get(memoKey);
+          const operation =
+            memo?.operation ??
+            (yield* read(manifest.revision, "operation", [raw], OpenapiOperation))[0];
+          if (operation === undefined) {
+            const names = yield* namesFor(manifest);
+            return names === undefined || names.includes(raw) ? undefined : { value: undefined };
+          }
+          const definitions =
+            memo?.definitions ?? (yield* definitionsFor(manifest.revision, operation));
+          if (definitions === undefined) return undefined;
+          const schemas =
+            memo?.schemas ??
+            (yield* prepareOpenapiOperation(operation, definitions, options.parameterDefaults));
+          if (memo === undefined) remember(memoKey, { operation, definitions, schemas });
+          const tools = yield* openapiToolsEffect(
+            { ...options, operations: [operation], definitions },
+            new Map([[operation.name, schemas]]),
+          );
+          const declarations = protocolOperations(tools, {
+            [operation.name]: kindOf(operation),
+          });
+          const declaration = Object.hasOwn(declarations, raw) ? declarations[raw] : undefined;
+          return { value: declaration === undefined ? undefined : nativeOperation(declaration) };
+        }),
+      ),
+    list: () =>
+      withRevision((manifest) =>
+        Effect.gen(function* () {
+          const all = yield* operationsFor(manifest);
+          if (all === undefined) return undefined;
+          const definitions = yield* definitionsFor(manifest.revision, all);
+          if (definitions === undefined) return undefined;
+          const bundle = bundler(definitions);
+          const request = createRequest(options);
+          return {
+            value: all
+              .filter((op) => request.available(op, options.account))
+              .map((operation) => describe(operation, bundle)),
+          };
+        }),
+      ),
+    summaries: () =>
+      withRevision((manifest) =>
+        Effect.gen(function* () {
+          const all = yield* operationsFor(manifest);
+          if (all === undefined) return undefined;
+          const request = createRequest(options);
+          return {
+            value: all
+              .filter((op) => request.available(op, options.account))
+              .map((operation) => summarize(operation)),
+          };
+        }),
+      ),
+    describe: (name) =>
+      withRevision((manifest) =>
+        Effect.gen(function* () {
+          const raw = name;
+          const operation = (yield* read(
+            manifest.revision,
+            "operation",
+            [raw],
+            OpenapiOperation,
+          ))[0];
+          if (operation === undefined) {
+            const names = yield* namesFor(manifest);
+            return names === undefined || names.includes(raw) ? undefined : { value: undefined };
+          }
+          if (!createRequest(options).available(operation, options.account))
+            return { value: undefined };
+          const definitions = yield* definitionsFor(manifest.revision, operation);
+          if (definitions === undefined) return undefined;
+          return { value: describe(operation, bundler(definitions)) };
+        }),
+      ),
+  });
 };

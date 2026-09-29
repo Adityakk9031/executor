@@ -386,7 +386,8 @@ export const makeAppRunner = (host: AppRunnerHost) => {
             headers: invocation.headers,
             write:
               writeOperations.has(command.operation) ||
-              (command.operation === "call" && command.tool.startsWith("mutations.")),
+              // A call without a kind is to a tool the catalog does not list; it may write.
+              (command.operation === "call" && command.kind !== "query"),
           },
           async () => {
             const bundle = await load();
@@ -436,6 +437,9 @@ export const makeAppRunner = (host: AppRunnerHost) => {
         // The build's protocol adapter owns this boundary: requests leave, and replies return, in
         // the host's current model whichever protocol the retained bundle speaks.
         const { protocol, load } = yield* protocolOf(invocation.build, capabilities.load);
+        // A command this protocol's bundles would not run as asked fails without reaching them.
+        const refused = protocol.refuse(invocation.command);
+        if (refused !== undefined) return { ok: false, error: refused };
         const body = protocol.invocation({
           command: invocation.command,
           accounts: invocation.accounts,
@@ -495,7 +499,9 @@ export const makeAppRunner = (host: AppRunnerHost) => {
           globalOutbound: host.outbound,
           elicit: capabilities.elicit,
           controls: capabilities.controls,
-          ...(capabilities.workflow === undefined ? {} : { workflow: capabilities.workflow }),
+          ...(capabilities.workflow === undefined
+            ? {}
+            : { workflow: protocol.workflow(capabilities.workflow) }),
           cache,
         });
         const result = yield* protocol.response(invocation.command, reply);

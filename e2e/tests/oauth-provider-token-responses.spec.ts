@@ -13,6 +13,7 @@ import { Api, body } from "../support/api.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer, type TokenShape } from "../support/oauth-setup-issuer.ts";
+import { appsManifest } from "../support/apps-release.ts";
 import { createProfile } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
 
@@ -128,14 +129,15 @@ const serviceApp = (
       files: [
         {
           path: "index.ts",
-          content: `import { defineApp, defineProvider, oauth2, query, object, string } from "apps";
+          content: `import { defineApp, defineProvider, oauth2, query, object, string, router } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: { oauth: ${method} } });
-export default defineApp({ accounts: { service } }, async ({ accounts }) => ({ queries: { read: query({ input: object({}) }, async ({ fetch }) => {
+export default defineApp({ accounts: { service } }, async ({ accounts }) => ({ tools: router({ read: query({ input: object({}) }, async ({ fetch }) => {
   const result = await fetch(${JSON.stringify(`${issuer.origin}/resource`)}, { headers: { authorization: "Bearer " + accounts.service.fields.access_token } });
   return ${echo};
-}) } }));
+}) }) }));
 `,
         },
+        appsManifest,
       ],
     });
     expect(imported.status, JSON.stringify(imported.body)).toBe(200);
@@ -219,7 +221,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({ q
           actors.owner,
           "POST",
           `${prefix}/apps/${app.id}/tools/call`,
-          { profile: signedIn.profile.id, tool: "queries.read", input: {} },
+          { profile: signedIn.profile.id, tool: "read", kind: "query", input: {} },
         );
         return { response, refreshes: (yield* issuer.metrics).refreshes - before };
       });

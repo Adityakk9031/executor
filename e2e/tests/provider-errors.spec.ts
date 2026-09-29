@@ -11,6 +11,7 @@ import { holdQuery } from "../support/query-transition.ts";
 import { providerErrorUpstream, providerSecretMarker } from "../support/provider-error-upstream.ts";
 import { authoredAppFiles } from "../support/authored-templates.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Failure = Schema.Struct({
   _tag: Schema.Literal("AppProviderFailed"),
@@ -40,11 +41,11 @@ layer(HostedLive, { excludeTestServices: true })("Provider errors", (it) => {
                   files: [
                     {
                       path: "index.ts",
-                      content: `import { defineApp, defineProvider, secrets, object, string, query, ProviderError } from "apps";
+                      content: `import { defineApp, defineProvider, secrets, object, string, query, ProviderError, router } from "apps";
 const provider = defineProvider({ name: "Custom service", auth: { apiKey: secrets({ label: "API key", fields: object({ token: string() }) }) } });
 export default defineApp({ accounts: { service: provider.many() } }, async ({ accounts, signal }) => {
   const account = accounts.service[1];
-  if (!account) return { queries: {} };
+  if (!account) return { tools: router({}) };
   async function read(phase) {
     const response = await fetch(${JSON.stringify(upstream.origin)} + "/custom/" + phase, { signal, headers: { Authorization: "Bearer " + account.fields.token } });
     if (response.ok) return { ok: true };
@@ -53,9 +54,12 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
     throw Object.assign(new ProviderError({ reason: "unauthorized", status: response.status, accountId: response.status === 402 ? "acc_unselected" : account.id }), { message: detail.message, title: "Forged title", account: { label: "Forged account" } });
   }
   await read("discover");
-  return { queries: { identity: query({ input: object({}) }, async () => read("call")) } };
+  return { tools: router({
+   identity: query({ input: object({}) }, async () => read("call")),
+ }) };
 });`,
                     },
+                    appsManifest,
                   ],
                 })
               : yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
@@ -80,7 +84,7 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
               yield* api.request(actors.owner, "GET", `${path}/source`),
             );
             expect(source.files.find((file) => file.path === "index.ts")?.content).toContain(
-              "graphqlOperations({",
+              "graphqlRouter({",
             );
             const updated = yield* api.request(actors.owner, "POST", `${path}/deploy`, {
               files: source.files.map((file) =>
@@ -88,8 +92,8 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
                   ? {
                       ...file,
                       content: file.content.replace(
-                        "graphqlOperations({",
-                        "graphqlOperations({ revalidate: true,",
+                        "graphqlRouter({",
+                        "graphqlRouter({ revalidate: true,",
                       ),
                     }
                   : file,
@@ -135,10 +139,10 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
           if (affected === undefined) return yield* Effect.die("Missing second account");
           const tool =
             kind === "graphql"
-              ? "queries.query_identity"
+              ? "query_identity"
               : kind === "openapi"
-                ? "queries.identity.getIdentity"
-                : "queries.identity";
+                ? "identity.getIdentity"
+                : "identity";
           const catalog = () =>
             api.request(actors.owner, "GET", `${path}/tools?profile=${profile.id}`);
           // The dashboard's index evaluates on every read.
@@ -148,6 +152,8 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
             api.request(actors.owner, "POST", `${path}/tools/call`, {
               profile: profile.id,
               tool,
+              // Every template's identity operation is a read.
+              kind: "query",
               input:
                 kind === "custom"
                   ? {}
@@ -207,7 +213,7 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
             // window, while the index shows the new failure.
             const kept = yield* catalog();
             expect(kept.status, JSON.stringify(kept.body)).toBe(200);
-            expect(kept.body).toMatchObject({ items: [{ name: "queries.identity" }] });
+            expect(kept.body).toMatchObject({ items: [{ name: "identity" }] });
             const forged = yield* body(Failure, yield* index());
             expect(forged.account).toBeUndefined();
             yield* upstream.configure({ status: 400 });

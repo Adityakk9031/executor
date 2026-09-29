@@ -254,6 +254,17 @@ export const scenarios = {
       local: na("Hosted deployment API scenario"),
     },
   },
+  appRouters: {
+    fixtures: "actors",
+    file: "app-routers.spec.ts",
+    title:
+      "Routers group tools by path, carry MCP and OpenAPI metadata and isolate a failing server",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Loopback MCP fixture"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
   dynamicOnlyApp: {
     fixtures: "actors",
     file: "dynamic-only-app.spec.ts",
@@ -877,6 +888,62 @@ export const scenarios = {
       ),
       local: na(
         "This scenario uses hosted routes; Local shares the same workerd compiler and runtime.",
+      ),
+    },
+  },
+  appFrameworkUpgrade: {
+    fixtures: "actors",
+    file: "app-framework-upgrade.spec.ts",
+    title: "Single-file apps keep their framework across host upgrades",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "This scenario restarts the product with another prepared runtime; Cloud shares the Worker compiler and framework storage.",
+      ),
+      local: na(
+        "This scenario uses hosted routes; Local shares the same workerd compiler and framework storage.",
+      ),
+    },
+  },
+  appProtocol1: {
+    fixtures: "actors",
+    file: "app-older-protocols.spec.ts",
+    title: "Protocol-1 builds keep working on the router host",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "This scenario serves archives and restarts the product on loopback; Cloud shares the protocol adapters.",
+      ),
+      local: na(
+        "This scenario uses hosted routes; Local shares the same workerd runtime and protocol adapters.",
+      ),
+    },
+  },
+  appProtocol2: {
+    fixtures: "actors",
+    file: "app-older-protocols.spec.ts",
+    title: "Protocol-2 builds keep working on the router host",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "This scenario serves archives and restarts the product on loopback; Cloud shares the protocol adapters.",
+      ),
+      local: na(
+        "This scenario uses hosted routes; Local shares the same workerd runtime and protocol adapters.",
+      ),
+    },
+  },
+  appProtocol3: {
+    fixtures: "actors",
+    file: "app-older-protocols.spec.ts",
+    title: "Protocol-3 builds keep working on the router host",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "This scenario serves archives and restarts the product on loopback; Cloud shares the protocol adapters.",
+      ),
+      local: na(
+        "This scenario uses hosted routes; Local shares the same workerd runtime and protocol adapters.",
       ),
     },
   },

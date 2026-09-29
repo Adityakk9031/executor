@@ -11,6 +11,7 @@ import { Evidence } from "../support/evidence.ts";
 import { frameworkSession } from "../support/framework.ts";
 import { McpOAuth } from "../support/mcp-oauth.ts";
 import { McpClient } from "../support/mcp-client.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const BuildFailed = Schema.Struct({
   _tag: Schema.Literal("DeploymentBuildFailed"),
@@ -53,24 +54,23 @@ const appMarker = "conversation.id is required";
 const operationApp = [
   {
     path: "index.ts",
-    content: `import { defineApp, defineDatabase, table, string, query, mutation, object } from "apps";
+    content: `import { defineApp, defineDatabase, table, string, query, mutation, object, router } from "apps";
 class ConversationMissing extends Error { override name = "ConversationMissing"; }
 export default defineApp({ accounts: {}, database: defineDatabase({ items: table({ label: string() }) }) }, {
-  queries: {
+  tools: router({
     fail: query({ input: object({}) }, async () => { throw new ConversationMissing(${JSON.stringify(appMarker)}); }),
     scans: query({ input: object({}) }, async (ctx) => {
       for (let index = 0; index < 101; index++) await ctx.db.items.withIndex("by_creation").first();
       return null;
     }),
-  },
-  mutations: {
-    fail: mutation({ input: object({}) }, async (ctx) => {
+    failWrite: mutation({ input: object({}) }, async (ctx) => {
       await ctx.db.items.insert({ label: "rolled back" });
       throw new TypeError(${JSON.stringify(appMarker)});
     }),
-  },
+  }),
 });`,
   },
+  appsManifest,
 ];
 
 layer(HostedLive, { excludeTestServices: true })("App failure details", (it) => {
@@ -85,15 +85,15 @@ layer(HostedLive, { excludeTestServices: true })("App failure details", (it) => 
         const deploy = (files: ReadonlyArray<{ path: string; content: string }>) =>
           api.request(actors.owner, "POST", `${prefix}/deploy`, {
             name: `Build failure ${randomUUID().slice(0, 8)}`,
-            files,
+            files: [...files, appsManifest],
           });
 
         // The compiler's own error and location reach the deployer.
         const compile = yield* deploy([
           {
             path: "index.ts",
-            content: `import { defineApp } from "apps";
-export default defineApp({ accounts: {} }, { queries: { broken: ) } });`,
+            content: `import { defineApp, router } from "apps";
+export default defineApp({ accounts: {} }, { tools: router({ broken: ) }) });`,
           },
         ]);
         yield* evidence.json("compile-failure.json", compile.body);
@@ -109,9 +109,9 @@ export default defineApp({ accounts: {} }, { queries: { broken: ) } });`,
         const missing = yield* deploy([
           {
             path: "index.ts",
-            content: `import { defineApp } from "apps";
+            content: `import { defineApp, router } from "apps";
 import { value } from "./not-there.ts";
-export default defineApp({ accounts: {} }, { queries: { value } });`,
+export default defineApp({ accounts: {} }, { tools: router({ value }) });`,
           },
         ]);
         yield* evidence.json("missing-module-failure.json", missing.body);
@@ -142,7 +142,7 @@ export default defineApp({ accounts: {} }, {});`,
             {
               name: "execute",
               arguments: {
-                code: `return await tools.executor.profiles[${JSON.stringify(profile.id)}].mutations.apps.deploy(${JSON.stringify(
+                code: `return await tools.executor.profiles[${JSON.stringify(profile.id)}].apps.deploy(${JSON.stringify(
                   {
                     path: { organization: actors.organization.id },
                     body: {
@@ -152,6 +152,7 @@ export default defineApp({ accounts: {} }, {});`,
                           path: "index.ts",
                           content: `import { defineApp } from "apps";\nthrow new Error(${JSON.stringify(declarationMarker)});\nexport default defineApp({ accounts: {} }, {});`,
                         },
+                        appsManifest,
                       ],
                     },
                   },
@@ -191,22 +192,26 @@ export default defineApp({ accounts: {} }, {});`,
         yield* Effect.addFinalizer(() =>
           api.request(actors.owner, "DELETE", `${prefix}/${app.id}`).pipe(Effect.orDie),
         );
-        const call = (tool: string) =>
-          api.request(actors.owner, "POST", `${prefix}/${app.id}/tools/call`, { tool, input: {} });
+        const call = (tool: string, kind: "query" | "mutation") =>
+          api.request(actors.owner, "POST", `${prefix}/${app.id}/tools/call`, {
+            tool,
+            kind,
+            input: {},
+          });
 
         // The app's own error name and message pass through, not a fixed SDK reason.
-        const query = yield* body(ToolFailed, yield* call("queries.fail"));
+        const query = yield* body(ToolFailed, yield* call("fail", "query"));
         expect(query.failure).toEqual({
           source: "app",
           errorName: "ConversationMissing",
           message: appMarker,
         });
         expect(query.reason).toBe(`The app threw ConversationMissing: ${appMarker}`);
-        const mutation = yield* body(ToolFailed, yield* call("mutations.fail"));
+        const mutation = yield* body(ToolFailed, yield* call("failWrite", "mutation"));
         expect(mutation.failure).toMatchObject({ source: "app", errorName: "TypeError" });
 
         // A host storage limit names itself instead of failing silently.
-        const scans = yield* body(ToolFailed, yield* call("queries.scans"));
+        const scans = yield* body(ToolFailed, yield* call("scans", "query"));
         yield* evidence.json("storage-limit-failure.json", scans);
         expect(scans.failure.source).toBe("storage");
         expect(scans.failure.message.length).toBeGreaterThan(0);
@@ -219,7 +224,7 @@ export default defineApp({ accounts: {} }, {});`,
             {
               name: "execute",
               arguments: {
-                code: `return await tools[${JSON.stringify(app.slug)}].queries.fail({});`,
+                code: `return await tools[${JSON.stringify(app.slug)}].fail({});`,
               },
             },
             undefined,

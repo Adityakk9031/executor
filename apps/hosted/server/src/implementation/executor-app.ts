@@ -1,4 +1,4 @@
-import { SourceFiles, type SourceFile } from "@executor-js/sdk/core";
+import { SourceFiles } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 import { packageFile } from "@executor-js/app-templates";
 /** Executor uses the same source generator, provider accounts and deployments as other API apps. */
@@ -9,16 +9,14 @@ const managementIndex = (
   origin: string,
   apiKey = false,
 ) => `import { defineApp, dynamicSkills } from "apps";
-import { liveOpenapiOperations } from "apps/openapi";
+import { liveOpenapiRouter } from "apps/openapi";
 import { wellKnownSkills } from "apps/skills";
 import { provider } from "./provider.ts";
 import configuration from "./openapi.json";
-import { frameworkQueries } from "./framework.ts";
-import reference from "./framework-reference.json";
 
 export default defineApp({ accounts: { service: provider } }, async (context) => {
   const account = context.accounts.service;
-  const operations = liveOpenapiOperations({
+  const tools = liveOpenapiRouter({
     ...configuration,
     cache: context.cache,
     ${
@@ -39,7 +37,7 @@ export default defineApp({ accounts: { service: provider } }, async (context) =>
     ...(context.signal === undefined ? {} : { signal: context.signal }),
   });
   const skills = dynamicSkills({ list: () => wellKnownSkills({ url: ${JSON.stringify(`${origin}/.well-known/agent-skills/index.json`)}, cache: context.cache, fetch: context.fetch, signal: context.signal }) });
-  return { ...operations, dynamicSkills: skills, queries: { ...operations.queries, ...frameworkQueries(reference) } };
+  return { tools, dynamicSkills: skills };
 });
 `;
 
@@ -64,11 +62,7 @@ const managementConfiguration = (origin: string, document: HostedApiDocument) =>
   );
 
 /** The version installed from the catalog. Existing untouched copies are recognized by exact files. */
-export const executorAppSource = (
-  origin: string,
-  skills: readonly SourceFile[],
-  document: HostedApiDocument,
-) =>
+export const executorAppSource = (origin: string, document: HostedApiDocument) =>
   Effect.succeed({
     files: SourceFiles.make([
       { path: "index.ts", content: managementIndex(origin) },
@@ -86,16 +80,11 @@ export const provider = defineProvider({ name: "Executor", auth: {
 } })
 `,
       },
-      ...skills.filter((file) => !file.path.startsWith("skills/")),
     ]),
   });
 
 /** The default app accepts a saved user API key through the ordinary secrets method. */
-export const defaultExecutorAppSource = (
-  origin: string,
-  skills: readonly SourceFile[],
-  document: HostedApiDocument,
-) =>
+export const defaultExecutorAppSource = (origin: string, document: HostedApiDocument) =>
   Effect.succeed({
     files: SourceFiles.make([
       {
@@ -114,6 +103,5 @@ export const provider = defineProvider({ name: "Executor", auth: {
       },
       { path: "openapi.json", content: managementConfiguration(origin, document) },
       packageFile("executor"),
-      ...skills.filter((file) => !file.path.startsWith("skills/")),
     ]),
   });

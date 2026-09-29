@@ -5,6 +5,7 @@ import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
+import { appsManifest } from "../support/apps-release.ts";
 import { oauthMcpAppFiles } from "../support/authored-templates.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
@@ -469,8 +470,9 @@ layer(HostedLive, { excludeTestServices: true })("OAuth failure diagnostics", (i
                 path: "index.ts",
                 content: `import { defineApp, defineProvider, oauth2 } from "apps";
 const service=defineProvider({name:"Path service",auth:{oauth:oauth2({discover:${JSON.stringify(`${issuer.origin}/v1/mcp`)}})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({}));`,
               },
+              appsManifest,
             ],
           });
           expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -520,10 +522,11 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, defineProvider, oauth2 } from "apps";
+                content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Unusable metadata service",auth:{oauth:oauth2({discover:${JSON.stringify(`${issuer.origin}/mcp`)}})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools:router({})}));`,
               },
+              appsManifest,
             ],
           });
           expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);

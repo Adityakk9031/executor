@@ -47,14 +47,14 @@ layer(HostedLive, { excludeTestServices: true })("Executor organization default"
           }),
           yield* api.request(actors.owner, "GET", `${path}/source`),
         );
-        expect(declaredApps(deployed.files)).toBe(yield* appsVersion);
+        expect(declaredApps(deployed.files)).toBe(appsVersion);
 
         const tool = yield* body(
           ListTool,
           yield* api.request(
             actors.owner,
             "GET",
-            `${path}/tools/queries.appManagement.list?profile=${profile.id}`,
+            `${path}/tools/appManagement.list?profile=${profile.id}`,
           ),
         );
         expect(tool.inputSchema.required ?? []).not.toContain("path");
@@ -79,7 +79,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor organization default"
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].queries.appManagement.list({});`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].appManagement.list({});`,
                 },
               },
               undefined,

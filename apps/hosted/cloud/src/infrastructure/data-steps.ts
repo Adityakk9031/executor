@@ -17,15 +17,17 @@ const tickBudgetMs = 20_000;
 
 /**
  * Read during Worker initialization, so Alchemy binds the deploy's values into the Worker.
- * `CLOUD_DATA_STEPS` is `report` unless a deploy sets `apply`. Each build version gets its own
- * report, so every deploy in report mode refreshes it.
+ * `CLOUD_DATA_STEPS` is `report` unless a deploy sets `apply`. Every deploy resumes the same
+ * report, `report:<CLOUD_DATA_STEPS_REPORT>` (`report:cloud` by default): step names are immutable,
+ * so a later build's outcomes for a step are comparable with an earlier one's. A report restarts
+ * from the first item only when a deploy sets a new label.
  */
 export const cloudDataSteps = Effect.gen(function* () {
   const mode = yield* Config.Literals(["report", "apply"], "CLOUD_DATA_STEPS").pipe(
     Config.withDefault("report" as const),
   );
-  const report = yield* Config.NonEmptyString("EXECUTOR_BUILD_VERSION").pipe(
-    Config.withDefault("development"),
+  const report = yield* Config.NonEmptyString("CLOUD_DATA_STEPS_REPORT").pipe(
+    Config.withDefault("cloud"),
   );
   return Effect.gen(function* () {
     const host = yield* Effect.flatten(AppManagementHost);

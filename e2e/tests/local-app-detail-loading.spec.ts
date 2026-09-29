@@ -9,6 +9,7 @@ import { Target } from "../support/platform.ts";
 import { checkAppLoading } from "../support/app-loading.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(TestLive, { excludeTestServices: true })("Local app navigation", (it) => {
   for (const [scenario, viewport] of [
@@ -35,11 +36,14 @@ layer(TestLive, { excludeTestServices: true })("Local app navigation", (it) => {
                 {
                   path: "index.ts",
                   content: `
-import { defineApp, query, object } from "apps";
+import { defineApp, query, object, router } from "apps";
 export default defineApp({ accounts: {} }, async () => ({
-  queries: { hello: query({ description: "A simple greeting", input: object({}) }, async () => "Hello") }
+  tools: router({
+    hello: query({ description: "A simple greeting", input: object({}) }, async () => "Hello"),
+  })
 }));`,
                 },
+                appsManifest,
               ],
             },
             headers,
@@ -70,7 +74,7 @@ export default defineApp({ accounts: {} }, async () => ({
                 view === "settings"
                   ? 'section[aria-label="App name"]'
                   : view === "tools"
-                    ? 'button[title="queries.hello"]'
+                    ? 'button[title="hello"]'
                     : undefined;
               if (content === undefined) return;
               const record = { shown: false, reverted: false };

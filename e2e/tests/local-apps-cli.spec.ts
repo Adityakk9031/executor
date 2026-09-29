@@ -156,7 +156,7 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
         yield* fs.makeDirectory(`${source}/.git`);
         yield* fs.writeFileString(
           `${source}/index.ts`,
-          'import { defineApp } from "apps";\nimport { label } from "./lib/label.ts";\nexport default defineApp({ accounts: {} }, async () => ({ queries: {} }));\nvoid label;\n',
+          'import { defineApp, router } from "apps";\nimport { label } from "./lib/label.ts";\nexport default defineApp({ accounts: {} }, async () => ({ tools: router({}) }));\nvoid label;\n',
         );
         yield* fs.writeFileString(`${source}/lib/label.ts`, 'export const label = "cli";\n');
         yield* fs.writeFileString(`${source}/node_modules/ignored/index.js`, "ignored\n");
@@ -182,6 +182,18 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
             .map((file) => file.path)
             .sort(),
         ).toEqual(["index.ts", "lib/label.ts"]);
+        // The directory declares no apps release, so deploying it is refused with the one to add.
+        const directory = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Workspace))(
+          read.stdout,
+        );
+        const refused = yield* run(
+          ["deploy", "--host", origin, "--app", app.id, "--commit", directory.revision.commit],
+          true,
+        );
+        expect(refused.code).toBe(1);
+        expect(refused.stderr).toContain(
+          `Add "apps": "${appsVersion}" to package.json dependencies.`,
+        );
       }),
     ),
   );
@@ -212,7 +224,7 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
         const starterWorkspace = yield* Schema.decodeUnknownEffect(
           Schema.fromJsonString(Workspace),
         )(starterSource.stdout);
-        expect(declaredApps(starterWorkspace.files)).toBe(yield* appsVersion);
+        expect(declaredApps(starterWorkspace.files)).toBe(appsVersion);
         const deployed = yield* run(
           [
             "deploy",
@@ -244,7 +256,7 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
         expect(executorSource.status).toBe(200);
         expect(
           declaredApps((yield* Schema.decodeUnknownEffect(Deployed)(executorSource.body)).files),
-        ).toBe(yield* appsVersion);
+        ).toBe(appsVersion);
       }),
     ),
   );

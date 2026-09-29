@@ -4,8 +4,16 @@
  * builds and converts between the host's current model and that protocol's messages. The current
  * protocol's adapter is the identity. A new protocol adds an adapter here; older ones stay.
  */
-import { Effect } from "effect";
-import type { HostInvocation, HostRequest } from "apps/contracts";
+import { Effect, Schema } from "effect";
+import {
+  HostKindMismatch,
+  protocol1,
+  protocol2,
+  protocol3,
+  type HostInvocation,
+  type HostRequest,
+  type WorkflowExecution,
+} from "apps/contracts";
 import type { SourceFile } from "../contracts/deployment.ts";
 import { RuntimeProtocolUnsupported } from "../contracts/runtime.ts";
 import { appBridge, nodeAppEntry } from "./worker-bridge.ts";
@@ -22,38 +30,99 @@ export interface AppProtocol {
   /** Encode one current command for a bundle of this protocol. */
   readonly request: (command: HostRequest) => unknown;
   /**
+   * The encoded failure for a command that this protocol's bundles would not run as asked.
+   * The host fails the command with it and sends nothing to the bundle.
+   */
+  readonly refuse: (command: HostRequest) => unknown;
+  /**
    * Convert a bundle's reply to `command` into the host's current envelope. Transport fields
    * beside the envelope, such as telemetry, pass through unchanged.
    */
   readonly response: (command: HostRequest, body: unknown) => Effect.Effect<unknown>;
+  /** Adapt the workflow steps a bundle of this protocol invokes to the host's current model. */
+  readonly workflow: (execution: WorkflowExecution) => WorkflowExecution;
 }
 
-/** Protocol 3 is the host's current protocol, so its messages need no conversion. */
-const protocol3: AppProtocol = {
-  version: 3,
+/** Protocol 4 is the host's current protocol, so its messages need no conversion. */
+const protocol4: AppProtocol = {
+  version: 4,
   workerEntry: appBridge,
-  nodeEntry: nodeAppEntry,
+  nodeEntry: nodeAppEntry(4),
   invocation: (input) => JSON.stringify(input),
   request: (command) => command,
+  refuse: () => undefined,
   response: (_command, body) => Effect.succeed(body),
+  workflow: (execution) => execution,
 };
 
-/**
- * Protocol 2 has the same requests and entry. Its failures lack protocol 3's optional failure
- * detail, so every protocol 2 reply is already a protocol 3 reply without that detail. Protocol 2
- * bundles ignore the detail in workflow step replies.
- */
-const protocol2: AppProtocol = { ...protocol3, version: 2 };
+/** The protocols released before routers and call kinds. */
+const legacyProtocols = { 1: protocol1, 2: protocol2, 3: protocol3 } as const;
+type LegacyVersion = keyof typeof legacyProtocols;
 
 /**
- * Protocol 1 differs from protocol 2 only in its skill catalog reply, which never says whether a
- * loader read through the app cache. That reply is already a valid protocol 2 reply whose loader
- * did not, so its messages need no conversion either.
+ * Protocols 1, 2 and 3 predate routers and call kinds and share one adapter, parameterized by
+ * version. Their tools are named `queries.<name>` and `mutations.<name>`, and those names are kept:
+ * they are what saved grants, approvals and schedules refer to.
+ *
+ * Their calls carry no kind: the bundle derives it from the tool's prefix. The host still chooses
+ * storage from the caller's kind, so a call whose kind disagrees with its prefix fails here
+ * instead of running in the wrong mode. Inspection answers with a plain list of tools, which
+ * becomes a catalog without routers. Workflow steps name an operation within its kind's catalog,
+ * so the host prefixes the name to get the tool.
+ *
+ * What each added over the one before needs no conversion. Protocol 2's skill catalog reply may
+ * say whether its loader read through the app cache; protocol 1 never does, which reads as a
+ * loader that did not. Protocol 3's failures may carry the app's error detail; earlier failures
+ * are the same failures without it, and earlier bundles ignore the detail in workflow step replies.
  */
-const protocol1: AppProtocol = { ...protocol3, version: 1 };
+const prefixKind = (tool: string) =>
+  tool.startsWith("queries.") ? "query" : tool.startsWith("mutations.") ? "mutation" : undefined;
+const legacyCommand = (command: HostRequest) =>
+  command.operation === "call"
+    ? { operation: "call", tool: command.tool, input: command.input }
+    : command;
+const legacyProtocol = (version: LegacyVersion): AppProtocol => {
+  const { tools, toolSummaries } = legacyProtocols[version].schemas;
+  const listed = Schema.Struct({ ok: Schema.Literal(true), value: tools });
+  const summarized = Schema.Struct({ ok: Schema.Literal(true), value: toolSummaries });
+  return {
+    version,
+    workerEntry: appBridge,
+    nodeEntry: nodeAppEntry(version),
+    invocation: (input) => JSON.stringify({ ...input, command: legacyCommand(input.command) }),
+    request: legacyCommand,
+    refuse: (command) => {
+      if (command.operation !== "call" || command.kind === undefined) return undefined;
+      const actual = prefixKind(command.tool);
+      return actual === undefined || actual === command.kind
+        ? undefined
+        : Schema.encodeSync(HostKindMismatch)(
+            new HostKindMismatch({ tool: command.tool, requested: command.kind, actual }),
+          );
+    },
+    response: (command, body) =>
+      Effect.succeed(
+        command.operation === "inspect" &&
+          Schema.is(command.detail === "summary" ? summarized : listed)(body)
+          ? { ...body, value: { tools: body.value, routers: [] } }
+          : body,
+      ),
+    workflow: (execution) => ({
+      ...execution,
+      invoke: (input) =>
+        execution.invoke({
+          ...input,
+          name: `${input.kind === "query" ? "queries" : "mutations"}.${input.name}`,
+        }),
+    }),
+  };
+};
 
 const protocols: ReadonlyMap<number, AppProtocol> = new Map(
-  [protocol1, protocol2, protocol3].map((protocol) => [protocol.version, protocol]),
+  [legacyProtocol(1), legacyProtocol(2), legacyProtocol(3), protocol4].map((protocol) => [
+    protocol.version,
+    protocol,
+  ]),
 );
 
 /** Protocols this host builds and runs. */

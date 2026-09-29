@@ -30,6 +30,7 @@ import {
 import type { Executor } from "../contracts/executor.ts";
 import {
   RuntimeBuildFailed,
+  RuntimeAppsDependencyMissing,
   RuntimeProtocolUnsupported,
   type Runtime,
 } from "../contracts/runtime.ts";
@@ -270,7 +271,14 @@ export const makeApps = (
                   reason: `${error.message} Declare a supported apps version.`,
                   message: `${error.message} Declare a supported apps version.`,
                 })
-              : deploymentBuildFailed(input.owner, deployName, error),
+              : Schema.is(RuntimeAppsDependencyMissing)(error)
+                ? new DeploymentBuildFailed({
+                    owner: input.owner,
+                    name: deployName,
+                    reason: error.message,
+                    message: error.message,
+                  })
+                : deploymentBuildFailed(input.owner, deployName, error),
         ),
       );
       const entries = yield* Effect.forEach(

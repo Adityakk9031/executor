@@ -13,7 +13,11 @@ import {
 import { WorkflowSeed } from "./workflow-runtime.ts";
 import { RetainedWorkerBuild, WorkerBundle } from "./worker-build.ts";
 import { SourceFiles } from "./deployment.ts";
-import { RuntimeBuildFailed, RuntimeProtocolUnsupported } from "./runtime.ts";
+import {
+  RuntimeAppsDependencyMissing,
+  RuntimeBuildFailed,
+  RuntimeProtocolUnsupported,
+} from "./runtime.ts";
 import type { RpcTarget } from "capnweb";
 
 /**
@@ -42,7 +46,7 @@ export interface AppHostCallbacks extends RpcTarget {
   /** The invocation's encoded build, read only when the runner cold-starts its Worker. */
   load(): Promise<string>;
 }
-/** Sources without `dependencies.apps` compile against the runtime's own framework. */
+/** Sources declare the `apps` release they use in `dependencies.apps`; the host has none. */
 export const CompileWorkerApp = Schema.Struct({ files: SourceFiles });
 /** Compiler output is validated before it is retained by the host. */
 export const CompiledWorkerApp = Schema.Struct({
@@ -65,7 +69,11 @@ export const CompileWorkerResult = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), value: CompiledWorkerApp }),
   Schema.Struct({
     ok: Schema.Literal(false),
-    error: Schema.Union([RuntimeBuildFailed, RuntimeProtocolUnsupported]),
+    error: Schema.Union([
+      RuntimeBuildFailed,
+      RuntimeProtocolUnsupported,
+      RuntimeAppsDependencyMissing,
+    ]),
   }),
 ]);
 /** RPC surface hosted by a trusted Worker; authored modules receive no host bindings. */

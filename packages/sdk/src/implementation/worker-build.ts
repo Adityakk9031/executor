@@ -1,6 +1,11 @@
 /** Compile server and browser source inside workerd using Cloudflare's dependency resolver. */
 import { createApp, InMemoryFileSystem } from "@cloudflare/worker-bundler";
-import { boundBuildMessage, describeBuildCause, RuntimeBuildFailed } from "../contracts/runtime.ts";
+import {
+  boundBuildMessage,
+  describeBuildCause,
+  RuntimeAppsDependencyMissing,
+  RuntimeBuildFailed,
+} from "../contracts/runtime.ts";
 import type { SourceFiles } from "../contracts/deployment.ts";
 import { prepareUiBuild } from "./ui-build.ts";
 import { Effect, Option, Path, Schema } from "effect";
@@ -14,15 +19,14 @@ import { appProtocol } from "./app-protocols.ts";
 import { browserBuild } from "./worker-browser-build.ts";
 import { wasmBuild } from "./worker-wasm-build.ts";
 import { workerDependencies } from "./worker-dependencies.ts";
-/** Framework for sources that do not declare their own apps dependency. */
+import apps from "apps/package.json" with { type: "json" };
 export type WorkerFramework = AppFramework;
 
 /**
- * What the compiling host contributes: its framework for sources that do not declare one, and
- * optionally a registry that replaces the public npm registry.
+ * What the compiling host contributes. `registry` replaces the public npm registry. A host has no
+ * framework of its own: every source declares the `apps` release it uses in `dependencies.apps`.
  */
 export interface WorkerHost {
-  readonly framework: WorkerFramework;
   readonly registry?: string;
 }
 
@@ -143,9 +147,9 @@ export const compileWorkerApp = (files: SourceFiles, host: WorkerHost) =>
       Object.fromEntries(files.map((file) => [file.path, file.content])),
     );
     const dependencies = yield* workerDependencies(filesystem, host.registry);
-    const selected = (yield* dependencies.framework)
-      ? yield* selectedFramework(filesystem)
-      : host.framework;
+    if (!(yield* dependencies.framework))
+      return yield* new RuntimeAppsDependencyMissing({ version: apps.version });
+    const selected = yield* selectedFramework(filesystem);
     const protocol = yield* appProtocol(selected.protocol);
     filesystem.write("__executor_worker.ts", protocol.workerEntry(files));
     const plan = yield* prepareUiBuild(files);

@@ -6,8 +6,8 @@ import {
   type HostInspectError,
   type HostCallError,
   type HostDataError,
-  type HostedTool,
-  type HostedToolSummary,
+  type HostedCatalog,
+  type HostedCatalogSummary,
   type SkillCatalog,
   type HostContext,
   type WebhookCommand,
@@ -114,6 +114,18 @@ export class RuntimeProtocolUnsupported extends Schema.TaggedError<RuntimeProtoc
     return `This app's apps framework uses host protocol ${this.protocol}. This host supports protocol ${this.supported.join(", ")}.`;
   }
 }
+/**
+ * The app's `package.json` declares no `apps` version. Every app declares the exact release it uses;
+ * `version` is the one this host ships, which new apps pin.
+ */
+export class RuntimeAppsDependencyMissing extends Schema.TaggedError<RuntimeAppsDependencyMissing>()(
+  "RuntimeAppsDependencyMissing",
+  { version: Schema.NonEmptyString },
+) {
+  override get message() {
+    return `Add "apps": "${this.version}" to package.json dependencies. Every app declares the exact apps version it uses; ${this.version} is this host's.`;
+  }
+}
 /** Loading retained code and decoding the framework protocol are host failures. */
 export type RuntimeLoadError =
   | RuntimeBuildUnavailable
@@ -126,12 +138,15 @@ export interface Runtime<Requirements = never> {
    * A revision identifies all writes before that event; unversioned hosts emit void.
    */
   readonly changes?: (app: string) => Stream.Stream<number | void, RuntimeLoadError>;
-  /** Sources that declare `dependencies.apps` use that package; others use this host's framework. */
+  /** Sources build with the `apps` package they declare; sources without one are rejected. */
   readonly build: (input: {
     readonly files: SourceFiles;
   }) => Effect.Effect<
     BuiltApp,
-    RuntimeBuildFailed | RuntimeProtocolUnsupported | BuildMemoryExceeded,
+    | RuntimeBuildFailed
+    | RuntimeProtocolUnsupported
+    | RuntimeAppsDependencyMissing
+    | BuildMemoryExceeded,
     Requirements
   >;
   readonly asset?: (input: {
@@ -159,16 +174,12 @@ export interface Runtime<Requirements = never> {
       /** Describe only declared operations with schedules. Send only to scheduledTools builds. */
       readonly scheduled?: true;
     } & HostContext,
-  ) => Effect.Effect<
-    readonly HostedTool[],
-    RuntimeLoadError | typeof HostInspectError.Type,
-    Requirements
-  >;
+  ) => Effect.Effect<HostedCatalog, RuntimeLoadError | typeof HostInspectError.Type, Requirements>;
   /** List the current tools without their schemas. */
   readonly index: (
     input: { readonly app: string; readonly build: BuildId } & HostContext,
   ) => Effect.Effect<
-    readonly HostedToolSummary[],
+    HostedCatalogSummary,
     RuntimeLoadError | typeof HostInspectError.Type,
     Requirements
   >;
@@ -215,6 +226,8 @@ export interface Runtime<Requirements = never> {
       readonly build: BuildId;
       readonly database: boolean;
       readonly tool: string;
+      /** Decides the storage mode before the app runs; the host verifies it. */
+      readonly kind?: "query" | "mutation";
       readonly input: Json;
     } & HostContext,
   ) => Effect.Effect<Json, RuntimeLoadError | typeof HostCallError.Type, Requirements>;

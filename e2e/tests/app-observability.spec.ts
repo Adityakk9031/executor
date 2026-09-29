@@ -11,15 +11,18 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { Target } from "../support/platform.ts";
+import { withApps } from "../support/apps-release.ts";
 
 const files = [
   {
     path: "package.json",
-    content: JSON.stringify({ dependencies: { react: "^19.2.0", "react-dom": "^19.2.0" } }),
+    content: JSON.stringify({
+      dependencies: withApps({ react: "^19.2.0", "react-dom": "^19.2.0" }),
+    }),
   },
   {
     path: "index.ts",
-    content: `import { defineApp, defineDatabase, table, query, mutation, object, string, array } from "apps";
+    content: `import { defineApp, defineDatabase, table, query, mutation, object, string, array, router } from "apps";
 const database = defineDatabase({ items: table({ text: string() }) });
 export const list = query({ input: object({}), output: array(string()) }, async ({ db }) => {
   await new Promise(resolve => setTimeout(resolve, 75));
@@ -34,7 +37,10 @@ export const hostCache = query({ input: object({ key: string() }), output: strin
     return (await cache.match(key)) === undefined ? "isolated" : "visible";
   } catch { return "unavailable"; }
 });
-export default defineApp({ accounts: {}, database }, { queries: { list, hostCache }, mutations: { add } });`,
+export default defineApp({ accounts: {}, database }, { tools: router({
+   list, hostCache,
+   add,
+ }) });`,
   },
   {
     path: "ui/index.html",

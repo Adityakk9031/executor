@@ -136,7 +136,7 @@ const prepare = (state: DurableObjectState, env: Environment) =>
       const blobs = bindingBlobStore(env.BLOBS);
       const directory = yield* Config.NonEmptyString("EXECUTOR_REPOSITORIES_DIR");
       const services = yield* Layer.build(
-        selfHostExecutorServices(executorSkillFiles(skills), egress, () =>
+        selfHostExecutorServices(egress, () =>
           Effect.gen(function* () {
             const host = yield* bindingWorkerdApps({
               binding: env.APPS,

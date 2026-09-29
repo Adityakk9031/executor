@@ -1,10 +1,26 @@
 /** Shared authored workflow fixture and public wire projections for real product HTTP tests. */
 import { Schema } from "effect";
+import { withApps } from "./apps-release.ts";
+
+/** Each fixture tool's kind, as the app declares it. Calls must name it. */
+export const workflowToolKinds = {
+  isolation: "query",
+  rows: "query",
+  save: "mutation",
+  release: "mutation",
+  released: "query",
+  denied: "mutation",
+  approval: "mutation",
+  interactive: "query",
+  timeoutWrite: "mutation",
+  launch: "mutation",
+  history: "query",
+} as const;
 
 export const workflowFiles = (version: string) => [
   {
     path: "package.json",
-    content: JSON.stringify({ dependencies: { "brotli-wasm": "3.0.1" } }),
+    content: JSON.stringify({ dependencies: withApps({ "brotli-wasm": "3.0.1" }) }),
   },
   {
     path: "context.ts",
@@ -13,7 +29,9 @@ if (!(wasm instanceof WebAssembly.Module) || !WebAssembly.Module.exports(wasm).s
   throw new Error("Retained WASM module was not available in this app context");
 }
 import { defineDatabase, defineProvider, secrets, table, object, string,
-  type QueryContext, type MutationContext, type WorkflowContext } from "apps";
+  type QueryContext, type MutationContext, type WorkflowContext,
+  router,
+} from "apps";
 const service = defineProvider({ name: "Workflow fixture", auth: {
   key: secrets({ label: "Key", fields: object({ token: string() }) })
 } });
@@ -126,12 +144,15 @@ export const fatal = workflow({ input: object({}) }, async (ctx: WorkflowCtx) =>
   },
   {
     path: "index.ts",
-    content: `import { defineApp } from "apps";
+    content: `import { defineApp, router } from "apps";
 import { requirements } from "./context.ts";
 import { rows, save, release, released, denied, approval, interactive, timeoutWrite, explode, launch, history, isolation } from "./operations.ts";
 import * as workflows from "./workflows.ts";
 export default defineApp(requirements, {
-  queries: { rows, released, interactive, history, isolation }, mutations: { save, release, denied, approval, timeoutWrite, explode, launch }, workflows
+  tools: router({
+    rows, released, interactive, history, isolation,
+    save, release, denied, approval, timeoutWrite, explode, launch,
+  }), workflows
 });`,
   },
 ];

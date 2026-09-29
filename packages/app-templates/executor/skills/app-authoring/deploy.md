@@ -12,13 +12,13 @@ return await tools.search({ query: "Executor" });
 Search returns `items` with exact callable `path`, `description` and TypeScript
 `signature`. It also returns `remaining` and `next: { offset } | null` for paging.
 Hosted exposes tools generated from its OpenAPI spec under `tools.executor`.
-Discover and call `queries.context.get({})` to read the organization approved
+Discover and call `context.get({})` to read the organization approved
 for this MCP connection. Its result has `organization`, `slug` and `role`.
 Use `organization` explicitly in management calls. Never guess `me` or `default`,
 and do not search local files for an organization or credentials.
 
 ```js
-return await tools.executor.profiles["<management-profile-id>"].mutations.apps.deploy({
+return await tools.executor.profiles["<management-profile-id>"].apps.deploy({
   path: { organization: "<approved-organization-id>" },
   body: {
     name: "Hello",
@@ -28,9 +28,9 @@ return await tools.executor.profiles["<management-profile-id>"].mutations.apps.d
 ```
 
 For an app you will edit, use the create, commit and deploy workflow. Local and hosted management
-apps generate `mutations.appManagement.create`, `queries.appManagement.source`,
-`mutations.appManagement.commit`, `mutations.appManagement.deploy`, and
-`mutations.appManagement.copy` from the serving OpenAPI contracts. Discover
+apps generate `appManagement.create`, `appManagement.source`,
+`appManagement.commit`, `appManagement.deploy`, and
+`appManagement.copy` from the serving OpenAPI contracts. Discover
 their exact signatures first. They use ordinary app IDs, with route parameters
 under `path` and request payloads under `body`.
 
@@ -69,11 +69,11 @@ the connection request:
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
 const path = { organization: "<approved-organization-id>", app: "<app-id>" };
-const profile = await executor.mutations.profiles.create({
+const profile = await executor.profiles.create({
   path,
   body: { accounts: {}, idempotencyKey: "vercel-setup" },
 });
-return await executor.mutations.accounts.connect({
+return await executor.accounts.connect({
   path,
   body: { profile: profile.id, requirement: "vercel" },
 });
@@ -95,7 +95,7 @@ Send the actual source string in `files[].content`.
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
-return await executor.mutations.apps.deploy({
+return await executor.apps.deploy({
   body: {
     owner: "my-project",
     name: "Hello",
@@ -114,7 +114,7 @@ Discovery is prepared at the start of each `execute`. In a **new** execution,
 call the deployed app using its returned `app.slug`:
 
 ```js
-return await tools["<app-slug>"].queries.greet({ name: "Ada" });
+return await tools["<app-slug>"].greet({ name: "Ada" });
 ```
 
 App source and `execute` code run in different environments. App source can
@@ -125,7 +125,7 @@ source strings through `apps.deploy`.
 
 ### Carry source as data
 
-When source comes from `framework_describe` or `appManagement.source`, transform
+When source comes from `framework.describe` or `appManagement.source`, transform
 its `files` in the same execution and pass them to create or commit. For a small
 edit, replace only the affected file content and retain the other files. Check
 that the expected text exists before applying a text replacement. Do not print
@@ -149,7 +149,7 @@ with the running app.
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
 const path = { organization: "<approved-organization-id>", app: "<app-id>" };
-const source = await executor.queries.appManagement.source({ path });
+const source = await executor.appManagement.source({ path });
 const entry = source.files.find((file) => file.path === "index.ts");
 if (!entry || entry.content.split("<exact old text>").length !== 2) {
   throw new Error("Expected one match in index.ts; review the edit.");
@@ -159,11 +159,11 @@ const files = source.files.map((file) =>
     ? { ...file, content: file.content.replace("<exact old text>", "<replacement text>") }
     : file,
 );
-const saved = await executor.mutations.appManagement.commit({
+const saved = await executor.appManagement.commit({
   path,
   body: { expected: source.revision.commit, files, message: "Update app" },
 });
-return await executor.mutations.appManagement.deploy({
+return await executor.appManagement.deploy({
   path,
   body: { commit: saved.revision.commit },
 });
@@ -186,16 +186,15 @@ hosted product’s access rules. Discover tools again in a new execute after cha
 
 ## Dependencies and current boundaries
 
-Declare the exact `apps` version in `package.json` `dependencies`:
-`{ "dependencies": { "apps": "<version>" } }`. That package supplies the server
-and browser framework, and the exact version keeps rebuilds on it across host
-upgrades. New apps created by Executor already declare the host's version; copy
-it from one when writing `package.json` yourself, keep it when editing, and
-change it only to upgrade the app. The host retains the compiled version with each deployment. Missing
+Every app declares the exact `apps` version in `package.json` `dependencies`:
+`{ "dependencies": { "apps": "<version>" } }`. A deploy without it fails and names
+the version this host ships. That package supplies the server and browser
+framework, and the exact version keeps rebuilds on it across host upgrades. New
+apps created by Executor already declare the host's version; keep it when
+editing, and change it only to upgrade the app. The host retains the compiled version with each deployment. Missing
 or unsupported packages fail the build without replacing the active app.
 Installation disables lifecycle scripts. Do not depend on the Executor SDK in
-app code. Without a declared `apps` package, the Node SDK adapter reserves `apps`
-and Effect for the host. Native dependencies that need scripts are unsupported.
+app code. Native dependencies that need scripts are unsupported.
 
 Hosted builds currently run with limited memory. A build with very large
 dependencies can fail with `BuildMemoryExceeded`; no new deployment is activated.

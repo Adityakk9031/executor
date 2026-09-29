@@ -10,12 +10,13 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { nameConnectedAccount } from "../support/name-account.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Access = Schema.Struct({ revision: Schema.String });
 const Group = Schema.Struct({ id: Schema.String, revision: Schema.String });
-const source = `import {defineApp, defineProvider, secrets, query, object, string} from "apps";
+const source = `import {defineApp, defineProvider, secrets, query, object, string, router} from "apps";
 const service=defineProvider({name:"Sharing fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
-export default defineApp({accounts:{service:service.many()}},{name:"Sharing fixture",queries:{identity:query({input:object({})},async()=>"allowed")}});`;
+export default defineApp({accounts:{service:service.many()}},{name:"Sharing fixture",tools: router({ identity:query({input:object({})},async()=>"allowed") })});`;
 
 layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
   it.effect(scenarios.resourceSharing.title, (context) =>
@@ -40,7 +41,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
           App,
           yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
             name: `Sharing ${suffix}`,
-            files: [{ path: "index.ts", content: source }],
+            files: [{ path: "index.ts", content: source }, appsManifest],
           }),
         );
         const connected: string[] = [];

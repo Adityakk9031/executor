@@ -8,8 +8,8 @@ import { makeTelemetryForwarder, TelemetryBatch, traceHeaders } from "@executor-
 import {
   HostCallError,
   HostDataError,
-  HostedTool,
-  HostedToolSummary,
+  HostedCatalog,
+  HostedCatalogSummary,
   HostInspectError,
   HostResponse,
   indexCommand,
@@ -194,14 +194,14 @@ export const appRuntime = (host: AppRuntimeHost) =>
         dispatch(
           { ...input, database: false },
           inspectCommand(tools, scheduled),
-          Schema.Array(HostedTool),
+          HostedCatalog,
           HostInspectError,
         ).pipe(Effect.map(selectTools(tools)), Effect.withSpan(span("inspect"))),
       index: (input) =>
         dispatch(
           { ...input, database: false },
           indexCommand,
-          Schema.Array(HostedToolSummary),
+          HostedCatalogSummary,
           HostInspectError,
         ).pipe(Effect.withSpan(span("index"))),
       query: (input) =>
@@ -221,7 +221,12 @@ export const appRuntime = (host: AppRuntimeHost) =>
       call: (input) =>
         dispatch(
           input,
-          { operation: "call", tool: input.tool, input: input.input },
+          {
+            operation: "call",
+            tool: input.tool,
+            ...(input.kind === undefined ? {} : { kind: input.kind }),
+            input: input.input,
+          },
           Json,
           HostCallError,
         ).pipe(Effect.withSpan(span("call"))),

@@ -343,8 +343,11 @@ export const compileOpenApiDocument = (
           if (!path.startsWith("/") || path.includes("?") || path.includes("#"))
             fail("operation_path", "An operation has an invalid API path.");
           const operationMethods: GeneratedSecrets[] = [];
-          const operation = Schema.decodeUnknownSync(Operation)(
-            document.resolve(record(item[method.toLowerCase()])),
+          const resolved = document.resolve(record(item[method.toLowerCase()]));
+          const operation = Schema.decodeUnknownSync(Operation)(resolved);
+          // Tags only label the tool; a malformed list is dropped rather than rejecting it.
+          const tags = Option.getOrUndefined(
+            Schema.decodeUnknownOption(Schema.Array(Schema.NonEmptyString))(resolved.tags),
           );
           const name = names[index] ?? fail("operation_path", "An operation has no name.");
           // Planning refines every collision; only a hash collision can repeat a name.
@@ -514,6 +517,7 @@ export const compileOpenApiDocument = (
             methods: operationMethods,
             operation: {
               ...(streaming ? { streaming: true as const } : {}),
+              ...(tags === undefined || tags.length === 0 ? {} : { tags }),
               name,
               ...(operation.operationId === undefined
                 ? {}

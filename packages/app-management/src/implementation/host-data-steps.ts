@@ -2,11 +2,15 @@
 import { Clock, Config, Effect } from "effect";
 import type { DataStepJournal } from "../contracts/data-steps.ts";
 import { runDataSteps } from "./data-steps.ts";
+import { frameworkPinCatchUpRelease, frameworkPinRelease } from "../contracts/framework-pin.ts";
 import { frameworkPinStep, type FrameworkPinHost } from "./framework-pin.ts";
 
 /** Append new steps; never rename, reorder or change one that has shipped. */
 export const hostDataSteps = (host: FrameworkPinHost) => [
-  frameworkPinStep(host, "1_app_framework_pin"),
+  frameworkPinStep(host, "1_app_framework_pin", frameworkPinRelease),
+  // Builds now require a declaration. Pin apps created without one after the first pass ran. The
+  // hosts that created them built undeclared source with their own protocol-1 framework.
+  frameworkPinStep(host, "2_app_framework_pin_catch_up", frameworkPinCatchUpRelease),
 ];
 
 /**

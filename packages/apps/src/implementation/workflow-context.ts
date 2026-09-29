@@ -15,6 +15,7 @@ import {
 } from "../contracts/workflows.ts";
 import { JsonValue } from "../contracts/schema.ts";
 import { nativeOperation } from "./operations.ts";
+import { declaredOperations } from "./router.ts";
 import { toPromise } from "./authoring.ts";
 import { failureDetail } from "./failure-detail.ts";
 
@@ -60,7 +61,7 @@ const inStep =
 /** Construct one replay's Promise context. Step callbacks acquire fresh capabilities per actual attempt. */
 export const makeWorkflowContext = (
   execution: WorkflowExecution,
-  definition: Pick<AppDefinition<never>, "queries" | "mutations">,
+  definition: Pick<AppDefinition<never>, "tools">,
   /** A step attempt's context, and the raw account secrets its failures must not reveal. */
   fresh: (
     stepId: string,
@@ -162,9 +163,9 @@ export const makeWorkflowContext = (
     ) =>
       Effect.gen(function* () {
         const target = nativeOperation(operation);
-        const catalog = kind === "query" ? definition.queries : definition.mutations;
-        const match = Object.entries(catalog ?? {}).find(
-          ([, value]) => value === target && value.kind === kind,
+        const root = definition.tools?.kind === "router" ? definition.tools : undefined;
+        const match = declaredOperations(root).find(
+          (entry) => entry.operation === target && entry.operation.kind === kind,
         );
         if (target === undefined || match === undefined)
           return yield* new WorkflowFailure({ reason: "operation", retryable: false });
@@ -183,7 +184,7 @@ export const makeWorkflowContext = (
             attempt(
               parsed,
               execution
-                .invoke({ kind, name: match[0], input: args, stepId, timeout })
+                .invoke({ kind, name: match.name, input: args, stepId, timeout })
                 .pipe(Effect.provideContext(services)),
             ),
           )

@@ -17,7 +17,6 @@ import type { RepositoryBackend } from "@executor-js/app-source/contracts";
 import {
   frameworkPinBehindMessage,
   frameworkPinMessage,
-  frameworkPinRelease,
   type FrameworkPinOutcome,
 } from "../contracts/framework-pin.ts";
 import type { DataStep, DataStepMode } from "../contracts/data-steps.ts";
@@ -107,12 +106,12 @@ const withManifest = (files: SourceFiles, content: string) =>
  * the next deploy from main keeps what runs today. Every other position pins main's own files:
  * all existing source is written for the protocol-1 framework, and a manifest rolls nothing back.
  */
-const pinApp = (host: FrameworkPinHost, listed: App, mode: DataStepMode) =>
+const pinApp = (host: FrameworkPinHost, release: string, listed: App, mode: DataStepMode) =>
   Effect.gen(function* () {
     const target = { owner: listed.owner, app: listed.id };
     const app = yield* host.executor.apps.get(target);
     const workspace = yield* host.executor.apps.workspace(target);
-    const working = pinManifest(manifestOf(workspace.files), frameworkPinRelease);
+    const working = pinManifest(manifestOf(workspace.files), release);
     // Declared first: an applied pin is not deployed yet, so a repeat run still reads it as declared.
     if (working.kind === "declared") return "declared" as const;
     const running =
@@ -125,7 +124,7 @@ const pinApp = (host: FrameworkPinHost, listed: App, mode: DataStepMode) =>
           : yield* workspacePosition(host, app, workspace, running);
     const behind = position === "behind" && running !== undefined ? running : undefined;
     const manifest =
-      behind === undefined ? working : pinManifest(manifestOf(behind.files), frameworkPinRelease);
+      behind === undefined ? working : pinManifest(manifestOf(behind.files), release);
     // The running source declares apps itself; main only needs that source, not a pin.
     if (manifest.kind === "declared") return "declared" as const;
     if (manifest.kind === "invalid") return "invalid-manifest" as const;
@@ -137,9 +136,7 @@ const pinApp = (host: FrameworkPinHost, listed: App, mode: DataStepMode) =>
         expected: workspace.revision.commit,
         files,
         message:
-          behind === undefined
-            ? frameworkPinMessage(frameworkPinRelease)
-            : frameworkPinBehindMessage(frameworkPinRelease),
+          behind === undefined ? frameworkPinMessage(release) : frameworkPinBehindMessage(release),
       })
       .pipe(
         Effect.as(applied[position]),
@@ -179,11 +176,15 @@ const applied = {
 
 /**
  * The data step that pins every app on this host, host-managed Executor apps included, to
- * {@link frameworkPinRelease}. Each app is safe to handle again: pinned apps read as declared,
+ * `release`. Each app is safe to handle again: pinned apps read as declared,
  * and every commit names the revision it was based on, so a concurrent edit is a retried
  * conflict rather than an overwrite.
  */
-export const frameworkPinStep = (host: FrameworkPinHost, name: string): DataStep<never> => ({
+export const frameworkPinStep = (
+  host: FrameworkPinHost,
+  name: string,
+  release: string,
+): DataStep<never> => ({
   name,
   retry: ["conflict", "failed"],
   items: host.executor.apps.list({}).pipe(
@@ -191,7 +192,7 @@ export const frameworkPinStep = (host: FrameworkPinHost, name: string): DataStep
       apps.map((app) => ({
         id: app.id,
         owner: app.owner,
-        run: (mode: DataStepMode) => pinApp(host, app, mode),
+        run: (mode: DataStepMode) => pinApp(host, release, app, mode),
       })),
     ),
   ),

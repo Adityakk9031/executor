@@ -1,7 +1,8 @@
 /**
  * A loopback npm registry for product builds. It serves the `apps` package staged from this checkout
  * (`bun run e2e:prepare`) as the version the hosts ship, which new apps pin, so scenarios run before
- * that version is published. Every other request is forwarded to the public registry unchanged.
+ * that version is published. Every other request, including every published `apps` release, is
+ * forwarded to the public registry unchanged.
  */
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
@@ -18,6 +19,13 @@ class RegistryFailed extends Schema.TaggedError<RegistryFailed>()("RegistryFaile
 
 type Reply = { readonly status: number; readonly type: string; readonly body: Uint8Array };
 
+/** One version this registry serves itself. */
+interface Served {
+  readonly version: string;
+  readonly manifest: typeof JsonObject.Type;
+  readonly bytes: Uint8Array;
+}
+
 /** Start the registry for the scope and return its origin. */
 export const localNpmRegistry = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -29,18 +37,27 @@ export const localNpmRegistry = Effect.gen(function* () {
     return yield* new RegistryFailed({
       reason: "Run bun run e2e:prepare, or apps:build and e2e:apps, to stage apps first.",
     });
-  const bytes = yield* fs.readFile(archive);
+  const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(JsonObject));
   const text = yield* processes.string(
     // A relative archive path: GNU tar on Windows reads a drive letter as a remote host.
     ChildProcess.make("tar", ["-xzOf", path.basename(archive), "package/package.json"], {
       cwd: path.dirname(archive),
     }),
   );
-  const raw = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(JsonObject))(text);
+  const raw = yield* decodeJson(text);
   const manifest = yield* Schema.decodeUnknownEffect(Manifest)(raw);
-  const tarballPath = `/apps/-/apps-${manifest.version}.tgz`;
-  const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
-  const shasum = createHash("sha1").update(bytes).digest("hex");
+  const staged: Served = {
+    version: manifest.version,
+    manifest: raw,
+    bytes: yield* fs.readFile(archive),
+  };
+
+  const served = [staged].map((entry) => ({
+    ...entry,
+    tarballPath: `/apps/-/apps-${entry.version}.tgz`,
+    integrity: `sha512-${createHash("sha512").update(entry.bytes).digest("base64")}`,
+    shasum: createHash("sha1").update(entry.bytes).digest("hex"),
+  }));
 
   const forward = (url: string) =>
     Effect.gen(function* () {
@@ -59,10 +76,15 @@ export const localNpmRegistry = Effect.gen(function* () {
 
   const reply = (url: string, base: string): Effect.Effect<Reply> =>
     Effect.gen(function* () {
-      if (url === tarballPath)
-        return { status: 200, type: "application/octet-stream", body: bytes } satisfies Reply;
+      const archive = served.find((entry) => entry.tarballPath === url);
+      if (archive !== undefined)
+        return {
+          status: 200,
+          type: "application/octet-stream",
+          body: archive.bytes,
+        } satisfies Reply;
       if (url !== "/apps") return yield* forward(url);
-      // Published versions stay as npm serves them; the staged package is added as its version.
+      // Published versions stay as npm serves them; each served package is added as its version.
       const published = yield* forward(url);
       const packument: typeof JsonObject.Type =
         published.status === 200
@@ -76,10 +98,19 @@ export const localNpmRegistry = Effect.gen(function* () {
         name: "apps",
         versions: {
           ...versions,
-          [manifest.version]: {
-            ...raw,
-            dist: { tarball: `${base}${tarballPath}`, integrity, shasum },
-          },
+          ...Object.fromEntries(
+            served.map((entry) => [
+              entry.version,
+              {
+                ...entry.manifest,
+                dist: {
+                  tarball: `${base}${entry.tarballPath}`,
+                  integrity: entry.integrity,
+                  shasum: entry.shasum,
+                },
+              },
+            ]),
+          ),
         },
       });
       return {

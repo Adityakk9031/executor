@@ -17,6 +17,7 @@ import {
   object,
   secrets,
   string,
+  router,
 } from "apps";
 
 const vercel = defineProvider({
@@ -42,7 +43,7 @@ const listProjects = query(
   },
 );
 
-export default defineApp(requirements, { queries: { listProjects } });
+export default defineApp(requirements, { tools: router({ listProjects }) });
 ```
 
 ## OAuth sign-in
@@ -113,12 +114,12 @@ Discover the management profile path with `tools.search` before calling it:
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
-const app = await executor.queries.apps.get({ path: { app: "<vercel-app-id>" } });
-const profile = await executor.mutations.appProfiles.create({
+const app = await executor.apps.get({ path: { app: "<vercel-app-id>" } });
+const profile = await executor.appProfiles.create({
   path: { app: app.id },
   body: { owner: "alice", subject: "alice", accounts: {}, idempotencyKey: "vercel-setup" },
 });
-return await executor.mutations.accountConnect.issue({
+return await executor.accountConnect.issue({
   body: { owner: "alice", target: { app: app.id, profile: profile.id, requirement: "vercel" } },
 });
 ```
@@ -130,7 +131,7 @@ After the user finishes, check the request in a new execute call:
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
-const connection = await executor.queries.accountConnections.get({
+const connection = await executor.accountConnections.get({
   path: { connection: "<connection-id>" },
 });
 return connection.state; // { status: "completed", account } means setup finished.
@@ -145,7 +146,7 @@ inspect the profile and request a new link.
 To save an account without selecting it for any app, pass `provider` instead:
 
 ```js
-return await tools.executor.profiles["<management-profile-id>"].mutations.accountConnect.issue({
+return await tools.executor.profiles["<management-profile-id>"].accountConnect.issue({
   body: { owner: "alice", provider: "<provider-reference>" },
 });
 ```
@@ -174,7 +175,7 @@ To use the same app with a second account, call:
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
-return await executor.mutations.appProfiles.create({
+return await executor.appProfiles.create({
   path: { app: "<vercel-app-id>" },
   body: {
     owner: "alice",

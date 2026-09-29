@@ -28,6 +28,7 @@ import {
   RunObservation,
 } from "../support/worker-observer.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 /** Token renewals and workflow runs, each a single request to the product. */
 const rounds = 50;
@@ -81,7 +82,7 @@ const scenario = Effect.gen(function* () {
         `${prefix}/apps/${app}/tools/call`,
         {
           profile,
-          tool: "queries.probe",
+          tool: "probe",
           input: {},
         },
       );
@@ -102,6 +103,7 @@ const keyApp = (options: { readonly database: boolean; readonly resource: string
     const name = `Worker reuse ${randomUUID().slice(0, 8)}`;
     const app = yield* deploy(name, [
       { path: "index.ts", content: observerApp({ name, ...options }) },
+      appsManifest,
     ]);
     const path = `${prefix}/apps/${app.id}`;
     const submit = (connection: string, token: string) =>
@@ -321,13 +323,14 @@ layer(HostedLive, { excludeTestServices: true })("App worker reuse", (it) => {
         const app = yield* deploy(name, [
           {
             path: "index.ts",
-            content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+            content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(`${issuer.origin}/mcp`)} }) } });
 ${observer(null)}
 export default defineApp({ accounts: { service } }, {
-  queries: { probe: query({ input: object({}) }, async (ctx) => observe(ctx.accounts.service.fields.access_token)) },
+  tools: router({ probe: query({ input: object({}) }, async (ctx) => observe(ctx.accounts.service.fields.access_token)) }),
 });`,
           },
+          appsManifest,
         ]);
         const path = `${prefix}/apps/${app.id}`;
         const connect = (label: string) =>

@@ -14,6 +14,7 @@ import { Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile } from "../support/profiles.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const SignIn = Schema.Struct({ authorizationUrl: Schema.String });
 const Workflows = Schema.Array(Schema.Struct({ name: Schema.String }));
@@ -47,18 +48,21 @@ layer(HostedLive, { excludeTestServices: true })("App declarations and OAuth gra
             files: [
               {
                 path: "index.ts",
-                content: `import {defineApp,defineProvider,oauth2,query,workflow,object} from "apps";
+                content: `import {defineApp,defineProvider,oauth2,query,workflow,object, router} from "apps";
 const service=defineProvider({name:"Reporting",auth:{oauth:oauth2({discover:${discover}})}});
 const noop=workflow({input:object({})},async()=>null);
 export default defineApp({accounts:{service}},async({accounts})=>{
   const generation=accounts.service.fields.access_token.split("-").pop();
   return {
-    queries:{read:query({input:object({})},async({fetch})=>(await fetch(${resource},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}})).json())},
+    tools: router({
+      read:query({input:object({})},async({fetch})=>(await fetch(${resource},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}})).json()),
+    }),
     workflows:{["grant_"+generation]:noop},
     skills:[{name:"grant-guide",description:"Grant "+generation,files:[{path:"SKILL.md",content:"---\\nname: grant-guide\\ndescription: Grant "+generation+"\\n---\\n# Grant"}]}],
   };
 });`,
               },
+              appsManifest,
             ],
           });
           expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -159,7 +163,7 @@ export default defineApp({accounts:{service}},async({accounts})=>{
           expect(yield* outcome).toBe("hit");
           const listed = yield* listing;
           expect(listed.status, JSON.stringify(listed.body)).toBe(200);
-          expect(listed.body).toMatchObject({ items: [{ name: "queries.read" }] });
+          expect(listed.body).toMatchObject({ items: [{ name: "read" }] });
           expect(yield* outcome).toBe("miss");
           expect((yield* listing).body).toEqual(listed.body);
           expect(yield* outcome).toBe("hit");
@@ -174,7 +178,8 @@ export default defineApp({accounts:{service}},async({accounts})=>{
           });
           const refused = yield* api.request(actors.owner, "POST", `${path}/tools/call`, {
             profile: profile.id,
-            tool: "queries.read",
+            tool: "read",
+            kind: "query",
             input: {},
           });
           expect(refused.status, JSON.stringify(refused.body)).toBe(409);

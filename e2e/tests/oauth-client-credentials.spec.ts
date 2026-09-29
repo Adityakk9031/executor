@@ -15,6 +15,7 @@ import {
   accountNamePrompt,
   nameConnectedAccount,
 } from "../support/name-account.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Completed = Schema.Struct({
   status: Schema.Literal("completed"),
@@ -39,10 +40,11 @@ layer(HostedLive, { excludeTestServices: true })("Machine OAuth", (it) => {
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2 } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Reporting",auth:{machine:oauth2({grant:"client_credentials",tokenUrl:${JSON.stringify(issuer.origin + "/token")},scopes:["reports:read"],tokenEndpointAuthMethod:"client_secret_post"})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -192,10 +194,13 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+                content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service=defineProvider({name:${JSON.stringify(authMethod)},auth:{machine:oauth2({grant:"client_credentials",${authMethod === "client_secret_post" ? `discover:${JSON.stringify(issuer.origin)}` : `tokenUrl:${JSON.stringify(issuer.origin + "/token")}`},scopes:["reports:read"],resource:${JSON.stringify(issuer.origin + "/resource")},tokenEndpointAuthMethod:${JSON.stringify(authMethod)}})}});
-export default defineApp({accounts:{service}},async({accounts})=>({queries:{read:query({input:object({})},async({fetch})=>{const result=await fetch(${JSON.stringify(issuer.origin + "/resource")},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});return result.json();})}}));`,
+export default defineApp({accounts:{service}},async({accounts})=>({tools: router({
+  read:query({input:object({})},async({fetch})=>{const result=await fetch(${JSON.stringify(issuer.origin + "/resource")},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});return result.json();}),
+})}));`,
               },
+              appsManifest,
             ],
           });
           expect(response.status).toBe(200);
@@ -305,7 +310,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
             actors.owner,
             "POST",
             `${prefix}/apps/${app.id}/tools/call`,
-            { profile: profile.id, tool: "queries.read", input: {} },
+            { profile: profile.id, tool: "read", kind: "query", input: {} },
           );
           expect(read.status).toBe(200);
           const value = yield* body(Read, read);
@@ -320,7 +325,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
             actors.owner,
             "POST",
             `${prefix}/apps/${app.id}/tools/call`,
-            { profile: profile.id, tool: "queries.read", input: {} },
+            { profile: profile.id, tool: "read", kind: "query", input: {} },
           );
           expect(kept.status, JSON.stringify(kept.body)).toBe(200);
           expect(yield* body(Read, kept)).toEqual(value);

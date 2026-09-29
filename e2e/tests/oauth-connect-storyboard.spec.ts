@@ -19,6 +19,7 @@ import {
   nameConnectedAccount,
 } from "../support/name-account.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const App = Schema.Struct({
   id: Schema.String,
@@ -66,10 +67,11 @@ layer(HostedLive, { excludeTestServices: true })("OAuth storyboard", (it) => {
               files: [
                 {
                   path: "index.ts",
-                  content: `import { defineApp, defineProvider, oauth2 } from "apps";
+                  content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:${JSON.stringify(name)},auth:{oauth:oauth2({discover:${JSON.stringify(issuer.origin)},scopes:["reports:read","offline_access"]})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
                 },
+                appsManifest,
               ],
             });
             expect(response.status).toBe(200);
@@ -551,10 +553,11 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2 } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Sample service",auth:{oauth:oauth2({discover:${JSON.stringify(issuer.origin)},scopes:["reports:read"]})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools:router({})}));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);

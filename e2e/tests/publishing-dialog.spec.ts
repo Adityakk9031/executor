@@ -11,6 +11,7 @@ import { publishingPreview } from "../support/publishing-preview.ts";
 import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { withApps } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("Publishing dialog", (it) => {
   it.effect(scenarios.publishingDialog.title, (context) =>
@@ -29,7 +30,10 @@ layer(HostedLive, { excludeTestServices: true })("Publishing dialog", (it) => {
               content:
                 'import {defineApp} from "apps"; export default defineApp({accounts:{}},{});',
             },
-            { path: "package.json", content: '{"name":"axiom"}' },
+            {
+              path: "package.json",
+              content: JSON.stringify({ name: "axiom", dependencies: withApps() }),
+            },
           ],
         });
         expect(response.status).toBe(200);

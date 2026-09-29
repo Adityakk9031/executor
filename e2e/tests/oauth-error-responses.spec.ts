@@ -11,6 +11,7 @@ import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile } from "../support/profiles.ts";
 import { oauthMcpAppFiles } from "../support/authored-templates.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const SignIn = Schema.Struct({ authorizationUrl: Schema.String });
 const Failure = Schema.Struct({
@@ -24,14 +25,17 @@ const Echo = Schema.Struct({ authorization: Schema.NullOr(Schema.String) });
 const resourceAppFiles = (name: string, origin: string) => [
   {
     path: "index.ts",
-    content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+    content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(origin)}, scopes: ["openid", "read"] }) } });
-export default defineApp({ accounts: { service } }, async ({ accounts }) => ({ queries: { read: query({ input: object({}) }, async ({ fetch }) => {
+export default defineApp({ accounts: { service } }, async ({ accounts }) => ({ tools: router({
+   read: query({ input: object({}) }, async ({ fetch }) => {
   const result = await fetch(${JSON.stringify(`${origin}/resource`)}, { headers: { authorization: "Bearer " + accounts.service.fields.access_token } });
   return result.json();
-}) } }));
+}),
+ }) }));
 `,
   },
+  appsManifest,
 ];
 
 layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) => {
@@ -292,7 +296,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
             actors.owner,
             "POST",
             `${prefix}/apps/${result.app.id}/tools/call`,
-            { profile: result.profile.id, tool: "queries.read", input: {} },
+            { profile: result.profile.id, tool: "read", kind: "query", input: {} },
           );
           expect((yield* issuer.metrics).refreshes, scenario.name).toBe(refreshes + 1);
           if (scenario.renewed) {

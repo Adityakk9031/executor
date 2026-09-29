@@ -8,6 +8,7 @@ import { TestLive, withCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 /** React reports a server/browser markup difference with one of these messages or codes. */
 const hydrationFailure = /hydrat|Minified React error #(418|419|423|425)/i;
@@ -40,11 +41,12 @@ layer(TestLive, { excludeTestServices: true })("Local server-rendered dashboard"
             files: [
               {
                 path: "index.ts",
-                content: `import {defineApp,defineProvider,secrets,query,object,string} from "apps";
+                content: `import {defineApp,defineProvider,secrets,query,object,string,router} from "apps";
 const service=defineProvider({name:"Rendered mail",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 const identity=query({input:object({})},async ctx=>ctx.accounts.service.id);
-export default defineApp({accounts:{service}},async()=>({queries:{identity},skills:[{name:"greeting",description:"Greet the reader",files:[{path:"SKILL.md",content:"---\\nname: greeting\\ndescription: Greet the reader\\n---\\nSay hello."}]}]}));`,
+export default defineApp({accounts:{service}},async()=>({tools:router({identity}),skills:[{name:"greeting",description:"Greet the reader",files:[{path:"SKILL.md",content:"---\\nname: greeting\\ndescription: Greet the reader\\n---\\nSay hello."}]}]}));`,
               },
+              appsManifest,
             ],
           }),
         );
@@ -97,7 +99,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{identity},skil
           ["Apps", "/apps", /^Apps/],
           ["App overview", `/apps/${app.id}`, "Accounts"],
           ["App accounts", `/apps/${app.id}?view=accounts`, "Rendered account"],
-          ["App tools", `/apps/${app.id}?view=tools`, "queries.identity"],
+          ["App tools", `/apps/${app.id}?view=tools`, "identity"],
           ["App skills", `/apps/${app.id}?view=skills`, "greeting"],
           ["App source", `/apps/${app.id}?view=source`, "index.ts"],
           ["App deployments", `/apps/${app.id}?view=deployments`, "index.ts"],

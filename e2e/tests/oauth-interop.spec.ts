@@ -15,6 +15,7 @@ import {
   otherTenant,
 } from "../support/oauth-interop-issuer.ts";
 import { createProfile } from "../support/profiles.ts";
+import { appsManifest } from "../support/apps-release.ts";
 import { scenarios } from "../test-plan.ts";
 
 const SignIn = Schema.Struct({ authorizationUrl: Schema.String });
@@ -47,17 +48,18 @@ const oauthApp = Effect.gen(function* () {
         files: [
           {
             path: "index.ts",
-            content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+            content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service=defineProvider({name:"Interop service",auth:{oauth:oauth2(${JSON.stringify(config)})}});
 export default defineApp({accounts:{service}},async(${
               resourceUrl === undefined
-                ? ")=>({queries:{}}));"
-                : `{accounts})=>({queries:{read:query({input:object({})},async({fetch})=>{
+                ? ")=>({tools:router({})}));"
+                : `{accounts})=>({tools:router({read:query({input:object({})},async({fetch})=>{
   const result=await fetch(${JSON.stringify(resourceUrl)},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});
   return result.json();
-})}}));`
+})})}));`
             }`,
           },
+          appsManifest,
         ],
       });
       expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -132,7 +134,8 @@ export default defineApp({accounts:{service}},async(${
   const read = (app: string, profile: string) =>
     api.request(actors.owner, "POST", `${prefix}/apps/${app}/tools/call`, {
       profile,
-      tool: "queries.read",
+      tool: "read",
+      kind: "query",
       input: {},
     });
   return { start, consent, complete, connect, read };

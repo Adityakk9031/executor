@@ -270,6 +270,7 @@ class CallKey extends Data.Class<{
   readonly expectedProfileRevision?: number | undefined;
   readonly deployment?: DeploymentId | undefined;
   readonly tool: ToolName;
+  readonly kind: "query" | "mutation";
 }> {}
 const calls = Atom.family(({ app, ...target }: CallKey) =>
   DashboardClient.runtime.fn((input: Json) =>

@@ -2,6 +2,7 @@
 import {
   RuntimeBuildFailed,
   RuntimeProtocolUnsupported,
+  RuntimeAppsDependencyMissing,
   type SourceFiles,
 } from "@executor-js/sdk/core";
 import { RetainedWorkerBuild, WorkerBundle as CloudBundle } from "@executor-js/sdk/workerd";
@@ -36,7 +37,11 @@ export const CloudCompileResult = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), value: CompiledCloudApp }),
   Schema.Struct({
     ok: Schema.Literal(false),
-    error: Schema.Union([RuntimeBuildFailed, RuntimeProtocolUnsupported]),
+    error: Schema.Union([
+      RuntimeBuildFailed,
+      RuntimeProtocolUnsupported,
+      RuntimeAppsDependencyMissing,
+    ]),
   }),
 ]);
 

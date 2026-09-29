@@ -11,6 +11,7 @@ import { Resource } from "../support/contracts.ts";
 import { nameConnectedAccount } from "../support/name-account.ts";
 import { Profile } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const slotRegion = (page: Page, slot: "service" | "mailboxes") =>
   page.getByRole("region", { name: `Mail (${slot})`, exact: true });
@@ -38,8 +39,11 @@ layer(TestLive, { excludeTestServices: true })("Local profile picker", (it) => {
             files: [
               {
                 path: "index.ts",
-                content: `import {defineApp,defineProvider,secrets,query,object,string} from "apps";const service=defineProvider({name:"Mail",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});export default defineApp({accounts:{service,mailboxes:service.many()}},async ctx=>({queries:{identity:query({input:object({}),description:ctx.accounts.service.id},async()=>ctx.accounts.service.id)}}));`,
+                content: `import {defineApp,defineProvider,secrets,query,object,string, router} from "apps";const service=defineProvider({name:"Mail",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});export default defineApp({accounts:{service,mailboxes:service.many()}},async ctx=>({tools: router({
+  identity:query({input:object({}),description:ctx.accounts.service.id},async()=>ctx.accounts.service.id),
+})}));`,
               },
+              appsManifest,
             ],
           },
           headers,
@@ -309,7 +313,7 @@ layer(TestLive, { excludeTestServices: true })("Local profile picker", (it) => {
             .click(),
         );
         yield* browser.use("Inspect the work account's tool", (page) =>
-          page.getByRole("button", { name: "queries.identity", exact: true }).click(),
+          page.getByRole("button", { name: "identity", exact: true }).click(),
         );
         yield* browser.use("The description comes from the work account", (page) =>
           page.getByText(work, { exact: true }).waitFor(),
@@ -323,7 +327,7 @@ layer(TestLive, { excludeTestServices: true })("Local profile picker", (it) => {
           );
         });
         yield* browser.use("Inspect the personal account's tool", (page) =>
-          page.getByRole("button", { name: "queries.identity", exact: true }).click(),
+          page.getByRole("button", { name: "identity", exact: true }).click(),
         );
         expect(
           yield* browser.use("The selected detail no longer describes Work", (page) =>

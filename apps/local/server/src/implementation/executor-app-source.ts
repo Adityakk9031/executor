@@ -1,14 +1,12 @@
 /** Generate the ordinary local management app from the same OpenAPI document served to clients. */
 import { packageFile } from "@executor-js/app-templates";
-import { readExecutorSkills } from "@executor-js/app-templates/executor";
 import { SourceFiles } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 import { localManagementDocument } from "../contracts/management.ts";
 
 /** Source contains no credentials or configured port; the selected account supplies them at invocation. */
 export const executorAppSource = () =>
-  Effect.gen(function* () {
-    const skills = yield* readExecutorSkills;
+  Effect.sync(() => {
     const document = localManagementDocument();
     // The document is ours: credential placement is declared here rather than inferred from it.
     const configuration = {
@@ -23,16 +21,14 @@ export const executorAppSource = () =>
       {
         path: "index.ts",
         content: `import { defineApp, dynamicSkills } from "apps";
-import { liveOpenapiOperations } from "apps/openapi";
+import { liveOpenapiRouter } from "apps/openapi";
 import { wellKnownSkills } from "apps/skills";
 import { executor } from "./provider.ts";
 import configuration from "./openapi.json";
-import { frameworkQueries } from "./framework.ts";
-import reference from "./framework-reference.json";
 
 export default defineApp({ accounts: { executor } }, async (context) => {
   const baseUrl = context.accounts.executor.fields.baseUrl;
-  const operations = liveOpenapiOperations({
+  const tools = liveOpenapiRouter({
     ...configuration,
     baseUrl,
     allowedOrigin: new URL(baseUrl).origin,
@@ -45,7 +41,7 @@ export default defineApp({ accounts: { executor } }, async (context) => {
     ...(context.signal === undefined ? {} : { signal: context.signal }),
   });
   const skills = dynamicSkills({ list: () => wellKnownSkills({ url: baseUrl + "/.well-known/agent-skills/index.json", cache: context.cache, fetch: context.fetch, signal: context.signal }) });
-  return { ...operations, dynamicSkills: skills, queries: { ...operations.queries, ...frameworkQueries(reference) } };
+  return { tools, dynamicSkills: skills };
 });
 `,
       },
@@ -69,6 +65,5 @@ export const executor = defineProvider({
         content: JSON.stringify(configuration, null, 2),
       },
       packageFile("executor"),
-      ...skills.filter((file) => !file.path.startsWith("skills/")),
     ]);
   });

@@ -353,7 +353,7 @@ const starter = (name: string) =>
     {
       path: "index.ts",
       content:
-        'import {defineApp,object,query} from "apps";\nexport default defineApp({accounts:{}},async()=>({queries:{hello:query({description:"Say hello",input:object({})},async()=>({message:"Hello"}))}}));\n',
+        'import {defineApp,object,query,router} from "apps";\nexport default defineApp({accounts:{}},async()=>({tools:router({hello:query({description:"Say hello",input:object({})},async()=>({message:"Hello"}))})}));\n',
     },
     packageFile(name),
   ]);

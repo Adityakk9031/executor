@@ -48,11 +48,13 @@ export { frameworkProtocol } from "./protocol-version.ts";
 export { protocol1 } from "./protocols/1.ts";
 export { protocol2 } from "./protocols/2.ts";
 export { protocol3 } from "./protocols/3.ts";
+export { protocol4 } from "./protocols/4.ts";
 import {
   HostAccountsInvalid,
   HostDeclarationInvalid,
   HostEvaluationFailed,
   HostInputInvalid,
+  HostKindMismatch,
   HostOperationFailed,
   HostOperationNotFound,
   HostOutputInvalid,
@@ -66,7 +68,7 @@ import {
   ResolvedAccounts,
   type SkillCatalogResponse,
   type TrustedToolApproval,
-} from "./protocols/3.ts";
+} from "./protocols/4.ts";
 export {
   DeclaredAuthMethod,
   DeclaredProvider,
@@ -77,6 +79,10 @@ export {
   InvocationDeadline,
   HostedTool,
   HostedToolSummary,
+  HostRouterError,
+  HostedRouter,
+  HostedCatalog,
+  HostedCatalogSummary,
   SkillSources,
   SkillCatalogResponse,
   HostRequest,
@@ -87,6 +93,7 @@ export {
   HostOperationNotFound,
   HostOperationFailed,
   HostToolNotFound,
+  HostKindMismatch,
   InputProblem,
   maxInputProblems,
   HostInputInvalid,
@@ -97,7 +104,7 @@ export {
   HostError,
   HostResponse,
   HostInvocation,
-} from "./protocols/3.ts";
+} from "./protocols/4.ts";
 /** Raw host inputs; the host boundary parses and redacts these immediately. */
 export type ResolvedAccountsInput = typeof ResolvedAccounts.Encoded;
 
@@ -145,8 +152,10 @@ export const indexCommand = { operation: "inspect", detail: "summary" } as const
 /** Keep only the requested tools from an inspection that may have described every tool. */
 export const selectTools =
   (tools?: readonly string[]) =>
-  <A extends { readonly name: string }>(all: readonly A[]): readonly A[] =>
-    tools === undefined ? all : all.filter((tool) => tools.includes(tool.name));
+  <A extends { readonly tools: readonly { readonly name: string }[] }>(catalog: A): A =>
+    tools === undefined
+      ? catalog
+      : { ...catalog, tools: catalog.tools.filter((tool) => tools.includes(tool.name)) };
 
 /** Declaration reads do not bind accounts or evaluate the app factory. A named declaration
  * problem, such as a reserved database field, is reported so the deploy can explain it. */
@@ -172,6 +181,7 @@ export const HostCallError = Schema.Union([
   HostInspectError,
   HostToolNotFound,
   HostOperationNotFound,
+  HostKindMismatch,
   HostOperationFailed,
   DatabaseLimitExceeded,
   HostInputInvalid,
@@ -194,6 +204,14 @@ export const ToolResultObservation = Context.Reference<{ readonly failed: () => 
 /** Native handler; context comes from host authority, never from request content. */
 export type AppHandler = (request: Request, context: HostContext) => Effect.Effect<Response>;
 
-export { OperationToolPrefixes, type AppOperation, type OperationContext } from "./operations.ts";
+export { type AppOperation, type OperationContext } from "./operations.ts";
+export {
+  RouterIcon,
+  RouterKey,
+  RouterMeta,
+  type AppNode,
+  type AppRouter,
+  type DynamicRouter,
+} from "./router.ts";
 
 export * from "./schedules.ts";

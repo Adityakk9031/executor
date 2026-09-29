@@ -181,6 +181,7 @@ function LiveAppTools({ app, accounts, selected, profile, revision, selection }:
             expectedProfileRevision: revision,
             deployment: app.activeDeployment ?? undefined,
             tool: tool.name,
+            kind: tool.readOnly === true ? "query" : "mutation",
           })}
           detail={toolDetailAtom({ ...catalog, tool: tool.name })}
           Failure={Failure}

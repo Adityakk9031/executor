@@ -6,7 +6,7 @@ import {
 import { Schedule } from "effect";
 import { executorSelfHostApiDocument } from "../contracts/api.ts";
 import { startScheduleWorker, defaultScheduleWorkerOptions } from "@executor-js/sdk/scheduling";
-import { gitRoutes } from "@executor-js/app-management";
+import { frameworkDocumentation, gitRoutes } from "@executor-js/app-management";
 import { hostedAppGitAccess } from "@executor-js/hosted-server/app-management";
 /** The route map is shared by native development and the packaged Worker. */
 import {
@@ -81,9 +81,10 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
     const mcp = yield* selfHostMcp.pipe(Effect.provide(HttpServer.layerServices));
     const document = lazyHostedApiDocument(() => executorSelfHostApiDocument(auth.origin));
     const api = selfHostApi(document).pipe(
+      Layer.provide(frameworkDocumentation(Effect.succeed(skills))),
       Layer.provide(appUi.dashboard),
       HttpRouter.provideRequest(auth.appSessions),
-      HttpRouter.provideRequest(catalogLive(Effect.succeed(skills), document.document, egress)),
+      HttpRouter.provideRequest(catalogLive(document.document, egress)),
       Layer.provide(requireUserLive),
       Layer.provide(requireOrganizationLive),
       HttpRouter.provideRequest(executorServices),

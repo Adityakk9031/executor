@@ -108,6 +108,7 @@ export function AppTools({
               expectedProfileRevision: profile?.revision,
               deployment: app.activeDeployment ?? undefined,
               tool: tool.name,
+              kind: tool.readOnly === true ? "query" : "mutation",
             })}
             detail={toolDetailAtom({ ...catalog, tool: tool.name })}
             Failure={ToolCallFailure}

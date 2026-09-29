@@ -11,6 +11,7 @@ import { Evidence, Telemetry } from "../support/evidence.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const AppProvider = Schema.Struct({
   id: Schema.String,
@@ -117,7 +118,7 @@ const renewalFixture = Effect.gen(function* () {
         files: [
           {
             path: "index.ts",
-            content: `import { defineApp, defineProvider, oauth2, query, mutation, object, ProviderError } from "apps";
+            content: `import { defineApp, defineProvider, oauth2, query, mutation, object, router, ProviderError } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(appName)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(`${issuer.origin}/mcp`)} }) } });
 async function call(fetch, account, method) {
   const response = await fetch(${JSON.stringify(`${issuer.origin}/resource`)}, { method, headers: { authorization: "Bearer " + account.fields.access_token } });
@@ -125,14 +126,13 @@ async function call(fetch, account, method) {
   return await response.json();
 }
 export default defineApp({ accounts: { ${slots.map((slot) => `${slot}: service`).join(", ")} } }, async ({ accounts }) => ({
-  queries: {
+  tools: router({
     read: query({ input: object({}) }, async ({ fetch }) => ({ ${reads} })),
-  },
-  mutations: {
     write: mutation({ input: object({}) }, async ({ fetch }) => ({ ${slots[0]}: await call(fetch, accounts.${slots[0]}, "POST") })),
-  },
+  }),
 }));`,
           },
+          appsManifest,
         ],
       });
       expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -203,7 +203,8 @@ export default defineApp({ accounts: { ${slots.map((slot) => `${slot}: service`)
   const read = (profile: string) =>
     api.request(actors.owner, "POST", `${prefix}/apps/${app.id}/tools/call`, {
       profile,
-      tool: "queries.read",
+      tool: "read",
+      kind: "query",
       input: {},
     });
   const expectRead = (profile: string, generation: number) =>
@@ -304,7 +305,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth refresh resilience", (it
             actors.owner,
             "POST",
             `${prefix}/apps/${pair.id}/tools/call`,
-            { profile: shared.profile, tool: "queries.read", input: {} },
+            { profile: shared.profile, tool: "read", kind: "query", input: {} },
           );
           expect(response.status, JSON.stringify(response.body)).toBe(200);
           expect(yield* body(Read, response)).toEqual({
@@ -604,7 +605,8 @@ layer(HostedLive, { excludeTestServices: true })("OAuth refresh resilience", (it
         const posts = (yield* issuer.metrics).resourceRequests.POST;
         const write = api.request(actors.owner, "POST", `${prefix}/apps/${app.id}/tools/call`, {
           profile: session.profile,
-          tool: "mutations.write",
+          tool: "write",
+          kind: "mutation",
           input: {},
         });
         const refused = yield* write;
@@ -655,15 +657,16 @@ layer(HostedLive, { excludeTestServices: true })("OAuth refresh resilience", (it
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2, query, object, ProviderError } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, query, object, router, ProviderError } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(`${name} catalog`)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(`${issuer.origin}/mcp`)} }) } });
 export default defineApp({ accounts: { service } }, async ({ accounts, signal }) => {
   const response = await fetch(${JSON.stringify(`${issuer.origin}/resource`)}, { signal, headers: { authorization: "Bearer " + accounts.service.fields.access_token } });
   if (response.status === 401) throw new ProviderError({ reason: "unauthorized", status: 401, accountId: accounts.service.id });
   const presented = await response.json();
-  return { queries: { read: query({ input: object({}), description: JSON.stringify(presented) }, async () => presented) } };
+  return { tools: router({ read: query({ input: object({}), description: JSON.stringify(presented) }, async () => presented) }) };
 });`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -705,7 +708,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts, signal })
         const listed = yield* list(session.profile);
         expect(listed.status, JSON.stringify(listed.body)).toBe(200);
         expect((yield* body(Listing, listed)).items).toEqual([
-          { name: "queries.read", description: JSON.stringify(presented(renewed)) },
+          { name: "read", description: JSON.stringify(presented(renewed)) },
         ]);
         expect(yield* refreshes).toBe(renewed);
         // The refused evaluation and its one repetition.
@@ -714,7 +717,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts, signal })
         const kept = yield* list(session.profile);
         expect(kept.status, JSON.stringify(kept.body)).toBe(200);
         expect((yield* body(Listing, kept)).items).toEqual([
-          { name: "queries.read", description: JSON.stringify(presented(renewed)) },
+          { name: "read", description: JSON.stringify(presented(renewed)) },
         ]);
         expect(yield* refreshes).toBe(renewed);
         expect(yield* reads).toBe(beforeRenewal + 2);

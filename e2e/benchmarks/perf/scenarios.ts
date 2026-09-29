@@ -17,6 +17,7 @@ import { openBrowser, type BrowserSession } from "./browser.ts";
 import { fixtureId, type AppReceipt, type OrgReceipt, type Receipt } from "./seed.ts";
 import { fixtureActors, stableUuid } from "./sessions.ts";
 import type { StageControl } from "./stage.ts";
+import { appsManifest } from "../../support/apps-release.ts";
 
 export interface Sample {
   readonly ok: boolean;
@@ -156,7 +157,7 @@ const org = (o: OrgReceipt) => `/api/organizations/${o.organization.id}`;
 const app = (o: OrgReceipt) => `${org(o)}/apps/${primaryApp(o).id}`;
 /** The emulator's first tool. OpenAPI groups `/ops/list_account_0000` under `ops`. */
 const probeTool = (entry: AppReceipt) =>
-  entry.kind === "openapi" ? "queries.ops.listAccount0000" : "queries.list_account_0000";
+  entry.kind === "openapi" ? "ops.listAccount0000" : "list_account_0000";
 /** Dashboard reads observed in production traffic, parameterised by the dashboard org. */
 const apiRoutes: readonly (readonly [string, string, (o: OrgReceipt) => string])[] = [
   ["inventory", "{org}/inventory", (o) => `${org(o)}/inventory`],
@@ -292,14 +293,14 @@ const factoryOrg = "decl";
 const factoryAppName = "Perf slow factory";
 const factorySource = (emulator: string) => {
   const catalog = `${emulator}/openapi/${formatSpec({ tools: 5, listMs: 512, key: "slowfactory" })}/openapi.json`;
-  return `import {defineApp,defineProvider,secrets,query,workflow,object,string} from "apps";
+  return `import {defineApp,defineProvider,secrets,query,workflow,object,string, router} from "apps";
 const service=defineProvider({name:"Slow catalog",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 const noop=workflow({input:object({})},async()=>null);
 export default defineApp({accounts:{service}},async ctx=>{
   const document=await (await ctx.fetch(${JSON.stringify(catalog)},{headers:{"x-api-key":ctx.accounts.service.fields.token}})).json();
   const operations=Object.keys(document.paths??{}).map(path=>path.split("/").pop());
   return {
-    queries:{ping:query({input:object({})},async()=>"pong")},
+    tools: router({ ping:query({input:object({})},async()=>"pong") }),
     workflows:Object.fromEntries(operations.map(name=>["sync_"+name,noop])),
     skills:[{name:"catalog-guide",description:"Operations: "+operations.join(", "),files:[{path:"SKILL.md",content:"---\\nname: catalog-guide\\ndescription: Remote catalog guide\\n---\\n# Catalog"}]}],
   };
@@ -353,7 +354,10 @@ const slowFactory = (target: PerfTarget) =>
       (yield* client
         .request("POST", `${root}/apps/deploy`, {
           name: factoryAppName,
-          files: [{ path: "index.ts", content: factorySource(target.receipt.emulator) }],
+          files: [
+            { path: "index.ts", content: factorySource(target.receipt.emulator) },
+            appsManifest,
+          ],
         })
         .pipe(Effect.flatMap(ok("deploy slow factory")), decode(Identified)));
     const path = `${root}/apps/${deployed.id}`;
@@ -631,6 +635,7 @@ const toolcallScenarios: Scenario[] = [
           {
             profile: selected.profile,
             tool: probeTool(selected),
+            kind: "query",
             input: selected.accounts.length ? { accountId: selected.accounts[0], input: {} } : {},
           },
         );
@@ -661,12 +666,13 @@ const toolcallScenarios: Scenario[] = [
 const lifecycleSource = (marker: string) => [
   {
     path: "index.ts",
-    content: `import { defineApp, query, object, string } from "apps";
-export default defineApp({ accounts: {} }, async () => ({ queries: {
-  ping: query({ description: "Perf lifecycle ping ${marker}", input: object({ value: string() }) }, async (_, input) => ({ value: input.value, marker: ${JSON.stringify(marker)} })),
-} }));
+    content: `import { defineApp, query, object, string, router } from "apps";
+export default defineApp({ accounts: {} }, async () => ({ tools: router({
+   ping: query({ description: "Perf lifecycle ping ${marker}", input: object({ value: string() }) }, async (_, input) => ({ value: input.value, marker: ${JSON.stringify(marker)} })),
+ }) }));
 `,
   },
+  appsManifest,
 ];
 
 const Created = Schema.Struct({ id: Schema.String });
@@ -982,7 +988,7 @@ return "unreachable";`,
         target,
         Effect.all([errApp(target, "Perf err cleanup"), errTool(target, "Perf err slow")]).pipe(
           Effect.map(([refresh, slow]) => {
-            const app = `tools[${JSON.stringify(refresh.slug)}].queries`;
+            const app = `tools[${JSON.stringify(refresh.slug)}]`;
             const key = JSON.stringify(randomBytes(8).toString("hex"));
             // The pause makes the 30 s refresh end more than a second after the budget.
             return `await ${app}.pause({});
@@ -1012,7 +1018,7 @@ return "unreachable";`;
         target,
         errApp(target, "Perf err refresh").pipe(
           Effect.map((entry) => {
-            const app = `tools[${JSON.stringify(entry.slug)}].queries`;
+            const app = `tools[${JSON.stringify(entry.slug)}]`;
             const key = JSON.stringify(randomBytes(8).toString("hex"));
             return `await ${app}.seed({ key: ${key} });
 const value = await ${app}.stale({ key: ${key} });
@@ -1044,9 +1050,9 @@ const approvalAfterRefresh: Scenario = {
       const key = JSON.stringify(randomBytes(8).toString("hex"));
       const session = yield* target.mcp("err");
       const call = yield* session.callTool("execute", {
-        code: `await ${app}.queries.seed({ key: ${key} });
-await ${app}.queries.stale({ key: ${key} });
-return await ${app}.mutations.approved({});`,
+        code: `await ${app}.seed({ key: ${key} });
+await ${app}.stale({ key: ${key} });
+return await ${app}.approved({});`,
       });
       const exchange = call.exchanges.find((entry) => entry.method === "tools/call");
       const parked = Schema.decodeUnknownOption(Parked)(call.result.structuredContent);

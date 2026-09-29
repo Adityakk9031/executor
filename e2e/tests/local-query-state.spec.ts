@@ -7,6 +7,7 @@ import { TestLive, withCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(TestLive, { excludeTestServices: true })("Local query state", (it) => {
   it.effect(scenarios.localQueryState.title, (context) =>
@@ -35,6 +36,7 @@ const service = defineProvider({ name: "Draft test service", auth: {
 export default defineApp({ accounts: { service } }, async () => ({  }));
 `,
               },
+              appsManifest,
             ],
           },
           headers,

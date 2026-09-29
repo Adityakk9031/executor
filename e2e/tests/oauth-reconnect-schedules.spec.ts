@@ -13,6 +13,7 @@ import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile } from "../support/profiles.ts";
 import { serverControl } from "../support/server-control.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const AppProvider = Schema.Struct({
   id: Schema.String,
@@ -66,7 +67,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth reconnect schedules", (i
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, defineProvider, oauth2, mutation, object, interval, type MutationContext } from "apps";
+                content: `import { defineApp, defineProvider, oauth2, mutation, object, interval, router, type MutationContext } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(`${issuer.origin}/mcp`)} }) } });
 const requirements = { accounts: { service } };
 const work = mutation({ input: object({}) }, async (ctx: MutationContext<typeof requirements>) => {
@@ -74,10 +75,11 @@ const work = mutation({ input: object({}) }, async (ctx: MutationContext<typeof 
   return await response.json();
 });
 export default defineApp(requirements, async () => ({
-  mutations: { work },
+  tools: router({ work }),
   schedules: { work: interval({ minutes: 1 }, work, {}) },
 }));`,
               },
+              appsManifest,
             ],
           });
           expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -294,7 +296,8 @@ export default defineApp(requirements, async () => ({
           });
           const ended = yield* api.request(actors.owner, "POST", `${path}/tools/call`, {
             profile: profile.id,
-            tool: "mutations.work",
+            tool: "work",
+            kind: "mutation",
             input: {},
           });
           expect(ended.status, JSON.stringify(ended.body)).toBe(409);

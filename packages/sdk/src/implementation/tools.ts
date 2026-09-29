@@ -14,7 +14,6 @@ import { bindAppStorage } from "./app-database.ts";
 import {
   type WorkflowHostControls,
   HostToolApprovalRequired,
-  OperationToolPrefixes,
   ToolResultObservation,
   type ResolvedAccounts,
 } from "apps/contracts";
@@ -43,6 +42,8 @@ import {
   InputInvalid,
   ToolCallFailed,
   ToolNotFound,
+  ToolKindMismatch,
+  type ToolKind,
   ToolBlocked,
   ToolApprovalRequired,
   ToolPolicyFailed,
@@ -286,7 +287,12 @@ const renewRefused = (
     } satisfies InvocationContext;
   });
 
-function invocation(state: InvocationSnapshot, tool: ToolName, input: Json) {
+function invocation(
+  state: InvocationSnapshot,
+  tool: ToolName,
+  kind: ToolKind | undefined,
+  input: Json,
+) {
   return Schema.decodeUnknownEffect(ToolInvocation)({
     app: state.app.id,
     owner: state.app.owner,
@@ -295,6 +301,7 @@ function invocation(state: InvocationSnapshot, tool: ToolName, input: Json) {
       : { profile: state.profile.id, profileRevision: state.profile.revision }),
     deployment: state.deployment.id,
     tool,
+    ...(kind === undefined ? {} : { kind }),
     input,
     accounts: Object.fromEntries(
       state.selections.map(({ slot, required, accounts }) => {
@@ -387,6 +394,8 @@ const runtimeFailure = (
       ElicitationFailed: ({ reason }) => new ToolElicitationFailed({ ...identity, reason }),
       HostToolNotFound: () => new ToolNotFound(identity),
       HostOperationNotFound: () => new ToolNotFound(identity),
+      HostKindMismatch: ({ requested, actual }) =>
+        new ToolKindMismatch({ ...identity, requested, actual }),
       HostOperationFailed: (error) =>
         Option.match(appFailure(error), {
           onNone: () => new ToolCallFailed({ ...identity, reason: "Operation execution failed" }),
@@ -464,7 +473,7 @@ export const makeTools = (
   const executeRenewing = <A, E, R>(
     state: InvocationSnapshot,
     context: InvocationContext,
-    tool: ToolName,
+    kind: ToolKind | undefined,
     execute: (context: InvocationContext) => Effect.Effect<Result.Result<A, E>, never, R>,
   ) =>
     Effect.gen(function* () {
@@ -473,7 +482,7 @@ export const makeTools = (
       const refused = result.failure;
       const renewed = yield* renewRefused(oauth.renewRejected, state, context, refused);
       if (renewed === undefined) return result;
-      if (tool.startsWith(OperationToolPrefixes.query)) {
+      if (kind === "query") {
         yield* Effect.annotateCurrentSpan("executor.tool.retry", "credentials_renewed");
         return yield* execute(renewed);
       }
@@ -516,6 +525,68 @@ export const makeTools = (
       ),
     );
   };
+  /** Read the live catalog of a resolved invocation, renewing an account the service refuses. */
+  const readCatalog = <A, R>(
+    state: InvocationSnapshot,
+    context: InvocationContext,
+    read: (
+      options: Parameters<typeof runtime.index>[0],
+      toolIndex: boolean,
+      scheduledTools: boolean,
+    ) => Effect.Effect<A, Effect.Error<ReturnType<typeof runtime.index>>, R>,
+  ) =>
+    inspectRenewing(state, context, (context) =>
+      read(
+        inspection(state, context),
+        state.deployment.requirements.capabilities?.toolIndex === true,
+        state.deployment.requirements.capabilities?.scheduledTools === true,
+      ),
+    );
+  /** Describe one tool of the live catalog; ToolNotFound when it is absent. */
+  const describe = (state: InvocationSnapshot, context: InvocationContext, name: ToolName) =>
+    readCatalog(state, context, (options, toolIndex) =>
+      runtime.inspect(toolIndex ? { ...options, tools: [name] } : options),
+    ).pipe(
+      Effect.flatMap(({ tools, routers }) =>
+        Effect.gen(function* () {
+          const tool = tools.find((tool) => tool.name === name);
+          if (tool !== undefined) return tool;
+          // A tool under a router that could not be read fails with that router's error.
+          const failed = routers.find(
+            (router) => router.error !== undefined && name.startsWith(`${router.path}.`),
+          )?.error;
+          if (failed !== undefined)
+            return yield* Schema.is(ProviderError)(failed)
+              ? appProviderFailure(state, failed)
+              : evaluationFailure({ app: state.app.id, deployment: state.deployment.id }, failed);
+          return yield* new ToolNotFound({
+            app: state.app.id,
+            deployment: state.deployment.id,
+            tool: name,
+          });
+        }),
+      ),
+    );
+  /**
+   * The caller's kind, or the catalog's for a caller that did not name one. A tool the catalog
+   * does not list, such as one a dynamic source resolves on demand, is called without a kind:
+   * the app applies the tool's own kind and storage opens for writing.
+   */
+  const kindOf = (
+    state: InvocationSnapshot,
+    context: InvocationContext,
+    name: ToolName,
+    kind: ToolKind | undefined,
+  ) =>
+    kind === undefined
+      ? describe(state, context, name).pipe(
+          Effect.map((tool): ToolKind | undefined =>
+            tool.readOnly === true ? "query" : "mutation",
+          ),
+          Effect.catchTag("ToolNotFound", () => Effect.succeed(undefined)),
+          Effect.withSpan("sdk.tools.kind"),
+        )
+      : Effect.succeed(kind);
   /** Evaluate the selected profile's live catalog. */
   const evaluate = <A, R>(
     input: Parameters<Executor["tools"]["index"]>[0],
@@ -537,13 +608,7 @@ export const makeTools = (
         "executor.deployment.id": state.deployment.id,
         "executor.build.id": state.deployment.build,
       });
-      const value = yield* inspectRenewing(state, context, (context) =>
-        read(
-          inspection(state, context),
-          state.deployment.requirements.capabilities?.toolIndex === true,
-          state.deployment.requirements.capabilities?.scheduledTools === true,
-        ),
-      );
+      const value = yield* readCatalog(state, context, read);
       const catalog = {
         deployment: state.deployment.id,
         ...(state.profile === undefined
@@ -607,13 +672,14 @@ export const makeTools = (
           inspectRenewing(state, context, (context) =>
             runtime.inspect(inspection(state, context)),
           ).pipe(
-            Effect.map((tools): ToolListing => ({
+            Effect.map(({ tools, routers }): ToolListing => ({
               catalog: {
                 deployment: state.deployment.id,
                 ...(state.profile === undefined
                   ? {}
                   : { profile: state.profile.id, profileRevision: state.profile.revision }),
               },
+              routers,
               items: [...tools]
                 .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
                 .map((tool) => ({
@@ -633,6 +699,7 @@ export const makeTools = (
         const last = selected.at(-1);
         return {
           ...listing.catalog,
+          routers: listing.routers,
           items: selected,
           ...(last !== undefined && after.length > selected.length
             ? { next: Cursor.make(last.name) }
@@ -645,7 +712,9 @@ export const makeTools = (
      */
     scheduled: (input: Parameters<Executor["tools"]["list"]>[0]) =>
       Effect.gen(function* () {
-        const { value: tools } = yield* evaluate(input, (options, _toolIndex, scheduled) =>
+        const {
+          value: { tools },
+        } = yield* evaluate(input, (options, _toolIndex, scheduled) =>
           runtime.inspect(scheduled ? { ...options, scheduled: true } : options),
         );
         return tools.flatMap((tool) =>
@@ -660,16 +729,19 @@ export const makeTools = (
         const {
           state,
           catalog,
-          value: tools,
+          value: { tools, routers },
         } = yield* evaluate(input, (options, toolIndex) =>
           toolIndex
             ? runtime.index(options)
             : runtime
                 .inspect(options)
-                .pipe(Effect.map((tools) => tools.map((tool) => summarize(tool)))),
+                .pipe(
+                  Effect.map(({ tools, routers }) => ({ tools: tools.map(summarize), routers })),
+                ),
         );
         return {
           ...catalog,
+          routers,
           items: [...tools]
             .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
             .map((tool) => ({
@@ -682,16 +754,11 @@ export const makeTools = (
       }).pipe(Effect.withSpan("sdk.tools.index")),
     get: (input: Parameters<Executor["tools"]["get"]>[0]) =>
       Effect.gen(function* () {
-        const { state, value: tools } = yield* evaluate(input, (options, toolIndex) =>
-          runtime.inspect(toolIndex ? { ...options, tools: [input.tool] } : options),
+        const state = yield* snapshot(db, input).pipe(Effect.withSpan("sdk.invocation.snapshot"));
+        const context = yield* resolve(state, resolveAccount, lifecycle).pipe(
+          Effect.withSpan("sdk.accounts.resolve"),
         );
-        const tool = tools.find((tool) => tool.name === input.tool);
-        if (tool === undefined)
-          return yield* new ToolNotFound({
-            app: state.app.id,
-            deployment: state.deployment.id,
-            tool: input.tool,
-          });
+        const tool = yield* describe(state, context, input.tool);
         return {
           ...tool,
           app: state.app.id,
@@ -723,6 +790,7 @@ export const makeTools = (
           "executor.build.id": state.deployment.build,
           "executor.tool.name": parsed.tool,
         });
+        const kind = yield* kindOf(state, context, parsed.tool, parsed.kind);
         let toolError = false;
         const storageBinding = yield* bindAppStorage(appStorage, state.app.id);
         const execute = (context: InvocationContext) =>
@@ -736,6 +804,7 @@ export const makeTools = (
               database: state.deployment.requirements.database !== undefined,
               ...context,
               tool: parsed.tool,
+              ...(kind === undefined ? {} : { kind }),
               input: args,
               ...(options?.elicitation === undefined ? {} : { elicitation: options.elicitation }),
             });
@@ -747,7 +816,7 @@ export const makeTools = (
             }),
             Effect.result,
           );
-        const result = yield* executeRenewing(state, context, parsed.tool, execute);
+        const result = yield* executeRenewing(state, context, kind, execute);
         if (Result.isSuccess(result)) {
           if (toolError)
             yield* Effect.annotateCurrentSpan({
@@ -762,7 +831,7 @@ export const makeTools = (
         }
         if (Schema.is(HostToolApprovalRequired)(result.failure)) {
           return yield* approvals.save(
-            yield* invocation(state, parsed.tool, result.failure.input),
+            yield* invocation(state, parsed.tool, kind, result.failure.input),
             args,
             result.failure.elicitation,
           );
@@ -791,7 +860,7 @@ export const makeTools = (
                 }).pipe(
                   Effect.withSpan("sdk.invocation.snapshot"),
                   Effect.flatMap((state) =>
-                    invocation(state, saved.tool, saved.input).pipe(
+                    invocation(state, saved.tool, saved.kind, saved.input).pipe(
                       Effect.map((current) => ({ state, current })),
                     ),
                   ),
@@ -819,6 +888,7 @@ export const makeTools = (
                   const context = yield* resolve(state, resolveAccount, lifecycle).pipe(
                     Effect.withSpan("sdk.accounts.resolve"),
                   );
+                  const kind = yield* kindOf(state, context, saved.tool, saved.kind);
                   let toolError = false;
                   const storageBinding = yield* bindAppStorage(appStorage, saved.app);
                   const execute = (context: InvocationContext) =>
@@ -832,6 +902,7 @@ export const makeTools = (
                         database: state.deployment.requirements.database !== undefined,
                         ...context,
                         tool: saved.tool,
+                        ...(kind === undefined ? {} : { kind }),
                         input: originalInput,
                         approval: { tool: saved.tool, input: saved.input },
                         ...(options?.elicitation === undefined
@@ -846,7 +917,7 @@ export const makeTools = (
                       }),
                       Effect.result,
                     );
-                  const result = yield* executeRenewing(state, context, saved.tool, execute);
+                  const result = yield* executeRenewing(state, context, kind, execute);
                   if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
                   const value = result.success;
                   if (toolError)

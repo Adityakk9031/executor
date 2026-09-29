@@ -278,14 +278,20 @@ export const localApi = (
       });
       const web = options.web ?? (yield* webFiles);
       // Dashboard-host routes never include the app-origin APIs.
-      const authoring = yield* localAppManagement(config, auth, managed.app, {
-        executor,
-        sources,
-        repositories,
-        registry,
-        blobs,
-      });
       const publicSkills = yield* readExecutorSkills;
+      const authoring = yield* localAppManagement(
+        config,
+        auth,
+        managed.app,
+        {
+          executor,
+          sources,
+          repositories,
+          registry,
+          blobs,
+        },
+        publicSkills,
+      );
       const productRoutes = Layer.mergeAll(
         publishedSkillRoutes(Effect.succeed(publicSkills)),
         HttpApiBuilder.layer(LocalWebhookSetupApi).pipe(

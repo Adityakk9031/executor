@@ -15,6 +15,7 @@ import {
   type AppEvaluationFailed,
   type AppProviderFailed,
   type ToolListOptions,
+  ToolRouter,
 } from "../contracts/tools.ts";
 import { ProfileRevision } from "../contracts/profiles.ts";
 import { DeploymentId, ProfileId } from "../contracts/shared.ts";
@@ -30,6 +31,8 @@ export interface ToolListing {
     readonly profileRevision?: number;
   };
   readonly items: ReadonlyArray<Tool>;
+  /** Every router in the catalog, on every page. */
+  readonly routers: ReadonlyArray<ToolRouter>;
 }
 /** A listing's JSON text, as another process or isolate kept it. */
 const ListingJson = Schema.fromJsonString(
@@ -40,6 +43,7 @@ const ListingJson = Schema.fromJsonString(
       profileRevision: Schema.optionalKey(ProfileRevision),
     }),
     items: Schema.Array(Tool),
+    routers: Schema.Array(ToolRouter),
   }),
 );
 

@@ -18,7 +18,7 @@ import {
 import { HostedExecutor, lazyHostedApiDocument } from "@executor-js/hosted-server";
 import { BillingMeter } from "./contracts/billing-meter.ts";
 import { billingBindings } from "./infrastructure/billing.ts";
-import { registryRoutes, gitRoutes } from "@executor-js/app-management";
+import { frameworkDocumentation, registryRoutes, gitRoutes } from "@executor-js/app-management";
 import { hostedAppGitAccess } from "@executor-js/hosted-server/app-management";
 /** Cloudflare composition edge. Alchemy owns the Effect runtime and request scopes. */
 import { publishedSkillRoutes } from "@executor-js/app-templates/executor";
@@ -258,14 +258,15 @@ export default Api.make(
     const egress = yield* cloudEgress;
     // Only /openapi.json and preparing the Executor catalog app read the document.
     const document = lazyHostedApiDocument(() => executorCloudApiDocument(auth.origin));
-    // Only that app and the published skills read the large authoring reference.
+    // Only framework lookups and the published skills read the large authoring reference.
     const authoring = Effect.promise(() => import("./implementation/executor-authoring.ts")).pipe(
       Effect.map(({ executorAuthoringSkills }) => executorAuthoringSkills),
     );
     const api = cloudApi(document).pipe(
+      Layer.provide(frameworkDocumentation(authoring)),
       Layer.provide(appUi.dashboard),
       Layer.provide(requestServices(auth.appSessions).layer),
-      HttpRouter.provideRequest(catalogLive(authoring, document.document, egress)),
+      HttpRouter.provideRequest(catalogLive(document.document, egress)),
       Layer.provide(schedules),
       Layer.provide(billing),
       Layer.provide(removals),

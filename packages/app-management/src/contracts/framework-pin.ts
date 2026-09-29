@@ -5,10 +5,18 @@
 import { Schema } from "effect";
 
 /**
- * The protocol-1 release published from the framework hosts ran before routers. All existing
- * source is written for it; earlier hosts built undeclared source with that same framework.
+ * The release `1_app_framework_pin` declares: the protocol-1 framework hosts ran before routers.
+ * All existing source is written for it; earlier hosts built undeclared source with it. The step
+ * has shipped, so this never changes.
  */
 export const frameworkPinRelease = "0.0.1-beta.2";
+
+/**
+ * The release `2_app_framework_pin_catch_up` declares: the last framework before routers. Apps
+ * created without a declaration after the first pin were built by hosts shipping beta.2 through
+ * beta.5, which share the `queries`/`mutations` authoring API, so the latest one covers them all.
+ */
+export const frameworkPinCatchUpRelease = "0.0.1-beta.5";
 
 /**
  * Where the working branch (`main`) stands against the running deployment decides which files

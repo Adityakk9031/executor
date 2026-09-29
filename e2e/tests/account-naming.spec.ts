@@ -15,6 +15,7 @@ import {
 } from "../support/name-account.ts";
 import { createProfile } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Account = Schema.Struct({ id: Schema.String, label: Schema.String });
 const Detail = Schema.Struct({ account: Account });
@@ -34,13 +35,14 @@ layer(HostedLive, { excludeTestServices: true })("Account naming", (it) => {
             {
               path: "index.ts",
               content: `
-import { defineApp, defineProvider, object, secrets, string } from "apps";
+import { defineApp, defineProvider, object, router, secrets, string } from "apps";
 const service = defineProvider({ name: "Naming fixture", auth: {
   key: secrets({ label: "API key", fields: object({ token: string() }) })
 } });
-export default defineApp({ accounts: { service } }, async () => ({ queries: {} }));
+export default defineApp({ accounts: { service } }, async () => ({ tools: router({}) }));
 `,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);

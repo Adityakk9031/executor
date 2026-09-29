@@ -17,6 +17,7 @@ import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile, Profile } from "../support/profiles.ts";
 import { nameConnectedAccount } from "../support/name-account.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const AppProvider = Schema.Struct({
   id: Schema.String,
@@ -68,10 +69,13 @@ layer(HostedLive, { excludeTestServices: true })("OAuth declared endpoints", (it
               files: [
                 {
                   path: "index.ts",
-                  content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+                  content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service=defineProvider({name:${JSON.stringify(name)},auth:{oauth:oauth2(${JSON.stringify(config)})}});
-export default defineApp({accounts:{service}},async({accounts})=>({queries:{read:query({input:object({})},async({fetch})=>{const result=await fetch(${JSON.stringify(`${issuer.origin}/resource`)},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});return result.json();})}}));`,
+export default defineApp({accounts:{service}},async({accounts})=>({tools: router({
+  read:query({input:object({})},async({fetch})=>{const result=await fetch(${JSON.stringify(`${issuer.origin}/resource`)},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});return result.json();}),
+})}));`,
                 },
+                appsManifest,
               ],
             });
             expect(response.status).toBe(200);
@@ -167,7 +171,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
               actors.owner,
               "POST",
               `${prefix}/apps/${app.id}/tools/call`,
-              { profile: attempt.profile.id, tool: "queries.read", input: {} },
+              { profile: attempt.profile.id, tool: "read", kind: "query", input: {} },
             );
             const metrics = yield* issuer.metrics;
             expect(

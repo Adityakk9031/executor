@@ -341,7 +341,8 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
         const call = (actor: Session, profile: string) =>
           api.request(actor, "POST", `${path}/tools/call`, {
             profile,
-            tool: "queries.context.get",
+            tool: "context.get",
+            kind: "query",
             input: {},
           });
         const [ownerCall, adminCall, deniedCall] = yield* Effect.all(

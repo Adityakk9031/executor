@@ -17,6 +17,7 @@ import { oauthMcpAppFiles } from "../support/authored-templates.ts";
 import { createProfile } from "../support/profiles.ts";
 import { nameConnectedAccount } from "../support/name-account.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const AppProvider = Schema.Struct({ id: Schema.String });
 const Redirect = Schema.Struct({
@@ -49,15 +50,16 @@ layer(HostedLive, { excludeTestServices: true })("OAuth completion reasons", (it
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2 } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Declared issuer",auth:{oauth:oauth2(${JSON.stringify({
                 authorizationUrl: `${signInOrigin}/authorize`,
                 tokenUrl: `${issuer.origin}/token`,
                 issuer: signInOrigin,
                 scopes: ["read"],
               })})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);

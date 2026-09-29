@@ -17,6 +17,7 @@ import {
   ApprovalElicitation,
   ApprovalResponse,
   ElicitationFailed,
+  HostedRouter,
   HostedTool,
   HostedToolSummary,
   type ElicitationHandler,
@@ -91,12 +92,21 @@ export const Tool = Schema.Struct({
 
 export type Tool = typeof Tool.Type;
 
+/**
+ * A group of tools in an app's live catalog. `path` is "" for the app's root. Its instructions,
+ * when present, are the skill named `skill`. A router with `error` could not list its tools.
+ */
+export const ToolRouter = HostedRouter;
+export type ToolRouter = typeof ToolRouter.Type;
+
 /** One page of a live catalog, evaluated using the named profile's saved selections. */
 export const ToolPage = Schema.Struct({
   profile: Schema.optional(ProfileId),
   profileRevision: Schema.optional(ProfileRevision),
   deployment: DeploymentId,
   items: Schema.Array(Tool),
+  /** Every router in the catalog, on every page. */
+  routers: Schema.Array(ToolRouter),
   next: Schema.optional(Cursor),
 });
 
@@ -118,6 +128,7 @@ export const ToolIndex = Schema.Struct({
   profileRevision: Schema.optional(ProfileRevision),
   deployment: DeploymentId,
   items: Schema.Array(ToolSummary),
+  routers: Schema.Array(ToolRouter),
 });
 
 export type ToolIndex = typeof ToolIndex.Type;
@@ -452,6 +463,21 @@ export class ToolNotFound extends Schema.TaggedError<ToolNotFound>()(
   { httpApiStatus: 404, description: "No tool matches this name in the evaluated app." },
 ) {}
 
+/** Whether a tool reads or writes; callers name it so storage is opened in the right mode. */
+export const ToolKind = Schema.Literals(["query", "mutation"]);
+export type ToolKind = typeof ToolKind.Type;
+
+/** The tool exists with the other kind. Nothing ran; call it again with `actual`. */
+export class ToolKindMismatch extends Schema.TaggedError<ToolKindMismatch>()(
+  "ToolKindMismatch",
+  { app: AppId, deployment: DeploymentId, tool: ToolName, requested: ToolKind, actual: ToolKind },
+  {
+    httpApiStatus: 409,
+    description:
+      "The tool was called as a query but is a mutation, or the reverse. The catalog's readOnly field gives its kind.",
+  },
+) {}
+
 /** The tool input did not match its declared schema. */
 export class InputInvalid extends Schema.TaggedError<InputInvalid>()(
   "InputInvalid",
@@ -529,6 +555,8 @@ export const ToolInvocation = Schema.Struct({
   owner: OwnerId,
   deployment: DeploymentId,
   tool: ToolName,
+  /** Approvals saved before calls named their kind carry none; resumption reads it from the catalog. */
+  kind: Schema.optionalKey(ToolKind),
   input: Json,
   accounts: Schema.Record(
     Schema.String,
@@ -603,6 +631,11 @@ export const ToolInputs = {
     expectedProfileRevision: Schema.optional(ProfileRevision),
     deployment: Schema.optional(DeploymentId),
     tool: ToolName,
+    /**
+     * "query" for tools the catalog marks readOnly, otherwise "mutation". Omitted, it is read from
+     * the catalog; supplied and wrong, the call fails with ToolKindMismatch before anything runs.
+     */
+    kind: Schema.optional(ToolKind),
     input: Schema.optional(Json),
   }),
   pruneApprovals: Schema.Struct({ owner: Schema.optional(OwnerId) }),
@@ -710,6 +743,7 @@ export const ToolsGroup = HttpApiGroup.make("tools")
         AccountRequired,
         AccountSelectionInvalid,
         ToolNotFound,
+        ToolKindMismatch,
         InputInvalid,
         ToolCallFailed,
         OAuthReconnectRequired,

@@ -238,7 +238,8 @@ export const makeWorkflowRuns = (
             build: current.build,
             ...bound,
             deadline,
-            tool: `${input.kind === "query" ? "queries" : "mutations"}.${input.name}`,
+            tool: input.name,
+            kind: input.kind,
             input: input.input,
             ...(input.kind === "mutation"
               ? {
@@ -266,6 +267,7 @@ export const makeWorkflowRuns = (
               HostToolBlocked: () => Effect.fail(failure("approval")),
               HostInputInvalid: () => Effect.fail(failure("input")),
               HostToolNotFound: () => Effect.fail(failure("operation")),
+              HostKindMismatch: () => Effect.fail(failure("operation")),
               HostOperationFailed: ({ errorName, message }) =>
                 Effect.fail(
                   new WorkflowFailure({

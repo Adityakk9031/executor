@@ -11,6 +11,7 @@ import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 import { randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
+import { appsManifest } from "../support/apps-release.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
@@ -60,10 +61,11 @@ layer(HostedLive, { excludeTestServices: true })("OAuth client authentication", 
               files: [
                 {
                   path: "index.ts",
-                  content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+                  content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service=defineProvider({name:${JSON.stringify(name)},auth:{oauth:oauth2(${JSON.stringify(config)})}});
-export default defineApp({accounts:{service}},async({accounts})=>({queries:{read:query({input:object({})},async({fetch})=>{const result=await fetch(${JSON.stringify(`${issuer.origin}/resource`)},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});return result.json();})}}));`,
+export default defineApp({accounts:{service}},async({accounts})=>({tools:router({read:query({input:object({})},async({fetch})=>{const result=await fetch(${JSON.stringify(`${issuer.origin}/resource`)},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});return result.json();})})}));`,
                 },
+                appsManifest,
               ],
             });
             expect(response.status, JSON.stringify(response.body)).toBe(200);
@@ -148,7 +150,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
               actors.owner,
               "POST",
               `${prefix}/apps/${app.id}/tools/call`,
-              { profile: profile.id, tool: "queries.read", input: {} },
+              { profile: profile.id, tool: "read", kind: "query", input: {} },
             );
             const renewed = yield* issuer.metrics;
             expect(

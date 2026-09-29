@@ -1,8 +1,8 @@
 import { retireMethod } from "@executor-js/app-data/worker-bundle";
 import type { SourceFile } from "../contracts/deployment.ts";
 /**
- * Protocol 1's retained server entry. It imports the framework's host module as a namespace and
- * uses only what protocol 1 guarantees, so it links against every protocol-1 framework. Optional
+ * The retained server entry for every protocol so far. It imports the framework's host module as a
+ * namespace and uses only what protocol 1 guarantees, so it links against every protocol-1 framework. Optional
  * later additions are feature-detected: `isolatedCacheSession` first shipped after apps
  * 0.0.1-beta.0, and the invocation bridges skip caching when a build has no `cacheSession`.
  */
@@ -27,12 +27,15 @@ export default {
   }
 };`;
 
-/** Protocol 1's entry for the SDK's in-process Node runtime. */
-export const nodeAppEntry = (files: readonly SourceFile[]) =>
+/**
+ * Entry for the SDK's in-process Node runtime. Every protocol so far uses the same host
+ * functions; the entry records which one its framework speaks.
+ */
+export const nodeAppEntry = (protocol: number) => (files: readonly SourceFile[]) =>
   [
     'import app from "./source/index.ts";',
     'import * as host from "apps/host";',
-    "export const protocol = 1;",
+    `export const protocol = ${protocol};`,
     "const handler = host.createAppHandler(app);",
     `const files = ${JSON.stringify(files)};`,
     // Redacted owns a private store per Effect instance. Decode on

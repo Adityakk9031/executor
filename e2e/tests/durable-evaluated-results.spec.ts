@@ -6,6 +6,7 @@ import { expect, layer } from "@effect/vitest";
 import { Effect, Schedule, Schema } from "effect";
 import { randomUUID } from "node:crypto";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
@@ -17,7 +18,7 @@ import { Evidence, Telemetry } from "../support/evidence.ts";
  * descriptions. The isolate never keeps it, so every read after the first tests the supervisor.
  * The revision tool is named after a value kept in the app cache, so an invalidation renames it.
  */
-const source = `import { defineApp, query, object, string } from "apps";
+const source = `import { defineApp, query, object, router, string } from "apps";
 export default defineApp({ accounts: {} }, async (ctx) => {
   const revision = await ctx.cache.get({
     key: "revision",
@@ -26,21 +27,21 @@ export default defineApp({ accounts: {} }, async (ctx) => {
     load: async () => crypto.randomUUID().replaceAll("-", "").slice(0, 12),
   });
   const padding = "x".repeat(800);
-  const queries = Object.fromEntries(
+  const listed = Object.fromEntries(
     Array.from({ length: 1500 }, (_, index) => [
       "tool_" + index,
       query({ description: padding, input: object({}) }, async () => index),
     ]),
   );
   return {
-    queries: {
-      ...queries,
+    tools: router({
+      ...listed,
       ["revision_" + revision]: query({ input: object({}) }, async () => revision),
       bump: query({ input: object({}) }, async () => {
         await ctx.cache.invalidate("revision");
         return true;
       }),
-    },
+    }),
   };
 });`;
 
@@ -58,7 +59,7 @@ layer(HostedLive, { excludeTestServices: true })("Durable evaluated results", (i
         const prefix = `/api/organizations/${actors.organization.id}/apps`;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/deploy`, {
           name: `Durable listing ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: source }],
+          files: [{ path: "index.ts", content: source }, appsManifest],
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
         const app = yield* body(App, deployed);
@@ -88,7 +89,7 @@ layer(HostedLive, { excludeTestServices: true })("Durable evaluated results", (i
             const listing = spans.find((span) => span.operationName === "sdk.tools.listing");
             return {
               names,
-              revision: names.find((name) => name.startsWith("queries.revision_")),
+              revision: names.find((name) => name.startsWith("revision_")),
               cache: listing?.tags["executor.declarations.cache"],
               source: listing?.tags["executor.declarations.source"],
             };
@@ -101,7 +102,7 @@ layer(HostedLive, { excludeTestServices: true })("Durable evaluated results", (i
         const first = yield* read("first-listing", written);
         expect(first.cache).toBe("miss");
         // Pages are sorted by name, so the first holds bump and the revision tool.
-        expect(first.names).toContain("queries.bump");
+        expect(first.names).toContain("bump");
         expect(first.revision).toBeDefined();
 
         // The isolate cannot keep a listing this large, so the next read is the supervisor's copy.
@@ -112,7 +113,8 @@ layer(HostedLive, { excludeTestServices: true })("Durable evaluated results", (i
 
         // An app cache invalidation forgets it in the supervisor, for every isolate at once.
         const bumped = yield* api.request(actors.owner, "POST", `${path}/tools/call`, {
-          tool: "queries.bump",
+          tool: "bump",
+          kind: "query",
           input: {},
         });
         expect(bumped.status, JSON.stringify(bumped.body)).toBe(200);

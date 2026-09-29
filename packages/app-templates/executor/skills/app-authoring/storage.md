@@ -17,6 +17,7 @@ import {
   object,
   string,
   table,
+  router,
 } from "apps";
 
 const database = defineDatabase({
@@ -36,18 +37,20 @@ const add = mutation(
   async ({ db }: MutationContext<typeof requirements>, message) => db.messages.insert(message),
 );
 export default defineApp(requirements, {
-  queries: { list },
-  mutations: { add },
+  tools: router({
+    list,
+    add,
+  }),
 });
 ```
 
-Queries and mutations are automatically available to the agent as `queries.<name>`
-and `mutations.<name>` in the app's tool catalog. Use `tools.search` to get their
-exact callable expressions; do not write another tool wrapper. Calls preserve
+Queries and mutations in the app's `tools` router are automatically available to
+the agent by their router path, such as `list` or `issues.list`. Use `tools.search`
+to get their exact callable expressions; do not write another tool wrapper. Calls preserve
 read-only query capability, atomic mutation commit, output validation and live
 updates. Add `description` and optionally `title` to an operation's options to
-improve discovery. Agent paths nest these categories under the name-derived app slug,
-for example `tools.inbox.queries.list(...)`.
+improve discovery. Agent paths nest these under the name-derived app slug,
+for example `tools.inbox.list(...)`.
 
 `defineDatabase` supplies only the schema; `database.query` and `database.mutation`
 are removed. Declaring a database gives every query a read session and every
@@ -117,5 +120,5 @@ reports completion; see [workflows.md](workflows.md).
 `insert(value)` returns the complete inserted row, including `id`, `createdAt`
 and `updatedAt`. `get(id)` returns a row or `null`. `update(id, patch)` returns
 the updated row or `null` when the row does not exist. `delete(id)` returns a boolean. Read `DatabaseTable.insert`,
-`DatabaseTable.update`, and `IndexQuery` through `framework_describe` for exact types.
+`DatabaseTable.update`, and `IndexQuery` through `framework.describe` for exact types.
 Do not deploy probe apps to discover these contracts.

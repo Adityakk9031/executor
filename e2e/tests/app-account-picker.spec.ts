@@ -11,6 +11,7 @@ import { App, Resource } from "../support/contracts.ts";
 import { nameConnectedAccount } from "../support/name-account.ts";
 import { holdQuery, refreshVisiblePage } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("App accounts", (it) => {
   it.effect(scenarios.appAccountPicker.title, (context) =>
@@ -27,10 +28,11 @@ layer(HostedLive, { excludeTestServices: true })("App accounts", (it) => {
             {
               path: "index.ts",
               content: `
-import { defineApp, defineProvider, object, secrets, string } from "apps";
+import { defineApp, defineProvider, object, secrets, string, router } from "apps";
 const service = defineProvider({ name: "Account fixture", auth: { key: secrets({ label: "API key", fields: object({ token: string() }) }) } });
-export default defineApp({ accounts: { primary: service, mailboxes: service.many() } }, async () => ({ queries: {} }));`,
+export default defineApp({ accounts: { primary: service, mailboxes: service.many() } }, async () => ({ tools: router({}) }));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -472,10 +474,11 @@ export default defineApp({ accounts: { primary: service, mailboxes: service.many
             {
               path: "index.ts",
               content: `
-import { defineApp, defineProvider, oauth2 } from "apps";
+import { defineApp, defineProvider, oauth2, router } from "apps";
 const service = defineProvider({ name: "Browser fixture", auth: { oauth: oauth2({ authorizationUrl: "https://oauth.example.test/authorize", tokenUrl: "https://oauth.example.test/token", scopes: ["read"] }) } });
-export default defineApp({ accounts: { service } }, async () => ({ queries: {} }));`,
+export default defineApp({ accounts: { service } }, async () => ({ tools: router({}) }));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);

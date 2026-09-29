@@ -15,6 +15,7 @@ import {
 } from "../support/name-account.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("Account connection", (it) => {
   it.effect(scenarios.accountConnectionQuery.title, (context) =>
@@ -33,16 +34,19 @@ layer(HostedLive, { excludeTestServices: true })("Account connection", (it) => {
             {
               path: "index.ts",
               content: `
-import { defineApp, defineProvider, mutation, object, secrets, string } from "apps";
+import { defineApp, defineProvider, mutation, object, secrets, string, router } from "apps";
 const service = defineProvider({ name: "Connection fixture", auth: {
   key: secrets({ label: "API key", fields: object({ token: string() }) })
 } });
 export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
-  mutations: { echo: mutation({ description: "Echo with the connected account", input: object({ text: string() }) },
-    async (_, input) => ({ text: input.text, connected: accounts.service.fields.token === "synthetic-connection-token" })) }
+  tools: router({
+    echo: mutation({ description: "Echo with the connected account", input: object({ text: string() }) },
+    async (_, input) => ({ text: input.text, connected: accounts.service.fields.token === "synthetic-connection-token" })),
+  })
 }));
 `,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -264,9 +268,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
           page.getByRole("link", { name: "Tools", exact: true }).click(),
         );
         yield* browser.use("The connected app's tools load without refreshing", (page) =>
-          page
-            .getByRole("button", { name: "mutations.echo", exact: true })
-            .waitFor({ state: "visible" }),
+          page.getByRole("button", { name: "echo", exact: true }).waitFor({ state: "visible" }),
         );
         expect(
           yield* browser.use("The original document remains mounted", (page) =>

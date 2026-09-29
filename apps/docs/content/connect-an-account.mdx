@@ -74,14 +74,14 @@ link and gives you the link; you finish in your browser.
 <CodeGroup>
 
 ```js Hosted
-return await tools.executor.profiles["<management-profile-id>"].mutations.accounts.connect({
+return await tools.executor.profiles["<management-profile-id>"].accounts.connect({
   path: { organization: "<organization-id>", app: "<app-id>" },
   body: { profile: "<profile-id>", requirement: "vercel" },
 });
 ```
 
 ```js Local
-return await tools.executor.profiles["<management-profile-id>"].mutations.accountConnect.issue({
+return await tools.executor.profiles["<management-profile-id>"].accountConnect.issue({
   body: { owner: "alice", target: { app: "<app-id>", profile: "<profile-id>", requirement: "vercel" } },
 });
 ```
@@ -98,7 +98,7 @@ an account without selecting it anywhere. Not both.
 Check whether you finished:
 
 ```js
-const connection = await tools.executor.profiles["<management-profile-id>"].queries.accountConnections.get({
+const connection = await tools.executor.profiles["<management-profile-id>"].accountConnections.get({
   path: { connection: "<connection-id>" },
 });
 return connection.state;

@@ -12,12 +12,13 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Access = Schema.Struct({ revision: Schema.String });
 const Group = Schema.Struct({ id: Schema.String, revision: Schema.String });
-const source = `import { defineApp, defineProvider, secrets, query, object, string } from "apps";
+const source = `import { defineApp, defineProvider, secrets, query, object, string, router } from "apps";
 const service = defineProvider({name:"Member controls fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
-export default defineApp({accounts:{service:service.many()}},{queries:{hello:query({input:object({})},async()=>"Hello")}});`;
+export default defineApp({accounts:{service:service.many()}},{tools: router({ hello:query({input:object({})},async()=>"Hello") })});`;
 const bounds = (page: Page) =>
   page.locator(".app-overview > div > section").evaluateAll((cards) =>
     cards.map((card) => {
@@ -44,7 +45,7 @@ layer(HostedLive, { excludeTestServices: true })("Member controls", (it) => {
             App,
             yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
               name,
-              files: [{ path: "index.ts", content: source }],
+              files: [{ path: "index.ts", content: source }, appsManifest],
             }),
           );
           const accounts: string[] = [],

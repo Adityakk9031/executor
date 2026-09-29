@@ -92,10 +92,10 @@ layer(HostedLive, { excludeTestServices: true })("Template accounts", (it) => {
           expect(tools.status, JSON.stringify(tools.body)).toBe(200);
           const tool =
             kind === "graphql"
-              ? "queries.query_identity"
+              ? "query_identity"
               : kind === "openapi"
-                ? "queries.identity.getIdentity"
-                : "queries.identity";
+                ? "identity.getIdentity"
+                : "identity";
           expect((yield* body(Tools, tools)).items.map((item) => item.name)).toEqual([tool]);
           if (kind === "mcp") {
             const descriptions = JSON.stringify((yield* body(Tools, tools)).items);
@@ -108,6 +108,8 @@ layer(HostedLive, { excludeTestServices: true })("Template accounts", (it) => {
             api.request(actors.owner, "POST", `${path}/tools/call`, {
               profile: profile.id,
               tool,
+              // Every template's identity operation is a read.
+              kind: "query",
               input: { accountId, input: kind === "mcp" ? { value: label } : {} },
             });
           for (const [index, label] of ["work", "personal"].entries()) {

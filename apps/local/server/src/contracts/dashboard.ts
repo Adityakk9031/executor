@@ -8,7 +8,7 @@ import { Profile } from "@executor-js/sdk/core";
 import { DashboardAppBrowser } from "./app-browser.ts";
 import { DashboardWorkflows, DashboardWebhooks } from "./resources.ts";
 import { DashboardProfiles } from "./profiles.ts";
-import { ProfileId, ProfileRevision } from "@executor-js/sdk/core";
+import { ProfileId, ProfileRevision, ToolKind, ToolKindMismatch } from "@executor-js/sdk/core";
 import { ProfileErrors } from "@executor-js/sdk/core";
 import { AppWorkflowsActive, AccountWorkflowsActive } from "@executor-js/sdk/core";
 import { DashboardSchedules } from "./schedules.ts";
@@ -422,6 +422,8 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
         params: { app: AppId },
         payload: Schema.Struct({
           tool: ToolName,
+          /** "query" for tools the catalog marks readOnly, otherwise "mutation". Omitted, it is read from the catalog. */
+          kind: Schema.optional(ToolKind),
           input: Json,
           deployment: Schema.optional(DeploymentId),
           profile: Schema.optional(ProfileId),
@@ -443,6 +445,7 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
           OAuthReconnectRequired,
           OAuthRenewalFailed,
           ToolNotFound,
+          ToolKindMismatch,
           InputInvalid,
           ToolCallFailed,
           ToolElicitationFailed,

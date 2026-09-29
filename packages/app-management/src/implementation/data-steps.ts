@@ -51,7 +51,10 @@ export const createDataStepJournal = (journal: DataStepJournal) =>
 export interface DataStepRunOptions {
   readonly journal: DataStepJournal;
   readonly mode: DataStepMode;
-  /** Report runs with the same label share one record: Cloud labels them with its build version. */
+  /**
+   * Report runs with the same label share one record and resume from its cursor, including across
+   * processes and deploys. Cloud keeps one label across deploys; startup labels each start.
+   */
   readonly report: string;
   /**
    * Startup holds the host exclusively, so it resumes a run whose lease an earlier crashed process

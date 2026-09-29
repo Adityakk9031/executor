@@ -8,6 +8,7 @@ import { TestLive, withCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 const appSchema = Schema.Struct({
   app: Schema.Struct({
     id: Schema.String,
@@ -16,10 +17,10 @@ const appSchema = Schema.Struct({
     }),
   }),
 });
-const source = `import {defineApp,defineProvider,secrets,query,object,string} from "apps";
+const source = `import {defineApp,defineProvider,secrets,query,object,string, router} from "apps";
 const service=defineProvider({name:"Launch fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 export const who=query({input:object({})},async ctx=>ctx.accounts.service.id);
-export default defineApp({accounts:{service}},{queries:{who}});`;
+export default defineApp({accounts:{service}},{tools: router({ who })});`;
 const files = (code: string) => [
   { path: "index.ts", content: code },
   {
@@ -32,6 +33,7 @@ const files = (code: string) => [
     content:
       'import {string} from "apps";import {createAppClient,queryReference} from "apps/client";import type {who} from "../index.ts";createAppClient().query(queryReference<typeof who>("who"),{},string()).then(value=>{document.querySelector("#identity").textContent=value;});',
   },
+  appsManifest,
 ];
 layer(TestLive, { excludeTestServices: true })("Local app launch", (it) => {
   it.effect(scenarios.localAppLaunch.title, (context) =>

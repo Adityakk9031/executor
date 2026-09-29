@@ -63,6 +63,8 @@ export const OpenapiOperation = Schema.Struct({
   }),
   /** Streams remain in the metadata but cannot run through a single-result tool call. */
   streaming: Schema.optionalKey(Schema.Literal(true)),
+  /** The operation's OpenAPI tags, shown to agents as labels within its router. */
+  tags: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
   input: JsonObject,
   outputSchema: Schema.optionalKey(JsonObject),
   errorResponses: Schema.optionalKey(Schema.Array(OpenapiErrorResponse)),

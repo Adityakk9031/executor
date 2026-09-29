@@ -7,6 +7,7 @@ import { TestLive, withCase } from "../support/case.ts";
 import { oauthInteropIssuer } from "../support/oauth-interop-issuer.ts";
 import { Target } from "../support/platform.ts";
 import { createProfile } from "../support/profiles.ts";
+import { appsManifest } from "../support/apps-release.ts";
 import { scenarios } from "../test-plan.ts";
 
 const Published = Schema.Struct({ app: Schema.Struct({ id: Schema.String }) });
@@ -42,10 +43,11 @@ layer(TestLive, { excludeTestServices: true })("Local OAuth callback fragment", 
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2 } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Fragment service",auth:{oauth:oauth2({discover:${JSON.stringify(`${facebook.origin}/mcp`)}})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools:router({})}));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);

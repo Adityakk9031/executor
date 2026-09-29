@@ -27,8 +27,8 @@ layer(HostedLive, { excludeTestServices: true })("Live OpenAPI", (it) => {
         });
         expect((yield* call("old", "old")).status).toBe(404);
         // The flat operationId-based name no longer exists.
-        expect((yield* callTool("queries.echoes_new", "new")).status).toBe(404);
-        expect((yield* callTool("queries.evil.getEvil", "new")).status).toBe(404);
+        expect((yield* callTool("echoes_new", "new")).status).toBe(404);
+        expect((yield* callTool("evil.getEvil", "new")).status).toBe(404);
         const tools = yield* api.request(
           actors.owner,
           "GET",
@@ -39,10 +39,7 @@ layer(HostedLive, { excludeTestServices: true })("Live OpenAPI", (it) => {
           Schema.Struct({ items: Schema.Array(Schema.Struct({ name: Schema.String })) }),
           tools,
         );
-        expect(listing.items.map((tool) => tool.name)).toEqual([
-          "queries.echoes.new",
-          "queries.status.getHealth",
-        ]);
+        expect(listing.items.map((tool) => tool.name)).toEqual(["echoes.new", "status.getHealth"]);
       }),
     ),
   );

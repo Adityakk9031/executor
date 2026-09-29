@@ -14,8 +14,8 @@ import {
   HostRequest,
   HostResponse,
   ToolResultObservation,
-  HostedTool,
-  HostedToolSummary,
+  HostedCatalog,
+  HostedCatalogSummary,
   indexCommand,
   inspectCommand,
   skillCatalog,
@@ -27,6 +27,7 @@ import {
 } from "apps/contracts";
 import {
   AppCacheChanges,
+  RuntimeAppsDependencyMissing,
   RuntimeBuildFailed,
   RuntimeBuildUnavailable,
   RuntimeProtocolFailed,
@@ -37,11 +38,11 @@ import { BuildId, Json } from "../contracts/shared.ts";
 import { buildUi } from "./node-ui.ts";
 import { BlobStore } from "../contracts/blobs.ts";
 import { materializeNodeBuild, nodeBuildAsset, retainNodeBuild } from "./node-builds.ts";
-import { hostPackages, installNodeDependencies } from "./node-dependencies.ts";
+import { installNodeDependencies } from "./node-dependencies.ts";
 import type { NodeRuntimeOptions } from "../node.ts";
 import { PublishedAppFramework } from "../contracts/worker-build.ts";
 import { appProtocol, type AppProtocol } from "./app-protocols.ts";
-import { frameworkProtocol } from "apps/contracts";
+import apps from "apps/package.json" with { type: "json" };
 
 type Handler = (
   request: Request,
@@ -92,6 +93,12 @@ function dispatch<A, E>(
     const request = yield* Schema.decodeUnknownEffect(HostRequest)(command).pipe(
       Effect.mapError(() => new RuntimeProtocolFailed()),
     );
+    const refused = protocol.refuse(request);
+    if (refused !== undefined)
+      return yield* Schema.decodeUnknownEffect(error)(refused).pipe(
+        Effect.mapError(() => new RuntimeProtocolFailed()),
+        Effect.flatMap(Effect.fail),
+      );
     const telemetry = yield* captureTelemetry;
     const headers = { "content-type": "application/json", ...(yield* traceHeaders) };
     const response = yield* attempt(
@@ -103,7 +110,13 @@ function dispatch<A, E>(
             body: JSON.stringify(protocol.request(request)),
             signal,
           }),
-          { ...context, telemetry },
+          {
+            ...context,
+            ...(context.workflow === undefined
+              ? {}
+              : { workflow: protocol.workflow(context.workflow) }),
+            telemetry,
+          },
           Redacted.value(context.accounts),
         ),
       new RuntimeProtocolFailed(),
@@ -236,60 +249,37 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
                   ),
                   Effect.mapError(() => new RuntimeBuildFailed({ stage: "dependencies" })),
                 );
-          const publishedFramework = dependencies.apps !== undefined;
-          if (
-            Object.keys(dependencies).some((name) =>
-              publishedFramework ? name === "@executor-js/sdk" : hostPackages.includes(name),
-            )
-          ) {
+          // Every app declares the `apps` release it uses; this runtime supplies none.
+          if (dependencies.apps === undefined)
+            return yield* new RuntimeAppsDependencyMissing({ version: apps.version });
+          if (Object.hasOwn(dependencies, "@executor-js/sdk"))
             return yield* Effect.fail(new RuntimeBuildFailed({ stage: "dependencies" }));
-          }
           yield* fs
             .writeFileString(
               path.join(staging, "package.json"),
               JSON.stringify({ private: true, type: "module", dependencies }),
             )
             .pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "dependencies" })));
-          if (
-            Object.keys(dependencies).length > 0 ||
-            source.some((file) => file.path === "bun.lock" || file.path === "package-lock.json")
-          ) {
-            yield* installNodeDependencies(
-              staging,
-              path.join(directory, ".dependencies"),
-              source,
-              publishedFramework,
-            ).pipe(Effect.withSpan("runtime.node.dependencies"));
-          }
-          // Sources without `dependencies.apps` build with this runtime's installed `apps` package.
+          yield* installNodeDependencies(
+            staging,
+            path.join(directory, ".dependencies"),
+            source,
+          ).pipe(Effect.withSpan("runtime.node.dependencies"));
           const protocol = yield* appProtocol(
-            publishedFramework
-              ? (yield* fs
-                  .readFileString(path.join(staging, "node_modules/apps/runtime.json"))
-                  .pipe(
-                    Effect.flatMap(
-                      Schema.decodeUnknownEffect(Schema.fromJsonString(PublishedAppFramework)),
-                    ),
-                    Effect.mapError(
-                      () => new RuntimeBuildFailed({ stage: "dependencies", dependency: "apps" }),
-                    ),
-                  )).protocol
-              : frameworkProtocol,
+            (yield* fs.readFileString(path.join(staging, "node_modules/apps/runtime.json")).pipe(
+              Effect.flatMap(
+                Schema.decodeUnknownEffect(Schema.fromJsonString(PublishedAppFramework)),
+              ),
+              Effect.mapError(
+                () => new RuntimeBuildFailed({ stage: "dependencies", dependency: "apps" }),
+              ),
+            )).protocol,
           );
           yield* fs
             .writeFileString(path.join(staging, "entry.ts"), protocol.nodeEntry(source))
             .pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "compile" })));
-          const frameworkDirectory = publishedFramework
-            ? path.join(staging, "node_modules/apps")
-            : path.dirname(
-                yield* path
-                  .fromFileUrl(new URL(import.meta.resolve("apps")))
-                  .pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "compile" }))),
-              );
           const frameworkPackage = yield* fs
-            .readFileString(
-              path.join(frameworkDirectory, publishedFramework ? "." : "..", "package.json"),
-            )
+            .readFileString(path.join(staging, "node_modules/apps/package.json"))
             .pipe(
               Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(FrameworkPackage))),
               Effect.mapError(() => new RuntimeBuildFailed({ stage: "dependencies" })),
@@ -336,27 +326,14 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
                       builder.onResolve(
                         { filter: /^(apps|effect|@effect\/platform-node)(\/.*)?$/ },
                         (args) => {
-                          if (publishedFramework) {
-                            if (args.pluginData === "selected-framework") return undefined;
-                            if (args.path !== "apps" && !args.path.startsWith("apps/"))
-                              return { path: args.path, external: true };
-                            return builder.resolve(args.path, {
-                              resolveDir: path.join(staging, "source"),
-                              kind: args.kind,
-                              pluginData: "selected-framework",
-                            });
-                          }
-                          // esbuild's Promise callback is an external adapter seam. The Path
-                          // service owns URL conversion; runtime operations compose Effects.
-                          return Effect.runPromise(
-                            Effect.sync(() => new URL(import.meta.resolve(args.path))).pipe(
-                              Effect.flatMap(path.fromFileUrl),
-                              Effect.map((location) => ({
-                                path: location,
-                                external: args.path !== "apps" && !args.path.startsWith("apps/"),
-                              })),
-                            ),
-                          );
+                          if (args.pluginData === "selected-framework") return undefined;
+                          if (args.path !== "apps" && !args.path.startsWith("apps/"))
+                            return { path: args.path, external: true };
+                          return builder.resolve(args.path, {
+                            resolveDir: path.join(staging, "source"),
+                            kind: args.kind,
+                            pluginData: "selected-framework",
+                          });
                         },
                       );
                       builder.onResolve({ filter: /^@executor-js\/sdk(\/.*)?$/ }, () => ({
@@ -375,31 +352,8 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
                         }
                         return { path: args.path, external: true };
                       });
-                      // Framework-owned libraries resolve from the framework, whatever their protocol.
-                      // Authored dependencies still load from the app's retained installation.
-                      builder.onResolve({ filter: /^[^./]/ }, async (args) => {
-                        if (
-                          publishedFramework ||
-                          args.pluginData === "framework-dependency" ||
-                          !args.importer.startsWith(frameworkDirectory + "/")
-                        )
-                          return undefined;
-                        const resolved = await builder.resolve(args.path, {
-                          resolveDir: frameworkDirectory,
-                          kind: args.kind,
-                          pluginData: "framework-dependency",
-                        });
-                        return {
-                          path: resolved.path,
-                          errors: resolved.errors,
-                          warnings: resolved.warnings,
-                          external: true,
-                        };
-                      });
-                      // Keep authored npm dependencies external, but let the resolver above
-                      // locate framework dependencies before externalizing their absolute paths.
+                      // Keep authored npm dependencies external; the selected framework resolves itself.
                       builder.onResolve({ filter: /^[^./]/ }, (args) =>
-                        args.pluginData === "framework-dependency" ||
                         args.pluginData === "selected-framework"
                           ? undefined
                           : { path: args.path, external: true },
@@ -479,7 +433,7 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
               handler,
               inspectCommand(tools, scheduled),
               context,
-              Schema.Array(HostedTool),
+              HostedCatalog,
               HostInspectError,
               build,
             ),
@@ -495,7 +449,7 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
               handler,
               indexCommand,
               context,
-              Schema.Array(HostedToolSummary),
+              HostedCatalogSummary,
               HostInspectError,
               build,
             ),
@@ -546,13 +500,13 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
         ),
         Effect.withSpan("runtime.node.webhook"),
       ),
-    call: ({ build, tool, input, ...context }) =>
+    call: ({ build, tool, kind, input, ...context }) =>
       load(build)
         .pipe(
           Effect.flatMap((handler) =>
             cachedDispatch(
               handler,
-              { operation: "call", tool, input },
+              { operation: "call", tool, ...(kind === undefined ? {} : { kind }), input },
               context,
               Json,
               HostCallError,
