@@ -4,7 +4,7 @@ import { previewLifetime } from "./infrastructure/test-stage-expiry.ts";
 import { ExecutorCloudApi, executorCloudApiDocument } from "./contracts/api.ts";
 import { hostedAppUi, appAddresses } from "@executor-js/hosted-server/app-ui";
 import { cloudAppUiBase } from "./contracts/app-ui.ts";
-import { AppDomainCoordinatorLive, cloudAppDomains } from "./infrastructure/app-domains.ts";
+import { cloudAppDomains } from "./infrastructure/app-domains.ts";
 import { AppRepositoryRecovery, WorkflowHost } from "@executor-js/sdk/core";
 import { AppWorkflows } from "./infrastructure/workflows.ts";
 import { cloudDataSteps } from "./infrastructure/data-steps.ts";
@@ -437,7 +437,6 @@ export default Api.make(
     Effect.provide(
       Layer.mergeAll(
         ScheduleCoordinatorLive,
-        AppDomainCoordinatorLive,
         cloudAuthDatabase,
         cloudTelemetry,
         Cloudflare.Workers.CronEventSourceLive,
