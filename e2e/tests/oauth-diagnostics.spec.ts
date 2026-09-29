@@ -504,6 +504,56 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           ).toEqual([]);
           yield* evidence.json("discovery-fallback.json", discovered);
         }
+
+        // A served metadata document that fails validation is remembered while discovery tries
+        // the OpenID location, and its failure keeps the evidence of what was wrong.
+        for (const [discovery, expected] of [
+          [
+            "invalid-metadata",
+            { "oauth.error.detail": "body_property_mismatch", "oauth.error.attribute": "issuer" },
+          ],
+          ["invalid-json", { "oauth.error.detail": "body_not_json" }],
+        ] as const) {
+          yield* issuer.configure({ ...standard, discovery });
+          const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
+            name: `Unusable discovery ${randomUUID().slice(0, 8)}`,
+            files: [
+              {
+                path: "index.ts",
+                content: `import { defineApp, defineProvider, oauth2 } from "apps";
+const service=defineProvider({name:"Unusable metadata service",auth:{oauth:oauth2({discover:${JSON.stringify(`${issuer.origin}/mcp`)}})}});
+export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+              },
+            ],
+          });
+          expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
+          const app = yield* body(App, deployed);
+          yield* Effect.addFinalizer(() =>
+            api.request(actors.owner, "DELETE", `${prefix}/apps/${app.id}`).pipe(Effect.orDie),
+          );
+          const setup = yield* api.request(
+            actors.owner,
+            "GET",
+            `${prefix}/providers/${app.requirements.accounts.service.provider}/oauth/oauth/setup`,
+          );
+          expect(setup.status, JSON.stringify(setup.body)).toBe(422);
+          const failed = yield* trace("oauth.discover");
+          expect(
+            failed.data.some(
+              ({ span }) =>
+                span.operationName.startsWith("http.client") &&
+                span.tags["http.response.status_code"] === "404",
+            ),
+            "Discovery tried the OpenID location after the unusable document",
+          ).toBe(true);
+          expect(tags(failed, "oauth.discover"), `${discovery} discovery`).toMatchObject({
+            "oauth.error.reason": "invalid_response",
+            "http.response.status_code": "200",
+            ...expected,
+          });
+          assertPrivate(failed, [], "oauth.discover");
+          yield* evidence.json(`discovery-${discovery}.json`, failed);
+        }
       }),
     ),
   );

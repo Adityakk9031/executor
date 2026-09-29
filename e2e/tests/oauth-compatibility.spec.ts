@@ -45,7 +45,10 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
         const cases: ReadonlyArray<{
           readonly name: string;
           readonly registrationStatus: 200 | 201 | 400 | 401;
-          readonly registrationError: "invalid_client_metadata" | "invalid_redirect_uri";
+          readonly registrationError:
+            | "invalid_client_metadata"
+            | "invalid_redirect_uri"
+            | "invalid_request";
           readonly omitSecretExpiry: boolean;
           readonly issuePublicClients: boolean;
           readonly malformedRegistration: boolean;
@@ -98,7 +101,15 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
             ...valid,
             name: "Rejected registration",
             registrationStatus: 400,
+            registrationError: "invalid_request",
             setupFailure: "registration_rejected",
+          },
+          // Most often a callback URL outside the service's allowed redirect URIs.
+          {
+            ...valid,
+            name: "Refused client metadata",
+            registrationStatus: 400,
+            setupFailure: "client_metadata_rejected",
           },
           {
             ...valid,

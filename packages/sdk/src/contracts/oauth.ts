@@ -180,6 +180,7 @@ export const OAuthSetupFailed = UserFacingError.define({
       "resource_mismatch",
       "client_not_approved",
       "client_registration_required",
+      "client_metadata_rejected",
       "registration_rejected",
       "incompatible_response",
       "invalid_client",
@@ -270,6 +271,22 @@ export const OAuthSetupFailed = UserFacingError.define({
             },
             agentFixable: false,
           },
+          // RFC 7591 section 3.2.2. Cloudflare Access returns it for a callback URL outside
+          // its allowed redirect URIs; with grant types matched to the server's metadata, that
+          // allowlist is the likeliest cause.
+          client_metadata_rejected: {
+            title: "Service did not accept Executor’s callback URL",
+            description:
+              "The service refused the client details Executor registered. This usually means Executor’s callback URL is not in the service’s allowed redirect URIs.",
+            recovery: {
+              action:
+                "Ask the service’s administrator to add Executor’s callback URL to its allowed redirect URIs, or create an OAuth app with the service and enter its client details.",
+              instructions:
+                "The registration endpoint returned invalid_client_metadata (RFC 7591 section 3.2.2). Services with a redirect URI allowlist, such as Cloudflare Access, return it when the callback URL is not allowed. Check the service’s allowed redirect URIs for Executor’s callback URL first, then compare the other registered fields: grant types, response types, token endpoint authentication method and scopes. Do not repeatedly register clients." +
+                callback,
+            },
+            agentFixable: false,
+          },
           registration_rejected: {
             title: "Service rejected Executor’s registration",
             description: "The service refused Executor’s request to register as an OAuth client.",
@@ -335,6 +352,7 @@ export const oauthClientEntryReasons: ReadonlySet<OAuthSetupFailed["reason"]> = 
   "invalid_client",
   "client_not_approved",
   "client_registration_required",
+  "client_metadata_rejected",
   "registration_rejected",
 ]);
 /** Parsed OAuthSetupFailed failure. */
@@ -698,6 +716,10 @@ export type OAuthAttemptId = typeof OAuthAttemptId.Type;
 
 /** Validated subset of authorization-server metadata used for saved grants. */
 export const OAuthTokenServer = Schema.Struct({
+  /**
+   * Microsoft identity platform's multi-tenant metadata publishes a `{tenantid}` template here;
+   * each ID token's `iss` is that template with the token's own `tid` claim substituted.
+   */
   issuer: HttpUrl,
   /**
    * The provider declared endpoints without an issuer. Executor derives `issuer` from the token
@@ -715,6 +737,8 @@ export const OAuthTokenServer = Schema.Struct({
   client_id_metadata_document_supported: Schema.optional(Schema.Boolean),
   code_challenge_methods_supported: Schema.optional(Schema.Array(Schema.String)),
   token_endpoint_auth_methods_supported: Schema.optional(Schema.Array(Schema.String)),
+  /** RFC 8414 grant types. Registration requests only advertised ones when present. */
+  grant_types_supported: Schema.optional(Schema.Array(Schema.String)),
   scopes_supported: Schema.optional(Schema.Array(Schema.String)),
 });
 export type OAuthTokenServer = typeof OAuthTokenServer.Type;
@@ -808,6 +832,13 @@ export const OAuthGrant = Schema.Union([
     refreshToken: Schema.optional(Schema.NonEmptyString),
     /** The first validated ID token's `sub`. A refreshed ID token must keep it (OIDC Core §12.2). */
     idTokenSubject: Schema.optional(Schema.NonEmptyString),
+    /**
+     * The first validated ID token's `iss`, saved with its `sub` because a subject is only unique
+     * at its issuer. A refreshed ID token must keep it too. It differs from `server.issuer` only
+     * for a Microsoft `{tenantid}` template, where each token names its own tenant. Grants saved
+     * before this field keep a fixed server issuer, which every ID token must already match.
+     */
+    idTokenIssuer: Schema.optional(Schema.NonEmptyString),
   }),
   Schema.Struct({
     ...grantFields,

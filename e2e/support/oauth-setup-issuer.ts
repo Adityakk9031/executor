@@ -36,7 +36,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   // 401 models RFC 7591 registration that requires an initial access token Executor lacks.
   let registrationStatus: 200 | 201 | 400 | 401 = 201;
   let malformedRegistration = false;
-  let registrationError: "invalid_client_metadata" | "invalid_redirect_uri" =
+  let registrationError: "invalid_client_metadata" | "invalid_redirect_uri" | "invalid_request" =
     "invalid_client_metadata";
   let omitSecretExpiry = false;
   /** Vercel registers a public client whatever method the request names, as RFC 7591 allows. */

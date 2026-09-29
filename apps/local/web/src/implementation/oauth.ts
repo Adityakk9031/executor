@@ -5,12 +5,22 @@ import { OAuthReturn, type OAuthAppReturn } from "../contracts/oauth.ts";
 import type { AccountId, AccountConnectionId } from "@executor-js/sdk";
 
 const returnKey = "executor.oauth.return";
+/**
+ * The callback as the service's redirect delivered it. A fragment never reaches a server, and
+ * some services append one (Facebook adds `#_=_`), so the browser drops it here, as the hosted
+ * callback does. Completion still rejects any callback URL that carries a fragment.
+ */
+export const oauthCallbackUrl = (location: URL) => {
+  const url = new URL(location);
+  url.hash = "";
+  return Redacted.make(url.href);
+};
 /** Remove callback parameters before rendering or making further requests. */
 export const readOAuthCallback = Effect.sync(() => {
   const url = new URL(window.location.href);
   if (url.pathname !== OAuthCallbackPath || !url.searchParams.has("state")) return undefined;
   window.history.replaceState(null, "", OAuthCallbackPath);
-  return Redacted.make(url.href);
+  return oauthCallbackUrl(url);
 });
 /** Remember only the account-selection page to resume after provider consent. */
 export const openOAuth = (

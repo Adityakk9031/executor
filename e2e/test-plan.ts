@@ -1656,6 +1656,59 @@ export const scenarios = {
       local: na("Local connection-link coverage is in the local OAuth scenario."),
     },
   },
+  oauthMicrosoftEntra: {
+    fixtures: "actors",
+    file: "oauth-interop.spec.ts",
+    title:
+      "OAuth signs in to Microsoft Entra without a resource indicator and checks each tenant's ID token issuer",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises shared OAuth discovery and exchange through the hosted API."),
+    },
+  },
+  oauthEntraRefreshTenant: {
+    fixtures: "actors",
+    file: "oauth-interop.spec.ts",
+    title:
+      "OAuth renews a Microsoft Entra multi-tenant grant only while refreshed ID tokens keep the signed-in tenant's issuer",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises the shared OAuth refresh through the hosted API."),
+    },
+  },
+  oauthDiscoveryLocations: {
+    fixtures: "actors",
+    file: "oauth-interop.spec.ts",
+    title:
+      "OAuth discovery tries OpenID configuration when the RFC 8414 location redirects or refuses",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises shared OAuth discovery through the hosted API."),
+    },
+  },
+  oauthRegistrationInterop: {
+    fixtures: "actors",
+    file: "oauth-interop.spec.ts",
+    title:
+      "OAuth registration requests only advertised grant types and explains a refused callback URL",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises shared OAuth registration through the hosted API."),
+    },
+  },
+  localOAuthCallbackFragment: {
+    file: "local-oauth-callback-fragment.spec.ts",
+    title: "Local OAuth completes when the service appends a fragment to the callback",
+    targets: {
+      "self-host": na("Hosted rebuilds the callback from its query; this covers the local page."),
+      cloud: na("Hosted rebuilds the callback from its query; this covers the local page."),
+      local: scheduled,
+    },
+  },
   oauthDiscoveryFallback: {
     fixtures: "actors",
     file: "oauth-discovery-fallback.spec.ts",

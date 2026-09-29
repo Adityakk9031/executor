@@ -228,8 +228,48 @@ const protocolStage =
       Effect.withSpan(`oauth.${stage}`, { attributes: { "oauth.stage": stage } }),
     );
 
+/**
+ * Microsoft identity platform's multi-tenant endpoints (`common`, `organizations`) publish
+ * `https://login.microsoftonline.com/{tenantid}/v2.0` as their issuer. Each ID token names the
+ * signed-in user's tenant: its `iss` is the template with its own `tid` claim substituted.
+ * Only an issuer containing this literal placeholder is treated as a template.
+ */
+const tenantPlaceholder = "{tenantid}";
+const tenantSegment = /^[A-Za-z0-9._-]+$/;
+/** The concrete issuer for one tenant, or undefined when `template` is not a tenant template. */
+const tenantIssuer = (template: string, tenant: unknown) => {
+  const parts = template.split(tenantPlaceholder);
+  return parts.length === 2 && typeof tenant === "string" && tenantSegment.test(tenant)
+    ? `${parts[0]}${tenant}${parts[1]}`
+    : undefined;
+};
+/** Whether `requested` is `template` with one tenant segment in place of its placeholder. */
+const instantiatesTenantTemplate = (template: string, requested: URL) => {
+  const [prefix, suffix, ...rest] = template.split(tenantPlaceholder);
+  if (prefix === undefined || suffix === undefined || rest.length > 0) return false;
+  const href = requested.href;
+  const tenant = href.slice(prefix.length, href.length - suffix.length);
+  return (
+    href.length > prefix.length + suffix.length &&
+    href.startsWith(prefix) &&
+    href.endsWith(suffix) &&
+    tenantIssuer(template, tenant) === href
+  );
+};
+/**
+ * oauth4webapi's hook for an ID token issuer that depends on the token, exported for this
+ * Microsoft case but not typed. Without it a template never equals `iss`, so tokens fail closed.
+ */
+const expectedIssuer: unknown = Reflect.get(oauth, "_expectedIssuer");
+
 /** Rehydrate mutable protocol arrays from the immutable storage contract. */
 const metadata = (server: OAuthTokenServer): oauth.AuthorizationServer => ({
+  ...(typeof expectedIssuer === "symbol" && server.issuer.includes(tenantPlaceholder)
+    ? {
+        [expectedIssuer]: (result: { readonly claims: { readonly tid?: unknown } }) =>
+          tenantIssuer(server.issuer, result.claims.tid) ?? server.issuer,
+      }
+    : {}),
   issuer: server.issuer,
   ...(server.authorization_endpoint === undefined
     ? {}
@@ -406,6 +446,25 @@ const tokenResponse = async (response: Response) => {
   });
 };
 
+/**
+ * Record the HTTP status a failure came from, unless it already names one. Every other field of
+ * the failure is kept as it was.
+ */
+const withStatus = (failed: OAuthProtocolFailed, status: number | undefined) =>
+  failed.status !== undefined || status === undefined
+    ? failed
+    : new OAuthProtocolFailed({ ...failed, status });
+
+/**
+ * Microsoft identity platform v2.0 selects a token's audience from the resource named in each
+ * scope (`api://.../access`). It rejects an RFC 8707 `resource` that differs from that audience
+ * with `invalid_target` (AADSTS9010010), which an MCP server URL usually does. Its metadata
+ * identifies it with the `cloud_instance_name` extension, in every Microsoft cloud; the v1.0
+ * endpoint, which uses `resource` itself, has no `/v2.0` issuer.
+ */
+const scopedAudience = (server: oauth.AuthorizationServer) =>
+  typeof server.cloud_instance_name === "string" && server.issuer.endsWith("/v2.0");
+
 const isLowercase = (value: string): value is Lowercase<string> => value === value.toLowerCase();
 
 /**
@@ -427,15 +486,42 @@ const tokenTypes = async (response: Response): Promise<oauth.RecognizedTokenType
   };
 };
 
-/** The validated ID token's subject, when the token response carried one. */
-export const idTokenSubject = (tokens: oauth.TokenEndpointResponse) => {
-  const subject = oauth.getValidatedIdTokenClaims(tokens)?.sub;
-  return subject === "" ? undefined : subject;
+/**
+ * The validated ID token's subject and the issuer it is unique at, when the token response
+ * carried one. A grant saves them together.
+ */
+export const idTokenIdentity = (tokens: oauth.TokenEndpointResponse) => {
+  const claims = oauth.getValidatedIdTokenClaims(tokens);
+  return claims === undefined || claims.sub === ""
+    ? {}
+    : { idTokenSubject: claims.sub, idTokenIssuer: claims.iss };
+};
+
+/**
+ * OIDC Core §12.2: a refreshed ID token must name the same `iss` and `sub` as the original one.
+ * oauth4webapi already checks `iss` against the server's issuer, which is fixed unless it is a
+ * `{tenantid}` template. A template grant must therefore have saved its concrete issuer; one that
+ * saved a subject without it cannot be checked and is refused. Before `{tenantid}` templates were
+ * supported, no template grant could save a subject, so this refuses no existing grant.
+ */
+const sameIdentity = (
+  server: OAuthTokenServer,
+  saved: {
+    readonly idTokenSubject?: string | undefined;
+    readonly idTokenIssuer?: string | undefined;
+  },
+  refreshed: oauth.IDToken,
+) => {
+  if (saved.idTokenSubject === undefined) return true;
+  const issuer =
+    saved.idTokenIssuer ?? (server.issuer.includes(tenantPlaceholder) ? undefined : server.issuer);
+  return refreshed.sub === saved.idTokenSubject && refreshed.iss === issuer;
 };
 
 /** Issuer metadata, or the answer that said it is missing there. */
 type IssuerMissing = { readonly missing: OAuthProtocolFailed };
-type IssuerDiscovery = { readonly server: OAuthTokenServer } | IssuerMissing;
+type IssuerFound = { readonly server: OAuthTokenServer; readonly audienceFromScopes: boolean };
+type IssuerDiscovery = IssuerFound | IssuerMissing;
 
 /** Resolve protocol operations against one host-supplied Effect HTTP client. */
 export const makeOAuthProtocol = (options: OAuthOptions) => {
@@ -559,40 +645,73 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
     return response;
   };
 
+  /** Validate one metadata document. A `{tenantid}` template matches its instantiated issuer. */
+  const issuerMetadata = async (issuer: URL, response: Response) => {
+    const body = await jsonObject(response);
+    const published = body === undefined ? undefined : Reflect.get(body, "issuer");
+    return oauth.processDiscoveryResponse(
+      typeof published === "string" && instantiatesTenantTemplate(published, issuer)
+        ? new URL(published)
+        : issuer,
+      response,
+    );
+  };
+
   /**
+   * RFC 8414 metadata, then OpenID Connect Discovery for the same issuer. A location that does
+   * not answer 200 serves no metadata, so the next one is tried: Apple redirects the RFC 8414
+   * path and Atlassian refuses it with 401. Redirects are never followed. A served document
+   * that fails validation is reported if no other location succeeds; it never selects another
+   * issuer, because every document must name the requested one.
+   *
    * Missing metadata is an answer, not a failed request: a caller may fall back to another
    * issuer location, so the request span records only the status that said so.
    */
   const discoverIssuer = (issuer: URL): Effect.Effect<IssuerDiscovery, OAuthProtocolFailed> =>
     request(async (settings): Promise<{ server: oauth.AuthorizationServer } | IssuerMissing> => {
-      let response = await oauth.discoveryRequest(issuer, { ...settings, algorithm: "oauth2" });
-      if (response.status === 404)
-        response = await oauth.discoveryRequest(issuer, { ...settings, algorithm: "oidc" });
-      // A well-known URL that refuses the request serves no metadata. Atlassian's MCP endpoint
-      // answers the appended OpenID path with 401.
-      if (response.status >= 400 && response.status < 500 && response.status !== 429)
-        return {
-          missing: new OAuthProtocolFailed({
-            reason: "metadata_missing",
-            status: response.status,
-            ...withDiagnostics({
-              detail: "unexpected_status",
-              contentType: mediaType(response.headers.get("content-type")),
-            }),
-          }),
+      let unusable: unknown;
+      let unavailable: number | undefined;
+      let last: { status: number; contentType: OAuthMediaType | undefined } | undefined;
+      for (const algorithm of ["oauth2", "oidc"] as const) {
+        const response = await oauth.discoveryRequest(issuer, { ...settings, algorithm });
+        last = {
+          status: response.status,
+          contentType: mediaType(response.headers.get("content-type")),
         };
-      return { server: await oauth.processDiscoveryResponse(issuer, discoveryResponse(response)) };
+        if (response.status === 429 || response.status >= 500) unavailable ??= response.status;
+        if (response.status !== 200) continue;
+        try {
+          return { server: await issuerMetadata(issuer, response) };
+        } catch (error) {
+          unusable ??= withStatus(failure(error), 200);
+        }
+      }
+      if (unusable !== undefined) throw unusable;
+      if (unavailable !== undefined)
+        throw new OAuthProtocolFailed({ reason: "request", status: unavailable });
+      return {
+        missing: new OAuthProtocolFailed({
+          reason: "metadata_missing",
+          ...(last === undefined ? {} : { status: last.status }),
+          ...withDiagnostics({ detail: "unexpected_status", contentType: last?.contentType }),
+        }),
+      };
     }).pipe(
       Effect.flatMap((found): Effect.Effect<IssuerDiscovery, OAuthProtocolFailed> =>
         "missing" in found
           ? Effect.succeed(found)
-          : decode(OAuthTokenServer, found.server).pipe(Effect.map((server) => ({ server }))),
+          : decode(OAuthTokenServer, found.server).pipe(
+              Effect.map((server) => ({
+                server,
+                audienceFromScopes: scopedAudience(found.server),
+              })),
+            ),
       ),
     );
   const requireIssuer = (
     found: IssuerDiscovery,
-  ): Effect.Effect<OAuthTokenServer, OAuthProtocolFailed> =>
-    "missing" in found ? Effect.fail(found.missing) : Effect.succeed(found.server);
+  ): Effect.Effect<IssuerFound, OAuthProtocolFailed> =>
+    "missing" in found ? Effect.fail(found.missing) : Effect.succeed(found);
 
   const secureUrl = (value: string) => {
     const url = parseDestination(value, options.urlPolicy);
@@ -687,7 +806,8 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
           const issuerUrl = yield* secureUrl(issuer);
           // Without protected-resource metadata, MCP's earlier authorization rules use the
           // server's origin as the authorization base. Atlassian publishes metadata only there.
-          const server = yield* found === undefined && issuerUrl.pathname !== "/"
+          const { server, audienceFromScopes } = yield* found === undefined &&
+          issuerUrl.pathname !== "/"
             ? discoverIssuer(issuerUrl).pipe(
                 // Only missing metadata falls back. Served metadata that is invalid or names another
                 // issuer is a failure, never a reason to try a different issuer.
@@ -708,8 +828,14 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
             server.scopes_supported?.includes("offline_access")
           )
             scopes.add("offline_access");
+          // A declared resource, or an explicit null, always applies. A discovered one is not
+          // sent to a server that takes the audience from the scopes instead.
           const resourceIndicator =
-            method.resource === undefined ? found?.resource : method.resource;
+            method.resource !== undefined
+              ? method.resource
+              : audienceFromScopes
+                ? undefined
+                : found?.resource;
           return {
             server,
             scopes: [...scopes],
@@ -758,7 +884,13 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
               client_name: options.clientName,
               redirect_uris: [redirectUri],
               token_endpoint_auth_method: advertised,
-              grant_types: ["authorization_code", "refresh_token"],
+              // Request refresh tokens unless the server's metadata lists grant types without
+              // them. Singular advertises only authorization_code and rejects the request.
+              grant_types:
+                server.grant_types_supported === undefined ||
+                server.grant_types_supported.includes("refresh_token")
+                  ? ["authorization_code", "refresh_token"]
+                  : ["authorization_code"],
               response_types: ["code"],
               ...(scopes.length === 0 ? {} : { scope: scopes.join(" ") }),
             },
@@ -925,6 +1057,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
       refreshToken: string;
       resource?: string | undefined;
       idTokenSubject?: string | undefined;
+      idTokenIssuer?: string | undefined;
     }) =>
       request(async (settings) => {
         const server = metadata(input.server);
@@ -947,13 +1080,11 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
         const tokens = await oauth.processRefreshTokenResponse(server, input.client, usable, {
           recognizedTokenTypes: await tokenTypes(usable),
         });
-        // OIDC Core §12.2: a refreshed ID token must identify the same end user.
-        const subject = oauth.getValidatedIdTokenClaims(tokens)?.sub;
-        if (
-          input.idTokenSubject !== undefined &&
-          subject !== undefined &&
-          subject !== input.idTokenSubject
-        )
+        // OIDC Core §12.2: a refreshed ID token must identify the same end user at the same
+        // issuer. For a `{tenantid}` template, `iss` follows each token's own `tid`, so only the
+        // saved issuer stops a refresh from moving the grant to another tenant.
+        const claims = oauth.getValidatedIdTokenClaims(tokens);
+        if (claims !== undefined && !sameIdentity(input.server, input, claims))
           throw new OAuthProtocolFailed({
             reason: "subject_changed",
             code: oauth.JWT_CLAIM_COMPARISON,

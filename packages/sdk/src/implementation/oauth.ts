@@ -60,7 +60,7 @@ import {
 import { StoredAccount, type Credentials } from "../contracts/storage.ts";
 import { query, transaction, type Query } from "./database.ts";
 import {
-  idTokenSubject,
+  idTokenIdentity,
   isOAuthErrorResponse,
   makeOAuthProtocol,
   type OAuthProtocolFailed,
@@ -207,11 +207,13 @@ const registrationFailed = (error: OAuthProtocolFailed, callbackUrl: typeof Http
       Match.when("rejected", () =>
         error.providerError === "invalid_redirect_uri"
           ? ("client_not_approved" as const)
-          : // RFC 7591 section 3: the endpoint requires an initial access token, which Executor
-            // never holds. The service only accepts clients registered by hand.
-            error.status === 401 || error.status === 403
-            ? ("client_registration_required" as const)
-            : ("registration_rejected" as const),
+          : error.providerError === "invalid_client_metadata"
+            ? ("client_metadata_rejected" as const)
+            : // RFC 7591 section 3: the endpoint requires an initial access token, which Executor
+              // never holds. The service only accepts clients registered by hand.
+              error.status === 401 || error.status === 403
+              ? ("client_registration_required" as const)
+              : ("registration_rejected" as const),
       ),
       // Checks after a successful response, such as a changed auth method, carry no status.
       Match.whenOr("incompatible", "unanswered", () => "incompatible_response" as const),
@@ -838,13 +840,12 @@ export const makeOAuth = (
         ),
       );
       const completedAt = yield* Clock.currentTimeMillis;
-      const subject = idTokenSubject(tokens);
       const grant = yield* decode(OAuthGrant, {
         server: attempt.server,
         client: attempt.client,
         response: attempt.response,
         ...(attempt.resource === undefined ? {} : { resource: attempt.resource }),
-        ...(subject === undefined ? {} : { idTokenSubject: subject }),
+        ...idTokenIdentity(tokens),
         fields,
         ...(tokens.refresh_token === undefined ? {} : { refreshToken: tokens.refresh_token }),
         ...expiry(completedAt, tokens.expires_in),
