@@ -17,7 +17,7 @@ import {
   workflowFailureMessage,
 } from "@executor-js/sdk/core";
 import { cloudExecutor } from "./executor.ts";
-import { AppDataSupervisor } from "./app-data.ts";
+import { appDataSupervisors } from "./app-data.ts";
 import { readNativeWorkflowStatus } from "../implementation/workflow-status.ts";
 import { providerFailureCode } from "../implementation/provider-failure.ts";
 
@@ -90,7 +90,7 @@ export class AppWorkflows extends Cloudflare.Workflow<AppWorkflows>()(
   "AppWorkflows",
   Effect.gen(function* () {
     const executor = yield* cloudExecutor(
-      yield* AppDataSupervisor,
+      yield* appDataSupervisors,
       yield* cloudArtifactsTokensLive,
     );
     const analytics = yield* cloudAnalytics;

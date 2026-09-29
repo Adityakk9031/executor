@@ -75,7 +75,7 @@ import { sentryBindings } from "./infrastructure/sentry.ts";
 import { cloudErrorTunnel } from "./implementation/error-tunnel.ts";
 import { cloudSentry } from "./implementation/error-reporting.ts";
 import { cloudOrigin } from "./infrastructure/stage.ts";
-import { AppDataSupervisor, AppDataSupervisorLive } from "./infrastructure/app-data.ts";
+import { appDataSupervisors } from "./infrastructure/app-data.ts";
 import { cloudDevelopment } from "./contracts/development.ts";
 import { requestServices } from "@executor-js/hosted-server";
 import { recordRequestRejections, requestTiming } from "@executor-js/telemetry/http";
@@ -166,7 +166,7 @@ export default Api.make(
     yield* AppWorkflows;
     yield* Provisioning;
     const executor = yield* cloudExecutor(
-      yield* AppDataSupervisor,
+      yield* appDataSupervisors,
       yield* cloudArtifactsTokensLive,
     );
     const billing = yield* billingLive.pipe(Effect.orDie);
@@ -427,7 +427,6 @@ export default Api.make(
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        AppDataSupervisorLive,
         McpSessionsLive,
         ScheduleCoordinatorLive,
         AppDomainCoordinatorLive,

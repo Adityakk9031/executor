@@ -24,7 +24,7 @@ import {
 } from "./infrastructure/artifacts-tokens.ts";
 import { sentryBindings } from "./infrastructure/sentry.ts";
 import { billingBindings } from "./infrastructure/billing.ts";
-import { AppDataSupervisor } from "./infrastructure/app-data.ts";
+import { appDataSupervisors } from "./infrastructure/app-data.ts";
 import { Api } from "./infrastructure/api-worker.ts";
 import {
   cloudObservability,
@@ -80,7 +80,7 @@ export default class AppPages extends Cloudflare.Worker<AppPages>()(
     const email = yield* cloudEmail.pipe(Effect.orDie);
     const auth = yield* cloudAuth(email.send);
     const executor = yield* cloudExecutor(
-      yield* AppDataSupervisor.from(Api),
+      yield* appDataSupervisors,
       yield* cloudArtifactsTokens(yield* ArtifactsTokenCoordinator.from(Api)).pipe(Effect.orDie),
     );
     const base = yield* cloudAppUiBase.pipe(Effect.orDie);
