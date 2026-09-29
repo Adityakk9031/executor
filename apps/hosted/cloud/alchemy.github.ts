@@ -46,7 +46,6 @@ const productionVariables = [
   "AXIOM_ORG_ID",
   "BETTER_AUTH_URL",
   "CLOUDFLARE_ZONE_ID",
-  "CLOUD_DATABASE_CONNECTION_LIMIT",
   "CLOUD_PLACEMENT_REGION",
   "EXECUTOR_APP_UI_BASE_URL",
   "OAUTH_PROXY_PRODUCTION_URL",
@@ -149,11 +148,13 @@ export default Alchemy.Stack(
             // Request timing provisions a private native trace export destination.
             "Workers Observability Write",
             "Workers R2 Storage Write",
+            // Workers connect to Postgres directly. Deleting the retired Hyperdrive
+            // configurations still needs this; drop it once no stage has one.
             "Hyperdrive Write",
             "Account Settings Read",
             // The shared state store keeps its bearer token in the account Secrets Store.
             "Secrets Store Write",
-            // Hyperdrive's PlanetScale CA certificate is an account-level certificate upload.
+            // The retired Hyperdrive CA upload is retained, not managed; drop with Hyperdrive Write.
             "Account: SSL and Certificates Write",
           ],
           resources: { [`com.cloudflare.api.account.${accountId}`]: "*" },
