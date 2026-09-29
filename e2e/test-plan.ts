@@ -1297,6 +1297,50 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  oauthRenewalOnRefusal: {
+    fixtures: "actors",
+    file: "oauth-refresh-resilience.spec.ts",
+    title:
+      "OAuth renews a grant without a stated lifetime when the service refuses its token, repeats only queries, and reconnects when renewal is refused",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer and resource with controlled token expiry."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthListingRenewalOnRefusal: {
+    fixtures: "actors",
+    file: "oauth-refresh-resilience.spec.ts",
+    title:
+      "OAuth tool listing renews a grant the service refuses while the catalog is evaluated, keeps only the renewed listing, and reconnects when renewal is refused",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer and resource with controlled token expiry."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthScheduledRenewal: {
+    fixtures: "actors",
+    file: "oauth-scheduled-renewal.spec.ts",
+    title:
+      "Scheduled and approved calls renew a grant without a stated lifetime when the service refuses its token",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer and resource with controlled token expiry."),
+      local: na("Exercises the shared scheduler and OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthReconnectSchedules: {
+    fixtures: "actors",
+    file: "oauth-reconnect-schedules.spec.ts",
+    title:
+      "A schedule whose account must reconnect skips its occurrences without running, shows the account, and resumes after reconnecting",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Advances the wall clock of a runner-owned product process."),
+      local: na("Exercises the shared scheduler and OAuth lifecycle through hosted APIs."),
+    },
+  },
   oauthRenewalKilledBeforeProvider: {
     fixtures: "actors",
     file: "oauth-renewal-interruption.spec.ts",

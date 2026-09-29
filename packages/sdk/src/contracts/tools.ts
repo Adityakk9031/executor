@@ -321,8 +321,14 @@ export const AppProviderFailed = UserFacingError.define({
     account: Schema.optional(
       Schema.Struct({ id: AccountId, label: Schema.String, provider: Schema.String }),
     ),
+    /**
+     * The service refused the account's credentials during a mutation, and Executor has since
+     * renewed them. The mutation was not repeated, because it may have made changes before the
+     * refusal; a later call uses the renewed credentials.
+     */
+    credentialsRenewed: Schema.optional(Schema.Literal(true)),
   },
-  presentation: ({ reason, status, account }) => {
+  presentation: ({ reason, status, account, credentialsRenewed }) => {
     const service = account === undefined ? "The connected service" : account.provider;
     const target = account === undefined ? "" : ` for account “${account.label}”`;
     const http = status === undefined ? "" : ` (HTTP ${status})`;
@@ -340,6 +346,17 @@ export const AppProviderFailed = UserFacingError.define({
           retryable: true,
         };
       case "unauthorized":
+        if (credentialsRenewed === true)
+          return {
+            title: "Access renewed; request not repeated",
+            description: `${service} rejected the credentials${target}${http}. Executor has renewed the account’s access, but did not repeat this change automatically.`,
+            recovery: {
+              action:
+                "Check whether the change was already made, then try again. The renewed access is used from now on.",
+              instructions: `The provider rejected the account’s previous access token and Executor renewed it. Mutations are never repeated automatically: an earlier request in the same call may already have made changes. ${instructions}`,
+            },
+            retryable: true,
+          };
         return {
           title: "Authentication failed",
           description: `${service} rejected the credentials${target}${http}.`,

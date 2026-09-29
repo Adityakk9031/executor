@@ -95,9 +95,10 @@ export const makeListings = (options: {
   return {
     read: (
       state: InvocationSnapshot,
+      /** May renew a refused account, which fails like resolving it; such failures are not kept. */
       evaluate: (
         context: Effect.Success<ReturnType<typeof resolve>>,
-      ) => Effect.Effect<ToolListing, AppEvaluationFailed | AppProviderFailed>,
+      ) => Effect.Effect<ToolListing, AppEvaluationFailed | AppProviderFailed | ResolveError>,
       read: ToolListOptions = {},
     ) =>
       Effect.gen(function* () {

@@ -669,16 +669,27 @@ export const OAuthReconnectRequired = UserFacingError.define({
 export type OAuthReconnectRequired = typeof OAuthReconnectRequired.Type;
 
 /**
- * Renewing a saved grant failed without the service refusing it. The grant, including its
- * refresh token, is kept unchanged, so the account does not need to reconnect.
+ * Renewing a saved grant failed without the service saying the grant has ended. The grant,
+ * including its refresh token, is kept unchanged, and the next use renews it again.
  */
 export const OAuthRenewalFailed = UserFacingError.define({
   tag: "OAuthRenewalFailed",
   status: 502,
   fields: {
     account: AccountId,
-    /** An outage or temporary refusal, or a successful response Executor could not use. */
-    reason: Schema.Literals(["service_unavailable", "incompatible_response"]),
+    /**
+     * `service_unavailable`: an outage or temporary refusal. `incompatible_response`: a response
+     * Executor could not use. `client_rejected`: the service refused the OAuth client itself
+     * (`invalid_client`, `unauthorized_client`, or a 401 client-authentication challenge), which
+     * says nothing about this account's grant. `renewal_rejected`: any other OAuth error, including
+     * codes outside RFC 6749, which also does not say the grant has ended.
+     */
+    reason: Schema.Literals([
+      "service_unavailable",
+      "incompatible_response",
+      "client_rejected",
+      "renewal_rejected",
+    ]),
     cause: Schema.optional(OAuthFailureCause),
   },
   presentation: ({ reason, cause }) =>
@@ -699,6 +710,29 @@ export const OAuthRenewalFailed = UserFacingError.define({
             ...incompatibleResponse,
             description:
               "The service answered Executor’s request to renew this account’s access, but its response did not match what Executor expects. The saved sign-in is kept; this is a compatibility problem, not a problem with your account.",
+          },
+          client_rejected: {
+            title: "The service rejected Executor’s OAuth client",
+            description:
+              "The service refused the OAuth client Executor uses to renew this account’s access. This is a problem with the client configuration, not with the account’s sign-in, which is kept.",
+            recovery: {
+              action:
+                "Check the OAuth client ID and secret at the service. If they changed, reconnect the account and enter the current client details.",
+              instructions:
+                "The account’s saved OAuth grant is intact; do not delete or replace the account. Compare the client ID, secret and token endpoint authentication method recorded for this provider with the service’s client configuration. If the secret was rotated or the client removed, reconnect this same account with the current client details. If the configuration is correct, the fault is in how Executor authenticates the client; report it rather than reconnecting.",
+            },
+          },
+          renewal_rejected: {
+            title: "The service refused to renew this account’s access",
+            description:
+              "The service refused Executor’s request to renew this account’s access without saying the sign-in has ended. The saved sign-in is kept, and Executor tries again the next time the account is used.",
+            recovery: {
+              action:
+                "Try again in a moment. If this continues, reconnect the account from Accounts.",
+              instructions:
+                "The account’s saved OAuth grant is intact. Inspect the recorded provider error code and HTTP status. Retry a temporary refusal. If the service keeps refusing, reconnect this same account; do not replace the account or change its authentication method.",
+            },
+            retryable: true,
           },
         } satisfies Record<typeof reason, ErrorPresentation>
       )[reason],

@@ -13,6 +13,7 @@ import { bindAppStorage } from "./app-database.ts";
 import {
   type WorkflowHostControls,
   HostToolApprovalRequired,
+  OperationToolPrefixes,
   ToolResultObservation,
   type ResolvedAccounts,
 } from "apps/contracts";
@@ -25,11 +26,14 @@ import {
   Cursor,
   ToolName,
   Json,
+  JsonObject,
   RequestInvalid,
   StorageError,
+  type AccountId,
   type AppId,
   type DeploymentId,
 } from "../contracts/shared.ts";
+import { OAuthReconnectRequired } from "../contracts/oauth.ts";
 import type { makeOAuth } from "./oauth.ts";
 import {
   AppEvaluationFailed,
@@ -206,6 +210,74 @@ export function resolve(
 
 /** One resolved invocation: app, pinned deployment, optional profile and account selection. */
 export type InvocationSnapshot = Effect.Success<ReturnType<typeof snapshot>>;
+type InvocationContext = Effect.Success<ReturnType<typeof resolve>>;
+type SelectedAccount = ResolvedAccounts[string];
+const isMany = (
+  value: SelectedAccount,
+): value is Extract<SelectedAccount, ReadonlyArray<unknown>> => Array.isArray(value);
+const sameFields = Schema.toEquivalence(JsonObject);
+
+/**
+ * The service refused one of this invocation's accounts: the app reported an `unauthorized`
+ * provider failure attributed to a selected account. Renew that account once, or read a renewal
+ * another call already made, and return the invocation's accounts with its new credentials.
+ *
+ * Returns undefined when there is nothing new to try: the failure is not an attributed
+ * authentication refusal, or the account cannot be renewed, such as a secrets account or a grant
+ * without a refresh token. A renewal the service refuses with `invalid_grant` fails with
+ * `OAuthReconnectRequired`, as any resolve does.
+ */
+const renewRefused = (
+  renewRejected: ReturnType<typeof makeOAuth>["renewRejected"],
+  state: InvocationSnapshot,
+  context: InvocationContext,
+  error: unknown,
+) =>
+  Effect.gen(function* () {
+    if (
+      !Schema.is(ProviderError)(error) ||
+      error.reason !== "unauthorized" ||
+      error.accountId === undefined
+    )
+      return undefined;
+    const { accountId } = error;
+    const selected = state.selections
+      .flatMap(({ required, accounts }) =>
+        accounts.map((account) => ({ account, definition: required.definition })),
+      )
+      .find(({ account }) => account.id === accountId);
+    if (selected === undefined) return undefined;
+    const accounts = Redacted.value(context.accounts);
+    const used = Object.values(accounts)
+      .flatMap((value) => (isMany(value) ? value : [value]))
+      .find((account) => account.id === accountId);
+    if (used === undefined) return undefined;
+    // Renewal authorizes the account for the profile's subject, as `resolve` does. A scheduled
+    // call has no signed-in caller to fall back on.
+    const renewed = yield* renewRejected(selected.account, selected.definition, used.fields).pipe(
+      Effect.provideService(CurrentProfile, state.profile),
+      Effect.flatMap((fields) =>
+        Schema.decodeUnknownEffect(JsonObject)(Redacted.value(fields)).pipe(
+          Effect.mapError(() => new StorageError()),
+        ),
+      ),
+    );
+    if (sameFields(renewed, used.fields)) return undefined;
+    yield* Effect.annotateCurrentSpan("executor.account.credentials_renewed", accountId);
+    const replace = <A extends { readonly id: AccountId; readonly fields: JsonObject }>(
+      account: A,
+    ): A => (account.id === accountId ? { ...account, fields: renewed } : account);
+    return {
+      accounts: Redacted.make(
+        Object.fromEntries(
+          Object.entries(accounts).map(([slot, value]) => [
+            slot,
+            isMany(value) ? value.map(replace) : replace(value),
+          ]),
+        ),
+      ),
+    } satisfies InvocationContext;
+  });
 
 function invocation(state: InvocationSnapshot, tool: ToolName, input: Json) {
   return Schema.decodeUnknownEffect(ToolInvocation)({
@@ -325,7 +397,7 @@ const summarize = ({
 /** Live calls return completion or a durable approval request. Resume trusts the supplied SDK decision. */
 export const makeTools = (
   storage: ExecutorDatabase,
-  resolveAccount: ReturnType<typeof makeOAuth>["resolve"],
+  oauth: Pick<ReturnType<typeof makeOAuth>, "resolve" | "renewRejected" | "usable">,
   runtime: Runtime,
   credentials: Credentials,
   crypto: Crypto.Crypto,
@@ -335,7 +407,69 @@ export const makeTools = (
   lifecycle?: ResourceLifecycle,
 ) => {
   const db = database(storage);
+  const resolveAccount = oauth.resolve;
   const approvals = makeToolApprovals(db, credentials, crypto, storage.reactivity.inTransaction);
+  /**
+   * Run a tool, live or approved, and renew an account the service refuses. A 401 means the
+   * service did not perform the refused request, but an earlier request in the same call may
+   * already have made changes. A query only reads, so it is repeated once with the renewed
+   * credentials; a mutation is never repeated and fails, noting that access was renewed.
+   */
+  const executeRenewing = <A, E, R>(
+    state: InvocationSnapshot,
+    context: InvocationContext,
+    tool: ToolName,
+    execute: (context: InvocationContext) => Effect.Effect<Result.Result<A, E>, never, R>,
+  ) =>
+    Effect.gen(function* () {
+      const result = yield* execute(context);
+      if (Result.isSuccess(result)) return result;
+      const refused = result.failure;
+      const renewed = yield* renewRefused(oauth.renewRejected, state, context, refused);
+      if (renewed === undefined) return result;
+      if (tool.startsWith(OperationToolPrefixes.query)) {
+        yield* Effect.annotateCurrentSpan("executor.tool.retry", "credentials_renewed");
+        return yield* execute(renewed);
+      }
+      if (Schema.is(ProviderError)(refused))
+        return yield* Effect.fail(appProviderFailure(state, refused, true));
+      return result;
+    });
+  /** Runtime options that evaluate one invocation's catalog with its resolved accounts. */
+  const inspection = (state: InvocationSnapshot, context: InvocationContext) => ({
+    app: state.app.id,
+    build: state.deployment.build,
+    ...context,
+    ...(workflows === undefined ? {} : { workflowControls: workflows(state) }),
+  });
+  /**
+   * Evaluate a catalog and renew an account the service refuses while it is evaluated. Inspection
+   * only reads, so it is repeated once with the renewed credentials. Every catalog read, including
+   * the tool listing that MCP discovery serves, goes through here.
+   */
+  const inspectRenewing = <A, R>(
+    state: InvocationSnapshot,
+    context: InvocationContext,
+    inspect: (
+      context: InvocationContext,
+    ) => Effect.Effect<A, Effect.Error<ReturnType<typeof runtime.index>>, R>,
+  ) => {
+    const failure = (error: Effect.Error<ReturnType<typeof runtime.index>>) =>
+      Schema.is(ProviderError)(error)
+        ? appProviderFailure(state, error)
+        : evaluationFailure({ app: state.app.id, deployment: state.deployment.id }, error);
+    return inspect(context).pipe(
+      Effect.catch((error) =>
+        renewRefused(oauth.renewRejected, state, context, error).pipe(
+          Effect.flatMap((renewed) =>
+            renewed === undefined
+              ? Effect.fail(failure(error))
+              : inspect(renewed).pipe(Effect.mapError(failure)),
+          ),
+        ),
+      ),
+    );
+  };
   /** Evaluate the selected profile's live catalog. */
   const evaluate = <A, R>(
     input: Parameters<Executor["tools"]["index"]>[0],
@@ -357,20 +491,11 @@ export const makeTools = (
         "executor.deployment.id": state.deployment.id,
         "executor.build.id": state.deployment.build,
       });
-      const value = yield* read(
-        {
-          app: state.app.id,
-          build: state.deployment.build,
-          ...context,
-          ...(workflows === undefined ? {} : { workflowControls: workflows(state) }),
-        },
-        state.deployment.requirements.capabilities?.toolIndex === true,
-        state.deployment.requirements.capabilities?.scheduledTools === true,
-      ).pipe(
-        Effect.mapError((error) =>
-          Schema.is(ProviderError)(error)
-            ? appProviderFailure(state, error)
-            : evaluationFailure({ app: state.app.id, deployment: state.deployment.id }, error),
+      const value = yield* inspectRenewing(state, context, (context) =>
+        read(
+          inspection(state, context),
+          state.deployment.requirements.capabilities?.toolIndex === true,
+          state.deployment.requirements.capabilities?.scheduledTools === true,
         ),
       );
       const catalog = {
@@ -386,6 +511,24 @@ export const makeTools = (
     });
   return {
     /**
+     * The first account selected by this profile whose saved sign-in must reconnect before the
+     * profile's tools can run; undefined when every account can supply credentials. Reads stored
+     * state only: it never renews a grant or evaluates the app.
+     */
+    accountNeedingReconnect: (input: { app: AppId; profile: ProfileId }) =>
+      Effect.gen(function* () {
+        const state = yield* snapshot(db, input);
+        for (const { required, accounts } of state.selections)
+          for (const account of accounts) {
+            const usable = yield* oauth.usable(account, required.definition).pipe(Effect.result);
+            if (Result.isFailure(usable)) {
+              if (Schema.is(OAuthReconnectRequired)(usable.failure)) return account.id;
+              return yield* Effect.fail(usable.failure);
+            }
+          }
+        return undefined;
+      }).pipe(Effect.withSpan("sdk.accounts.reconnectRequired")),
+    /**
      * Page through the app's evaluated catalog. The whole listing is evaluated once and, with a
      * listing store, reused across pages and requests for identical inputs.
      */
@@ -397,40 +540,27 @@ export const makeTools = (
           "executor.deployment.id": state.deployment.id,
           "executor.build.id": state.deployment.build,
         });
-        const evaluate = (context: Effect.Success<ReturnType<typeof resolve>>) =>
-          runtime
-            .inspect({
-              app: state.app.id,
-              build: state.deployment.build,
-              ...context,
-              ...(workflows === undefined ? {} : { workflowControls: workflows(state) }),
-            })
-            .pipe(
-              Effect.mapError((error) =>
-                Schema.is(ProviderError)(error)
-                  ? appProviderFailure(state, error)
-                  : evaluationFailure(
-                      { app: state.app.id, deployment: state.deployment.id },
-                      error,
-                    ),
-              ),
-              Effect.map((tools): ToolListing => ({
-                catalog: {
+        const evaluate = (context: InvocationContext) =>
+          inspectRenewing(state, context, (context) =>
+            runtime.inspect(inspection(state, context)),
+          ).pipe(
+            Effect.map((tools): ToolListing => ({
+              catalog: {
+                deployment: state.deployment.id,
+                ...(state.profile === undefined
+                  ? {}
+                  : { profile: state.profile.id, profileRevision: state.profile.revision }),
+              },
+              items: [...tools]
+                .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+                .map((tool) => ({
+                  ...tool,
+                  app: state.app.id,
                   deployment: state.deployment.id,
-                  ...(state.profile === undefined
-                    ? {}
-                    : { profile: state.profile.id, profileRevision: state.profile.revision }),
-                },
-                items: [...tools]
-                  .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-                  .map((tool) => ({
-                    ...tool,
-                    app: state.app.id,
-                    deployment: state.deployment.id,
-                    name: ToolName.make(tool.name),
-                  })),
-              })),
-            );
+                  name: ToolName.make(tool.name),
+                })),
+            })),
+          );
         const listing = yield* listings.read(state, evaluate, options);
         // Pages share the listing's item objects, so a caller can recognise a kept listing.
         const cursor: string | undefined = input.cursor;
@@ -531,19 +661,22 @@ export const makeTools = (
           "executor.tool.name": parsed.tool,
         });
         let toolError = false;
-        const result = yield* runtime
-          .call({
-            app: state.app.id,
-            ...(yield* bindAppStorage(appStorage, state.app.id)),
-            ...(workflows === undefined ? {} : { workflowControls: workflows(state) }),
-            build: state.deployment.build,
-            database: state.deployment.requirements.database !== undefined,
-            ...context,
-            tool: parsed.tool,
-            input: args,
-            ...(options?.elicitation === undefined ? {} : { elicitation: options.elicitation }),
-          })
-          .pipe(
+        const storageBinding = yield* bindAppStorage(appStorage, state.app.id);
+        const execute = (context: InvocationContext) =>
+          Effect.suspend(() => {
+            toolError = false;
+            return runtime.call({
+              app: state.app.id,
+              ...storageBinding,
+              ...(workflows === undefined ? {} : { workflowControls: workflows(state) }),
+              build: state.deployment.build,
+              database: state.deployment.requirements.database !== undefined,
+              ...context,
+              tool: parsed.tool,
+              input: args,
+              ...(options?.elicitation === undefined ? {} : { elicitation: options.elicitation }),
+            });
+          }).pipe(
             Effect.provideService(ToolResultObservation, {
               failed: () => {
                 toolError = true;
@@ -551,6 +684,7 @@ export const makeTools = (
             }),
             Effect.result,
           );
+        const result = yield* executeRenewing(state, context, parsed.tool, execute);
         if (Result.isSuccess(result)) {
           if (toolError)
             yield* Effect.annotateCurrentSpan({
@@ -610,45 +744,48 @@ export const makeTools = (
                     reason: "context-changed",
                   } satisfies ToolResumeResult;
                 }
+                const { state } = checked.success;
                 return yield* Effect.gen(function* () {
                   yield* Effect.annotateCurrentSpan({
                     "executor.app.id": saved.app,
                     "executor.deployment.id": saved.deployment,
-                    "executor.build.id": checked.success.state.deployment.build,
+                    "executor.build.id": state.deployment.build,
                     "executor.tool.name": saved.tool,
                     "executor.approval.id": input.requestId,
                   });
-                  const context = yield* resolve(
-                    checked.success.state,
-                    resolveAccount,
-                    lifecycle,
-                  ).pipe(Effect.withSpan("sdk.accounts.resolve"));
+                  const context = yield* resolve(state, resolveAccount, lifecycle).pipe(
+                    Effect.withSpan("sdk.accounts.resolve"),
+                  );
                   let toolError = false;
-                  const value = yield* runtime
-                    .call({
-                      app: saved.app,
-                      ...(yield* bindAppStorage(appStorage, saved.app)),
-                      ...(workflows === undefined
-                        ? {}
-                        : { workflowControls: workflows(checked.success.state) }),
-                      build: checked.success.state.deployment.build,
-                      database:
-                        checked.success.state.deployment.requirements.database !== undefined,
-                      ...context,
-                      tool: saved.tool,
-                      input: originalInput,
-                      approval: { tool: saved.tool, input: saved.input },
-                      ...(options?.elicitation === undefined
-                        ? {}
-                        : { elicitation: options.elicitation }),
-                    })
-                    .pipe(
+                  const storageBinding = yield* bindAppStorage(appStorage, saved.app);
+                  const execute = (context: InvocationContext) =>
+                    Effect.suspend(() => {
+                      toolError = false;
+                      return runtime.call({
+                        app: saved.app,
+                        ...storageBinding,
+                        ...(workflows === undefined ? {} : { workflowControls: workflows(state) }),
+                        build: state.deployment.build,
+                        database: state.deployment.requirements.database !== undefined,
+                        ...context,
+                        tool: saved.tool,
+                        input: originalInput,
+                        approval: { tool: saved.tool, input: saved.input },
+                        ...(options?.elicitation === undefined
+                          ? {}
+                          : { elicitation: options.elicitation }),
+                      });
+                    }).pipe(
                       Effect.provideService(ToolResultObservation, {
                         failed: () => {
                           toolError = true;
                         },
                       }),
+                      Effect.result,
                     );
+                  const result = yield* executeRenewing(state, context, saved.tool, execute);
+                  if (Result.isFailure(result)) return yield* Effect.fail(result.failure);
+                  const value = result.success;
                   if (toolError)
                     yield* Effect.annotateCurrentSpan({
                       "executor.outcome": "failed",

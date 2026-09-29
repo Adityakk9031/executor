@@ -112,6 +112,15 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   /** Refresh tokens a rotation replaced, with their client. */
   const replacedRefreshGrants = new Map<string, string>();
   const refreshedAccessTokens = new Set<string>();
+  /** Every access token issued so far. */
+  const issuedAccessTokens = new Set<string>();
+  /**
+   * Access tokens the resource no longer accepts, as a service ends a session whose lifetime its
+   * token response never stated. Salesforce answers such a token with 401 INVALID_SESSION_ID.
+   */
+  const expiredAccessTokens = new Set<string>();
+  /** Resource requests by method, including refused ones. */
+  const resourceRequests = { GET: 0, POST: 0 };
   const clients = new Map<
     string,
     {
@@ -337,6 +346,9 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           ? `synthetic-refreshed-token-${refreshes}`
           : "synthetic-access-token";
         if (refreshing) refreshedAccessTokens.add(accessToken);
+        issuedAccessTokens.add(accessToken);
+        // Every sign-in issues the same first token; a new sign-in makes it valid again.
+        expiredAccessTokens.delete(accessToken);
         const refreshToken =
           refreshTokens && (!refreshing || rotateRefreshTokens)
             ? `synthetic-refresh-${randomUUID()}`
@@ -362,20 +374,32 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         );
       }),
     ),
-    HttpRouter.add(
-      "GET",
-      "/resource",
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const authorization = request.headers.authorization ?? null;
-        const token = authorization?.replace(/^Bearer /, "") ?? "";
-        if (hold === "resource") yield* heldRequest;
-        // Report whether a renewed token was presented, and echo the credential itself.
-        return yield* HttpServerResponse.json({
-          refreshed: refreshedAccessTokens.has(token),
-          authorization,
-        });
-      }),
+    ...(["GET", "POST"] as const).map((method) =>
+      HttpRouter.add(
+        method,
+        "/resource",
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const authorization = request.headers.authorization ?? null;
+          const token = authorization?.replace(/^Bearer /, "") ?? "";
+          resourceRequests[method]++;
+          if (hold === "resource") yield* heldRequest;
+          // RFC 6750 §3.1: the request was not performed because its token is no longer valid.
+          if (expiredAccessTokens.has(token))
+            return yield* HttpServerResponse.json(
+              [{ errorCode: "INVALID_SESSION_ID", message: "Session expired or invalid" }],
+              {
+                status: 401,
+                headers: { "www-authenticate": 'Bearer error="invalid_token"' },
+              },
+            );
+          // Report whether a renewed token was presented, and echo the credential itself.
+          return yield* HttpServerResponse.json({
+            refreshed: refreshedAccessTokens.has(token),
+            authorization,
+          });
+        }),
+      ),
     ),
     HttpRouter.add(
       "GET",
@@ -723,6 +747,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
               : [...(input.methods ?? ["client_secret_basic"])],
         });
       }),
+    /** End every access token issued so far; the resource refuses them with 401 from now on. */
+    expireAccessTokens: Effect.sync(() => {
+      for (const token of issuedAccessTokens) expiredAccessTokens.add(token);
+    }),
     /** Answer every held request; one held before processing stays unprocessed. */
     release: Effect.suspend(() => {
       const pending = releases;
@@ -746,6 +774,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       lastExchangeAuth,
       nonceRequested,
       revocations: [...revocations],
+      resourceRequests: { ...resourceRequests },
     })),
   };
 });

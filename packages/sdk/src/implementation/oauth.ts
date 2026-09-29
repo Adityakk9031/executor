@@ -123,6 +123,8 @@ const expiry = (issuedAt: number, expiresIn: number | undefined) =>
  * database write does not lose a live claim, and is short enough that callers arriving after a
  * restart recover within one execute deadline.
  */
+const sameFields = Schema.toEquivalence(JsonObject);
+
 const renewalHeartbeat = 5_000;
 const renewalLease = 20_000;
 
@@ -174,14 +176,24 @@ const outcome = (error: OAuthProtocolFailed) =>
           : "incompatible";
 
 /**
- * Classify a failed renewal. Per RFC 6749 §5.2 only an OAuth error response from the token
- * endpoint, at any status, says the grant or client can no longer be used, and `server_error`
- * and `temporarily_unavailable` say the opposite. An outage, timeout, 429 or 5xx leaves the
- * grant as it was. Any other response Executor cannot use, including a malformed 2xx or a 4xx
- * without an error body, says nothing about the grant, so the grant is kept. Two failures do
- * end it: a token endpoint the host policy now refuses cannot renew this saved grant, and a
- * refreshed ID token for a different end user (OIDC Core §12.2) means the grant no longer
- * belongs to this account's identity. A new sign-in settles both.
+ * Classify a failed renewal. Only RFC 6749 §5.2's `invalid_grant` says this account's grant has
+ * ended: its refresh token was revoked, expired or already used. Every other refusal keeps the
+ * grant, because it says nothing about it:
+ *
+ * - `invalid_client`, `unauthorized_client` and a 401 are about the OAuth client, which every
+ *   account on that client shares. They are also what a fault in Executor's own client
+ *   authentication produces; ending every grant for that would force every user to sign in again
+ *   once it is fixed. The account reports `client_rejected` and renews again on its next use.
+ * - Other codes, including ones outside RFC 6749 that some services return with HTTP 200, such as
+ *   Slack's `internal_error`, report `renewal_rejected` and renew again on the next use.
+ * - An outage, timeout, 429, 5xx, `server_error` or `temporarily_unavailable` is temporary.
+ * - A response Executor cannot use, including a malformed 2xx or a 4xx without an error body, is
+ *   a compatibility problem.
+ *
+ * Two failures other than `invalid_grant` do end the grant: a token endpoint the host policy now
+ * refuses cannot renew this saved grant, and a refreshed ID token for a different end user (OIDC
+ * Core §12.2) means the grant no longer belongs to this account's identity. A new sign-in settles
+ * both.
  */
 const renewalOutcome = (error: OAuthProtocolFailed): "reconnect" | OAuthRenewalFailed["reason"] =>
   error.reason === "subject_changed"
@@ -190,7 +202,15 @@ const renewalOutcome = (error: OAuthProtocolFailed): "reconnect" | OAuthRenewalF
         Match.when("blocked", () => "reconnect" as const),
         Match.when("unavailable", () => "service_unavailable" as const),
         Match.when("rejected", () =>
-          isOAuthErrorResponse(error) ? ("reconnect" as const) : ("incompatible_response" as const),
+          error.reason === "invalid_grant"
+            ? ("reconnect" as const)
+            : error.reason === "invalid_client" ||
+                error.providerError === "unauthorized_client" ||
+                error.status === 401
+              ? ("client_rejected" as const)
+              : isOAuthErrorResponse(error)
+                ? ("renewal_rejected" as const)
+                : ("incompatible_response" as const),
         ),
         Match.whenOr("incompatible", "unanswered", () => "incompatible_response" as const),
         Match.exhaustive,
@@ -935,25 +955,39 @@ export const makeOAuth = (
       Effect.withSpan("oauth.completeOAuth"),
     );
 
-  const resolveCredentials = (account: StoredAccount, provider: ProviderDefinition) =>
+  /**
+   * Resolve the account's current credentials. With `rejected`, the service has refused those
+   * credentials: a grant still holding them is renewed now, whatever its recorded lifetime, and a
+   * grant another call already renewed returns its newer credentials. A grant that cannot be
+   * renewed returns the same credentials, so the caller can tell that nothing changed.
+   *
+   * A grant that needs reconnecting is an expected account state, not a fault of this operation:
+   * it is returned as a value and recorded as the span's outcome, and only failed after the span.
+   */
+  const resolveCredentials = (
+    account: StoredAccount,
+    provider: ProviderDefinition,
+    rejected?: JsonObject,
+  ) =>
     Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan("oauth.provider.id", account.provider);
+      if (rejected !== undefined)
+        yield* Effect.annotateCurrentSpan("oauth.renewal.trigger", "credentials_rejected");
       if (provider.auth[account.method]?.type === "secrets")
         return yield* credentials.decrypt(account.id, account.encryptedCredentials);
       /** Record why the grant cannot be used on this span; only fixed vocabularies and codes. */
       const reconnect = (reason: ReconnectReason, cause?: OAuthFailureCause) =>
         Effect.annotateCurrentSpan({
+          "oauth.resolve.outcome": "reconnect",
           "oauth.reconnect.reason": reason,
           ...(cause === undefined ? {} : causeAttributes(cause)),
         }).pipe(
-          Effect.andThen(
-            Effect.fail(
-              new OAuthReconnectRequired({
-                account: account.id,
-                ...(reason === "renewal_interrupted" ? { reason } : {}),
-                ...(cause === undefined ? {} : { cause }),
-              }),
-            ),
+          Effect.as(
+            new OAuthReconnectRequired({
+              account: account.id,
+              ...(reason === "renewal_interrupted" ? { reason } : {}),
+              ...(cause === undefined ? {} : { cause }),
+            }),
           ),
         );
       // Set once this call has waited for another renewal of the grant. The token it then reads
@@ -981,8 +1015,13 @@ export const makeOAuth = (
         const abandoned = claimed;
         const grant = yield* decrypt(account.id, row.encrypted, OAuthGrant);
         const renewable = grant.grant === "client_credentials" || grant.refreshToken !== undefined;
+        // The service refused exactly the credentials this grant still holds. A grant another
+        // call has renewed since then holds different ones, which this call uses instead.
+        const refused = rejected !== undefined && sameFields(grant.fields, rejected);
+        if (refused && !renewable) return Redacted.make(grant.fields);
         if (
           !abandoned &&
+          !refused &&
           (grant.expiresAt === undefined ||
             grant.expiresAt > now + (awaited ? 0 : 30_000) ||
             (!renewable && grant.expiresAt > now))
@@ -1151,7 +1190,14 @@ export const makeOAuth = (
         }
         return renewed;
       }
-    }).pipe(Effect.withSpan("oauth.resolve"));
+    }).pipe(
+      Effect.withSpan("oauth.resolve"),
+      Effect.flatMap((resolved) =>
+        Schema.is(OAuthReconnectRequired)(resolved)
+          ? Effect.fail(resolved)
+          : Effect.succeed(resolved),
+      ),
+    );
 
   /**
    * Fail as `resolve` would when the stored grant can no longer release credentials, without
@@ -1182,14 +1228,24 @@ export const makeOAuth = (
       if (protocol === undefined || !renewable) return yield* reconnect;
     }).pipe(Effect.withSpan("oauth.usable"));
 
-  const resolve = (account: StoredAccount, provider: ProviderDefinition) =>
+  const resolve = (account: StoredAccount, provider: ProviderDefinition, rejected?: JsonObject) =>
     Effect.gen(function* () {
       if (lifecycle) yield* lifecycle.accountResolving(account);
-      const fields = yield* resolveCredentials(account, provider);
+      const fields = yield* resolveCredentials(account, provider, rejected);
       // A remote token refresh can outlive a permission change or account deletion.
       if (lifecycle) yield* lifecycle.accountResolving(account);
       return fields;
     });
+  /**
+   * The service refused these credentials. Renew the grant once, or read a renewal another call
+   * already made, and return the account's current credentials. They equal `rejected` when the
+   * account cannot be renewed, such as a secrets account or a grant without a refresh token.
+   */
+  const renewRejected = (
+    account: StoredAccount,
+    provider: ProviderDefinition,
+    rejected: JsonObject,
+  ) => resolve(account, provider, rejected);
   /**
    * Best-effort RFC 7009 revocation of a grant whose account was already deleted. The refresh
    * token is revoked when present, since that also ends its access tokens at most services;
@@ -1239,7 +1295,8 @@ export const makeOAuth = (
 
   return {
     connections: { oauthSetup, startOAuth, completeOAuth },
-    resolve,
+    resolve: (account: StoredAccount, provider: ProviderDefinition) => resolve(account, provider),
+    renewRejected,
     usable,
     revokeRemoved,
   };

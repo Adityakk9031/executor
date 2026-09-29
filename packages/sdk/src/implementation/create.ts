@@ -78,7 +78,7 @@ export const createExecutor = (
     };
     const tools = makeTools(
       options.storage,
-      oauth.resolve,
+      oauth,
       runtime,
       options.credentials,
       crypto,
@@ -100,6 +100,7 @@ export const createExecutor = (
       webhookDefinitions: webhooks.liveDefinitions,
       schedules: schedules.operations,
       runs: workflows.runs,
+      accountNeedingReconnect: tools.accountNeedingReconnect,
     });
     return {
       [ProfileHost]: { tick: setup.tick },
