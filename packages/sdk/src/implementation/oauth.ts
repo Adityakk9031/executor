@@ -1117,6 +1117,26 @@ export const makeOAuth = (
                     : "renewal_refused",
                 cause,
               );
+            // The grant is kept, and a renewal ahead of expiry leaves its token valid. Callers
+            // that waited for this renewal use that token, and so does this one. The next use
+            // inside the renewal window tries again. A token the service refused, or one that has
+            // expired, cannot be used, so the failure stands.
+            if (
+              !refused &&
+              (grant.expiresAt === undefined || grant.expiresAt > (yield* Clock.currentTimeMillis))
+            ) {
+              yield* Effect.annotateCurrentSpan({
+                "oauth.resolve.outcome": "current_token",
+                ...causeAttributes(cause),
+              });
+              yield* Effect.logWarning("OAuth renewal failed; using the current token").pipe(
+                Effect.annotateLogs({
+                  "oauth.provider.id": account.provider,
+                  "oauth.renewal.outcome": outcome,
+                }),
+              );
+              return Redacted.make(grant.fields);
+            }
             return yield* new OAuthRenewalFailed({ account: account.id, reason: outcome, cause });
           }
           const { fields, tokens } = result.success;

@@ -73,6 +73,10 @@ const refreshFailures = {
   invalid_grant: { status: 400, body: { error: "invalid_grant", ...privateError } },
 } satisfies Record<string, TokenError>;
 type RefreshFailure = keyof typeof refreshFailures;
+/** Seconds a token lasts when a scenario needs it to expire before the next call. */
+const shortLifetime = 1;
+/** Longer than `shortLifetime`, measured from after the token was saved. */
+const pastShortLifetime = "1200 millis";
 const Failure = Schema.Struct({
   _tag: Schema.String,
   account: Schema.optional(Schema.String),
@@ -312,7 +316,12 @@ layer(HostedLive, { excludeTestServices: true })("OAuth refresh resilience", (it
 
         // Only invalid_grant ends a grant. Every other failure keeps it: an outage, a response
         // Executor cannot use, a refusal of the OAuth client that every account shares, and any
-        // other refusal, including codes outside RFC 6749.
+        // other refusal, including codes outside RFC 6749. While the token is still valid, a
+        // failed renewal ahead of expiry uses it; the renewal-ahead-of-expiry scenario covers
+        // that. Here each token has expired before the failing call, so the call reports the
+        // classified failure. Renew once into a short-lived token first.
+        yield* issuer.configure({ expiresIn: shortLifetime });
+        yield* expectRead(renewing.profile, (yield* refreshes) + 1);
         const transient: ReadonlyArray<{
           readonly failure: RefreshFailure;
           readonly reason:
@@ -373,6 +382,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth refresh resilience", (it
           { failure: "slack_internal_error", reason: "renewal_rejected", status: 200 },
         ];
         for (const scenario of transient) {
+          yield* Effect.sleep(pastShortLifetime);
           yield* issuer.configure({ tokenError: refreshFailures[scenario.failure] });
           const before = yield* refreshes;
           const failed = yield* read(renewing.profile);
@@ -413,7 +423,8 @@ layer(HostedLive, { excludeTestServices: true })("OAuth refresh resilience", (it
             assertPrivate(trace);
             yield* evidence.json("refresh-unavailable-trace.json", trace);
           }
-          // The saved refresh token still works once the service recovers.
+          // The saved refresh token still works once the service recovers. The renewed token
+          // is short-lived too, so the next case starts from an expired token again.
           yield* issuer.configure({ tokenError: null });
           yield* expectRead(renewing.profile, before + 2);
         }
@@ -478,6 +489,77 @@ layer(HostedLive, { excludeTestServices: true })("OAuth refresh resilience", (it
         const again = yield* read(refused.profile);
         expect(again.status, JSON.stringify(again.body)).toBe(409);
         expect(yield* refreshes).toBe(beforeRefusal + 1);
+      }),
+    ),
+  );
+  it.effect(scenarios.oauthRenewalAheadOfExpiry.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const {
+          issuer,
+          provider,
+          connect,
+          read,
+          expectRead,
+          refreshes,
+          assertPrivate,
+          spans,
+          evidence,
+        } = yield* renewalFixture;
+        // Tokens last 20 seconds, inside the host's 30-second renewal window, so every call
+        // renews ahead of expiry.
+        const account = yield* connect("Synthetic outage account");
+        const current = (yield* refreshes) + 1;
+        yield* expectRead(account.profile, current);
+
+        // The service is down. The call's renewal fails without ending the grant, and the call
+        // uses the token it still holds, as calls waiting on that renewal do.
+        yield* issuer.configure({ tokenError: refreshFailures.unavailable });
+        const beforeOutage = yield* refreshes;
+        yield* expectRead(account.profile, current);
+        expect(yield* refreshes, "One renewal attempt per call").toBe(beforeOutage + 1);
+        // The failure is traced as the resolve's outcome, not as a failed resolve.
+        const trace = yield* spans;
+        const resolved = trace.data.find(
+          ({ span }) =>
+            span.operationName === "oauth.resolve" &&
+            span.tags["oauth.renewal.outcome"] !== undefined,
+        )?.span;
+        expect(resolved?.tags).toMatchObject({
+          "oauth.provider.id": provider,
+          "oauth.renewal.outcome": "service_unavailable",
+          "oauth.resolve.outcome": "current_token",
+          "oauth.error.stage": "refresh",
+          "http.response.status_code": "503",
+        });
+        expect(resolved?.status).not.toBe("error");
+        assertPrivate(trace);
+        yield* evidence.json("renewal-ahead-of-expiry-outage-trace.json", trace);
+
+        // The grant and its refresh token were kept, so the next call after the service
+        // recovers renews.
+        yield* issuer.configure({ tokenError: null });
+        yield* expectRead(account.profile, beforeOutage + 2);
+        expect(yield* refreshes).toBe(beforeOutage + 2);
+
+        // Once the token has expired there is nothing to fall back to: the call fails.
+        yield* issuer.configure({ expiresIn: shortLifetime });
+        yield* expectRead(account.profile, beforeOutage + 3);
+        yield* Effect.sleep(pastShortLifetime);
+        yield* issuer.configure({ tokenError: refreshFailures.unavailable });
+        const beforeExpired = yield* refreshes;
+        const failed = yield* read(account.profile);
+        expect(failed.status, JSON.stringify(failed.body)).toBe(502);
+        expect(yield* body(Failure, failed)).toMatchObject({
+          _tag: "OAuthRenewalFailed",
+          account: account.account,
+          reason: "service_unavailable",
+          cause: { stage: "refresh", status: 503 },
+        });
+        assertPrivate(failed.body);
+        expect(yield* refreshes).toBe(beforeExpired + 1);
+        yield* issuer.configure({ tokenError: null, expiresIn: 20 });
       }),
     ),
   );

@@ -312,14 +312,19 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
           expect(value.authenticated).toBe(true);
           expect(value.generation).toBeGreaterThan(beforeRenewal);
           expect((yield* issuer.metrics).observed?.scope).toBe("reports:read");
+          // A refused client keeps the grant. The renewed token is still valid, so the call's
+          // renewal ahead of expiry fails and the call uses that token.
           yield* issuer.configure({ rejected: true });
-          const failed = yield* api.request(
+          const requests = (yield* issuer.metrics).requests;
+          const kept = yield* api.request(
             actors.owner,
             "POST",
             `${prefix}/apps/${app.id}/tools/call`,
             { profile: profile.id, tool: "queries.read", input: {} },
           );
-          expect(failed.status).not.toBe(200);
+          expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+          expect(yield* body(Read, kept)).toEqual(value);
+          expect((yield* issuer.metrics).requests).toBe(requests + 1);
           yield* issuer.configure({ rejected: false, expiresIn: 120 });
           const reconnect = yield* body(
             Resource,

@@ -296,12 +296,30 @@ const tokenResponses = (kind: "declared" | "discovered") => (context: TestContex
         reason: "unsupported",
       });
 
+      // A DPoP token on renewal is refused without ending the grant. While the sign-in token is
+      // still valid, the call keeps using it and every call renews again.
       yield* issuer.configure({ tokenShape: dpop("refresh") });
       const dpopRenewal = yield* signIn("DPoP renewal");
       expect(dpopRenewal.completed.status, JSON.stringify(dpopRenewal.failure)).toBe(200);
-      const { response, refreshes } = yield* read(dpopRenewal);
+      for (const call of [1, 2]) {
+        const { response, refreshes } = yield* read(dpopRenewal);
+        expect(refreshes, `DPoP renewal call ${call}`).toBe(1);
+        expect(response.status, `DPoP renewal call ${call}: ${JSON.stringify(response.body)}`).toBe(
+          200,
+        );
+        expect(yield* body(Echo, response), `DPoP renewal call ${call}`).toEqual({
+          refreshed: false,
+          authorization: "Bearer synthetic-access-token",
+        });
+      }
+      // Once the sign-in token has expired, the refused renewal fails the call.
+      yield* issuer.configure({ expiresIn: 1 });
+      const dpopExpired = yield* signIn("DPoP renewal after expiry");
+      expect(dpopExpired.completed.status, JSON.stringify(dpopExpired.failure)).toBe(200);
+      yield* Effect.sleep("1200 millis");
+      const { response, refreshes } = yield* read(dpopExpired);
       expect(refreshes).toBe(1);
-      expect(response.status, JSON.stringify(response.body)).not.toBe(200);
+      expect(response.status, JSON.stringify(response.body)).toBe(502);
       const failure = JSON.stringify(response.body);
       expect(failure).toContain("OAuthRenewalFailed");
       expect(failure).toContain("token_type");
