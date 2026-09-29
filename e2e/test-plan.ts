@@ -2678,26 +2678,6 @@ export const scenarios = {
       local: na("Local has no personal access tokens."),
     },
   },
-  mcpExecuteTimeoutReport: {
-    fixtures: "actors",
-    file: "mcp-execute-failures.spec.ts",
-    title: "Timed-out hosted MCP executions report completed calls and output",
-    targets: {
-      "self-host": scheduled,
-      cloud: scheduled,
-      local: na("Local runs the same execution driver in its own scenario."),
-    },
-  },
-  mcpExecuteTimeoutApproval: {
-    fixtures: "actors",
-    file: "mcp-execute-failures.spec.ts",
-    title: "MCP executions never pause for approval after their budget ends",
-    targets: {
-      "self-host": scheduled,
-      cloud: scheduled,
-      local: na("Local executions use the same driver; hosted PAT approvals cover the pause."),
-    },
-  },
   mcpExecuteApprovalAfterRefresh: {
     fixtures: "actors",
     file: "mcp-execute-failures.spec.ts",
@@ -2736,15 +2716,6 @@ export const scenarios = {
       "self-host": scheduled,
       cloud: na("The refusing MCP server is a loopback listener."),
       local: na("Hosted self-host covers the shared app runtime error mapping."),
-    },
-  },
-  localMcpExecuteTimeoutReport: {
-    file: "mcp-execute-failures.spec.ts",
-    title: "Timed-out local MCP executions report completed calls and output",
-    targets: {
-      local: scheduled,
-      "self-host": na("Hosted products use the organization scenario."),
-      cloud: na("Hosted products use the organization scenario."),
     },
   },
   localMcpExecuteApprovalAfterRefresh: {
