@@ -28,9 +28,9 @@ export interface AppProtocol {
   readonly response: (command: HostRequest, body: unknown) => Effect.Effect<unknown>;
 }
 
-/** Protocol 2 is the host's current protocol, so its messages need no conversion. */
-const protocol2: AppProtocol = {
-  version: 2,
+/** Protocol 3 is the host's current protocol, so its messages need no conversion. */
+const protocol3: AppProtocol = {
+  version: 3,
   workerEntry: appBridge,
   nodeEntry: nodeAppEntry,
   invocation: (input) => JSON.stringify(input),
@@ -39,16 +39,22 @@ const protocol2: AppProtocol = {
 };
 
 /**
- * Protocol 1 differs only in its skill catalog reply, which never says whether a loader read
- * through the app cache. That reply is already a valid protocol 2 reply whose loader did not, so
- * its messages need no conversion either.
+ * Protocol 2 has the same requests and entry. Its failures lack protocol 3's optional failure
+ * detail, so every protocol 2 reply is already a protocol 3 reply without that detail. Protocol 2
+ * bundles ignore the detail in workflow step replies.
  */
-const protocol1: AppProtocol = { ...protocol2, version: 1 };
+const protocol2: AppProtocol = { ...protocol3, version: 2 };
 
-const protocols: ReadonlyMap<number, AppProtocol> = new Map([
-  [protocol1.version, protocol1],
-  [protocol2.version, protocol2],
-]);
+/**
+ * Protocol 1 differs from protocol 2 only in its skill catalog reply, which never says whether a
+ * loader read through the app cache. That reply is already a valid protocol 2 reply whose loader
+ * did not, so its messages need no conversion either.
+ */
+const protocol1: AppProtocol = { ...protocol3, version: 1 };
+
+const protocols: ReadonlyMap<number, AppProtocol> = new Map(
+  [protocol1, protocol2, protocol3].map((protocol) => [protocol.version, protocol]),
+);
 
 /** Protocols this host builds and runs. */
 export const supportedProtocols: readonly number[] = [...protocols.keys()];

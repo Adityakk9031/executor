@@ -375,10 +375,13 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
                     : "rejected",
             });
           } else {
-            // Undeclared failures keep only the SDK's fixed reason and retry guidance.
+            // Undeclared failures name the failed API call without its response body.
             expect(failure.response).toMatchObject({ code: "ToolCallFailed", status: 502 });
-            expect(failure.message).toBe(
-              "ToolCallFailed (HTTP 502): Operation execution failed Recovery: Check whether the tool already made changes before retrying.",
+            expect(failure.message).toMatch(
+              /^ToolCallFailed \(HTTP 502\): The app's API call failed: The API (responded with HTTP \d+|request failed)/,
+            );
+            expect(failure.message).toContain(
+              "Recovery: Check the API's response and the app's OpenAPI document, then retry.",
             );
           }
         }
@@ -391,7 +394,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
                 path: "index.ts",
                 content: `import { defineApp } from "apps";
 export default defineApp({ accounts: {} }, async () => {
-  throw new Error(${JSON.stringify(openapiSecretMarker)});
+  throw new Error("Synthetic factory failure");
 });`,
               },
             ],
@@ -428,12 +431,15 @@ export default defineApp({ accounts: {} }, async () => {
             }),
           ),
         )(evaluation?.reason);
+        // The factory's own error explains why the tools could not load.
         expect(detail).toMatchObject({
           code: "AppEvaluationFailed",
           status: 502,
-          message: "Executor could not load this app’s tool definitions.",
+          message:
+            "Executor could not load this app’s tool definitions. The app threw Error: Synthetic factory failure",
           recovery: {
-            instructions: expect.stringContaining("Do not assume an account needs reconnecting"),
+            action:
+              "Try again. If this continues, fix the app code that raised this error and deploy it.",
           },
         });
         expect(JSON.stringify(discovered)).not.toContain(openapiSecretMarker);

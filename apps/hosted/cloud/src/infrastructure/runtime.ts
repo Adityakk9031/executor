@@ -8,10 +8,16 @@ import {
   RuntimeBuildFailed,
   BuildMemoryExceeded,
   RuntimeProtocolUnsupported,
+  describeBuildCause,
   runtimeAdapter,
 } from "@executor-js/sdk/core";
 import { appRuntime, makeAppRunner } from "@executor-js/sdk/workerd";
-import { HostRequirementsError, DeclaredRequirements, HostResponse } from "apps/contracts";
+import {
+  DatabaseFieldReserved,
+  HostRequirementsError,
+  DeclaredRequirements,
+  HostResponse,
+} from "apps/contracts";
 import { RuntimeContext } from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { Context, Effect, Option, Schema } from "effect";
@@ -29,19 +35,13 @@ import {
   cloudBuildAsset,
 } from "../implementation/build-storage.ts";
 
-/** Keep the underlying failure beside the public error so the build span can report it. */
-const causes = new WeakMap<object, string>();
-const causeOf = (error: unknown) =>
-  (typeof error === "object" && error !== null ? causes.get(error) : undefined) ?? "";
-const describe = (cause: unknown) =>
-  cause instanceof Error
-    ? `${cause.name}: ${cause.message}`
-    : (JSON.stringify(cause) ?? String(cause));
-const failed = (stage: RuntimeBuildFailed["stage"], cause: unknown) => {
-  const error = new RuntimeBuildFailed({ stage });
-  causes.set(error, describe(cause));
-  return error;
-};
+/** The deployer sees the underlying failure; builds bind no accounts, so it holds no credentials. */
+const failed = (stage: RuntimeBuildFailed["stage"], cause: unknown) =>
+  new RuntimeBuildFailed({
+    stage,
+    message: describeBuildCause(cause),
+    ...(Schema.is(DatabaseFieldReserved)(cause) ? { declaration: cause } : {}),
+  });
 /**
  * Attribute Worker Loader use to the caller. Cloudflare bills each unique loaded Worker per day,
  * and its own usage data cannot be split by user or organization.
@@ -148,12 +148,11 @@ export const cloudRuntime = Effect.fn(function* (
             const result = yield* compiler.compile(files, headers).pipe(
               Effect.catchTag("RpcCallError", (error) => {
                 const cause = error.cause;
-                const failure =
+                return Effect.fail(
                   cause instanceof Error && /^Worker exceeded memory limit\.?$/.test(cause.message)
                     ? new BuildMemoryExceeded()
-                    : new RuntimeBuildFailed({ stage: "compile" });
-                causes.set(failure, describe(error));
-                return Effect.fail(failure);
+                    : failed("compile", cause instanceof Error ? cause : error),
+                );
               }),
               Effect.flatMap(Schema.decodeUnknownEffect(CloudCompileResult)),
               Effect.catchTag("SchemaError", (cause) => Effect.fail(failed("compile", cause))),
@@ -185,7 +184,6 @@ export const cloudRuntime = Effect.fn(function* (
             ).pipe(Effect.provide(RuntimeContext.phantom));
             return { build, requirements, ...(assets === undefined ? {} : { ui: assets }) };
           }).pipe(
-            // The failing stage and its cause belong on the span; the public error stays small.
             Effect.tapError((error) =>
               Effect.annotateCurrentSpan({
                 "build.stage": Schema.is(BuildMemoryExceeded)(error)
@@ -193,7 +191,7 @@ export const cloudRuntime = Effect.fn(function* (
                   : Schema.is(RuntimeProtocolUnsupported)(error)
                     ? "protocol"
                     : error.stage,
-                "build.cause": causeOf(error),
+                "build.cause": error.message,
               }),
             ),
           ),

@@ -212,12 +212,17 @@ export default defineApp({ accounts: { service: provider.many() } }, async ({ ac
             expect(forged.account).toBeUndefined();
             yield* upstream.configure({ status: 400 });
             const unknown = yield* index();
-            expect(unknown.body).toMatchObject({ _tag: "AppEvaluationFailed" });
-            expect(JSON.stringify(unknown.body)).not.toContain(providerSecretMarker);
+            // An app that throws its own Error with a message chose to show it to its caller.
+            expect(unknown.body).toMatchObject({
+              _tag: "AppEvaluationFailed",
+              failure: { source: "app", errorName: "Error", message: providerSecretMarker },
+            });
             yield* upstream.configure({ status: 400, phase: "call" });
             const unknownCall = yield* call();
-            expect(unknownCall.body).toMatchObject({ _tag: "ToolCallFailed" });
-            expect(JSON.stringify(unknownCall.body)).not.toContain(providerSecretMarker);
+            expect(unknownCall.body).toMatchObject({
+              _tag: "ToolCallFailed",
+              failure: { source: "app", errorName: "Error", message: providerSecretMarker },
+            });
           }
           if (kind !== "graphql") continue;
           for (const [code, reason] of [

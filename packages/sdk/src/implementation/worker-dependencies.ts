@@ -3,7 +3,7 @@ import { installDependencies, type InMemoryFileSystem } from "@cloudflare/worker
 import { captureTelemetry } from "@executor-js/telemetry";
 import { Effect, Schema, Semaphore } from "effect";
 import type { Plugin } from "esbuild";
-import { RuntimeBuildFailed } from "../contracts/runtime.ts";
+import { boundBuildMessage, describeBuildCause, RuntimeBuildFailed } from "../contracts/runtime.ts";
 import tailwind from "tailwindcss/package.json" with { type: "json" };
 
 const Package = Schema.Struct({
@@ -44,13 +44,28 @@ export const workerDependencies = (filesystem: InMemoryFileSystem, registry?: st
                 },
                 { transitive, ...(registry === undefined ? {} : { registry }) },
               ),
-            catch: () => new RuntimeBuildFailed({ stage: "dependencies", dependency: name }),
+            catch: (cause) =>
+              new RuntimeBuildFailed({
+                stage: "dependencies",
+                dependency: name,
+                message: boundBuildMessage(
+                  `Installing ${name}@${version} failed: ${describeBuildCause(cause)}`,
+                ),
+              }),
           });
           if (
             result.warnings.length > 0 ||
             filesystem.read(`node_modules/${name}/package.json`) === null
           )
-            return yield* new RuntimeBuildFailed({ stage: "dependencies", dependency: name });
+            return yield* new RuntimeBuildFailed({
+              stage: "dependencies",
+              dependency: name,
+              message: boundBuildMessage(
+                result.warnings.length > 0
+                  ? `Installing ${name}@${version} failed: ${result.warnings.join("; ")}`
+                  : `Installing ${name}@${version} did not produce node_modules/${name}/package.json.`,
+              ),
+            });
           yield* Effect.annotateCurrentSpan({
             "executor.build.installed_packages": result.installed.length,
           });
@@ -87,7 +102,13 @@ export const workerDependencies = (filesystem: InMemoryFileSystem, registry?: st
           : install("apps", dependencies.apps, false).pipe(Effect.as(true)),
     };
   }).pipe(
-    Effect.catchTag("SchemaError", () =>
-      Effect.fail(new RuntimeBuildFailed({ stage: "dependencies" })),
+    Effect.catchTag("SchemaError", (cause) =>
+      Effect.fail(
+        new RuntimeBuildFailed({
+          stage: "dependencies",
+          location: { file: "package.json" },
+          message: boundBuildMessage(`package.json is invalid: ${cause.message}`),
+        }),
+      ),
     ),
   );

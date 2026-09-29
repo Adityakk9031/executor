@@ -26,10 +26,7 @@ import {
 import { Telemetry } from "../support/evidence.ts";
 
 const step = "1_app_framework_pin";
-/**
- * The protocol-1 release the step pins. It is also the release this host ships, which the suite's
- * loopback registry serves until it is published.
- */
+/** The protocol-1 release the step pins. The suite's loopback registry forwards it to npm. */
 const release = "0.0.1-beta.2";
 
 /**

@@ -368,7 +368,7 @@ export const appCommandFailure = (error: unknown): string | undefined => {
     return error.reason === "conflict"
       ? "The source changed. Read the latest commit before saving or deploying."
       : "The Git source could not be read or saved. Check the repository and retry.";
-  if (Schema.is(DeploymentBuildFailed)(error)) return error.reason;
+  if (Schema.is(DeploymentBuildFailed)(error)) return error.message;
   if (Schema.is(SkillLookupFailed)(error)) return error.reason;
   if (Schema.is(BuildMemoryExceeded)(error)) return `${error.description} ${error.recovery.action}`;
   if (Schema.is(RegistryError)(error))

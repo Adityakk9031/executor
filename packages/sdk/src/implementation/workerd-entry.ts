@@ -12,7 +12,9 @@ import type {
 import { RpcTarget, newWorkersRpcResponse, type RpcStub } from "capnweb";
 import { Cause, Effect, Redacted, Schema } from "effect";
 import {
+  DatabaseFieldReserved,
   DeclaredRequirements,
+  HostRequirementsError,
   HostResponse,
   ResolvedAccounts,
   WorkflowRunId,
@@ -46,7 +48,16 @@ import {
   type WorkflowHostCommand,
 } from "../contracts/workerd-host.ts";
 import { LoadedWorkerBuild, PublishedAppFramework } from "../contracts/worker-build.ts";
-import { decodeWorkflowFailure, workflowFailureMessage } from "../contracts/workflow-errors.ts";
+import {
+  describeBuildCause,
+  RuntimeBuildFailed,
+  RuntimeProtocolUnsupported,
+} from "../contracts/runtime.ts";
+import {
+  decodeWorkflowFailure,
+  workflowFailureDetail,
+  workflowFailureMessage,
+} from "../contracts/workflow-errors.ts";
 import hostFramework from "executor-framework";
 
 /** This runtime's own framework, for sources that do not declare one. */
@@ -108,6 +119,13 @@ interface Environment {
   readonly HOST: Fetcher;
 }
 const failure = () => new WorkflowFailure({ reason: "engine", retryable: true });
+/** The deployer sees the underlying failure; builds bind no accounts. */
+const buildFailed = (stage: RuntimeBuildFailed["stage"], cause: unknown) =>
+  new RuntimeBuildFailed({
+    stage,
+    message: describeBuildCause(cause),
+    ...(Schema.is(DatabaseFieldReserved)(cause) ? { declaration: cause } : {}),
+  });
 /**
  * Every app isolate's global `fetch`. `global_fetch_strictly_public` cannot do this here: it
  * routes global fetch through workerd's `internet` service, which this runtime configures to
@@ -228,7 +246,7 @@ class AppApi extends RpcTarget {
       Effect.gen({ self: this }, function* () {
         const request = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CompileWorkerApp))(
           input,
-        );
+        ).pipe(Effect.mapError((cause) => buildFailed("source", cause)));
         const compiled = yield* compileWorkerApp(
           request.files,
           this.#env.NPM_REGISTRY === ""
@@ -236,15 +254,19 @@ class AppApi extends RpcTarget {
             : { framework, registry: this.#env.NPM_REGISTRY },
         );
         const { bundle, ui } = compiled;
-        const response = yield* runner(this.#env, this.#context).declare(
-          { ...bundle, protocol: compiled.protocol },
-          {},
-        );
-        const envelope = yield* Schema.decodeUnknownEffect(HostResponse)(response);
-        if (!envelope.ok) return yield* failure();
-        const requirements = yield* Schema.decodeUnknownEffect(DeclaredRequirements)(
-          envelope.value,
-        );
+        const requirements = yield* runner(this.#env, this.#context)
+          .declare({ ...bundle, protocol: compiled.protocol }, {})
+          .pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(HostResponse)),
+            Effect.flatMap((envelope) =>
+              envelope.ok
+                ? Schema.decodeUnknownEffect(DeclaredRequirements)(envelope.value)
+                : Schema.decodeUnknownEffect(HostRequirementsError)(envelope.error).pipe(
+                    Effect.flatMap(Effect.fail),
+                  ),
+            ),
+            Effect.mapError((cause) => buildFailed("declaration", cause)),
+          );
         return {
           ok: true as const,
           value: {
@@ -255,10 +277,15 @@ class AppApi extends RpcTarget {
           },
         };
       }).pipe(
-        Effect.catchTags({
-          RuntimeBuildFailed: (error) => Effect.succeed({ ok: false as const, error }),
-          RuntimeProtocolUnsupported: (error) => Effect.succeed({ ok: false as const, error }),
-        }),
+        Effect.catch((error) =>
+          Effect.succeed({
+            ok: false as const,
+            error:
+              Schema.is(RuntimeBuildFailed)(error) || Schema.is(RuntimeProtocolUnsupported)(error)
+                ? error
+                : buildFailed("compile", error),
+          }),
+        ),
         Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(CompileWorkerResult))),
       ),
     );
@@ -448,11 +475,16 @@ export class AppWorkflows extends WorkflowEntrypoint<Environment, { run: string 
               }),
             );
           if (!result.ok) {
+            const detail = workflowFailureDetail(result.error);
             if (result.error.reason !== "engine" || !result.error.retryable)
               yield* hostRequest(this.env, {
                 operation: "finish",
                 run: seed.runId,
-                result: { ok: false, error: result.error.reason },
+                result: {
+                  ok: false,
+                  error: result.error.reason,
+                  ...(detail === undefined ? {} : { detail }),
+                },
               });
             return yield* result.error;
           }

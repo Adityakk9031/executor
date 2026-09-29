@@ -1415,6 +1415,28 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  appBuildFailureDetails: {
+    fixtures: "actors",
+    managementProfiles: ["owner"],
+    file: "app-failure-details.spec.ts",
+    title: "Failed deploys report their build stage, source location and underlying error",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted deploy routes and management app; local shares the workerd build path."),
+    },
+  },
+  appOperationFailureDetails: {
+    fixtures: "actors",
+    managementProfiles: ["owner"],
+    file: "app-failure-details.spec.ts",
+    title: "Failed app operations return the app's own error message to HTTP and MCP callers",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted app routes; the framework failure path is shared with local."),
+    },
+  },
   importDiagnostics: {
     fixtures: "actors",
     managementProfiles: ["owner"],
@@ -2949,6 +2971,16 @@ export const scenarios = {
       "self-host": scheduled,
       cloud: scheduled,
       local: na("This scenario uses hosted app management routes."),
+    },
+  },
+  appDataLimits: {
+    fixtures: "actors",
+    file: "app-data-limits.spec.ts",
+    title: "app database budgets and reserved fields fail with named errors",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted app deploy and tool call routes."),
     },
   },
   appContext: {

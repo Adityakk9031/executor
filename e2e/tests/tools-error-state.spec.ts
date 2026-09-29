@@ -12,6 +12,11 @@ const App = Schema.Struct({ id: Schema.String });
 const EvaluationFailure = Schema.Struct({
   _tag: Schema.Literal("AppEvaluationFailed"),
   reason: Schema.String,
+  failure: Schema.Struct({
+    source: Schema.String,
+    errorName: Schema.String,
+    message: Schema.String,
+  }),
 });
 
 layer(HostedLive, { excludeTestServices: true })("Tools errors", (it) => {
@@ -30,7 +35,7 @@ layer(HostedLive, { excludeTestServices: true })("Tools errors", (it) => {
               path: "index.ts",
               content: `import { defineApp } from "apps";
 export default defineApp({ accounts: {} }, async () => {
-  throw new Error("PRIVATE_TOOL_DIAGNOSTIC");
+  throw new Error("SYNTHETIC_FACTORY_FAILURE");
 });`,
             },
           ],
@@ -42,9 +47,12 @@ export default defineApp({ accounts: {} }, async () => {
         );
         const failed = yield* api.request(actors.owner, "GET", `${prefix}/apps/${app.id}/tools`);
         expect(failed.status).toBe(502);
-        expect((yield* body(EvaluationFailure, failed)).reason).not.toContain(
-          "PRIVATE_TOOL_DIAGNOSTIC",
-        );
+        // The app's own factory error explains the failure to its caller.
+        expect((yield* body(EvaluationFailure, failed)).failure).toEqual({
+          source: "app",
+          errorName: "Error",
+          message: "SYNTHETIC_FACTORY_FAILURE",
+        });
         const paths = [actors.organization.id, actors.organization.slug].map(
           (organization) => `/api/organizations/${organization}/apps/${app.id}/tools/index`,
         );
@@ -63,7 +71,7 @@ export default defineApp({ accounts: {} }, async () => {
         expect(copy).toContain("Executor could not load this app’s tool definitions.");
         expect(copy).toContain("AppEvaluationFailed");
         expect(copy).not.toContain("Check its accounts");
-        expect(copy).not.toContain("PRIVATE_TOOL_DIAGNOSTIC");
+        expect(copy).toContain("The app threw Error: SYNTHETIC_FACTORY_FAILURE");
         yield* browser.checkpoint("Tools-error-desktop");
         const prompt = yield* browser.use("Copy a safe, contextual repair prompt", (page) =>
           page
@@ -74,8 +82,8 @@ export default defineApp({ accounts: {} }, async () => {
         );
         expect(prompt).toContain(app.id);
         expect(prompt).toContain("AppEvaluationFailed");
-        expect(prompt).toContain("does not identify which cause occurred");
-        expect(prompt).not.toContain("PRIVATE_TOOL_DIAGNOSTIC");
+        expect(prompt).toContain("raised this error, not Executor");
+        expect(prompt).toContain("SYNTHETIC_FACTORY_FAILURE");
 
         const retry = yield* holdQuery(paths, "continue");
         yield* browser.use("Retry the failed discovery", (page) =>

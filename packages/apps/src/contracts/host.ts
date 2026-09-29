@@ -13,6 +13,9 @@ import {
   type WorkflowHostControls,
 } from "./workflows.ts";
 export * from "./workflows.ts";
+export * from "./failure.ts";
+import { DatabaseFieldReserved, DatabaseLimitExceeded } from "@executor-js/app-data/contracts";
+export { DatabaseFieldReserved, DatabaseLimitExceeded } from "@executor-js/app-data/contracts";
 /** Portable framework dispatch contracts. Requests never carry account bindings. */
 import { Context, Schema, type Effect, type Redacted } from "effect";
 import type { AppStorage } from "./storage.ts";
@@ -44,6 +47,7 @@ export { OAuthClientAuth, OAuthSecretClientAuth } from "./provider.ts";
 export { frameworkProtocol } from "./protocol-version.ts";
 export { protocol1 } from "./protocols/1.ts";
 export { protocol2 } from "./protocols/2.ts";
+export { protocol3 } from "./protocols/3.ts";
 import {
   HostAccountsInvalid,
   HostDeclarationInvalid,
@@ -62,7 +66,7 @@ import {
   ResolvedAccounts,
   type SkillCatalogResponse,
   type TrustedToolApproval,
-} from "./protocols/2.ts";
+} from "./protocols/3.ts";
 export {
   DeclaredAuthMethod,
   DeclaredProvider,
@@ -93,7 +97,7 @@ export {
   HostError,
   HostResponse,
   HostInvocation,
-} from "./protocols/2.ts";
+} from "./protocols/3.ts";
 /** Raw host inputs; the host boundary parses and redacts these immediately. */
 export type ResolvedAccountsInput = typeof ResolvedAccounts.Encoded;
 
@@ -144,8 +148,13 @@ export const selectTools =
   <A extends { readonly name: string }>(all: readonly A[]): readonly A[] =>
     tools === undefined ? all : all.filter((tool) => tools.includes(tool.name));
 
-/** Declaration reads do not bind accounts or evaluate the app factory. */
-export const HostRequirementsError = Schema.Union([HostRequestInvalid, HostDeclarationInvalid]);
+/** Declaration reads do not bind accounts or evaluate the app factory. A named declaration
+ * problem, such as a reserved database field, is reported so the deploy can explain it. */
+export const HostRequirementsError = Schema.Union([
+  HostRequestInvalid,
+  HostDeclarationInvalid,
+  DatabaseFieldReserved,
+]);
 /** Inspection can fail while binding accounts or evaluating the live definition. */
 export const HostInspectError = Schema.Union([
   ProviderError,
@@ -164,6 +173,7 @@ export const HostCallError = Schema.Union([
   HostToolNotFound,
   HostOperationNotFound,
   HostOperationFailed,
+  DatabaseLimitExceeded,
   HostInputInvalid,
   HostOutputInvalid,
   HostToolBlocked,

@@ -60,8 +60,15 @@ import { importedJsonSchema } from "./schema.ts";
 import { OperationToolPrefixes } from "../contracts/operations.ts";
 import { dispatchWebhook } from "./webhooks.ts";
 import { authorDatabase, unavailableStorage } from "./storage.ts";
+import { parseDatabaseSchema } from "@executor-js/app-data/schema";
 import { isApp, toEffectApp } from "./app.ts";
 import { authorCache, unavailableCache } from "./cache.ts";
+import {
+  accountSecrets,
+  boundFailureMessage,
+  describeFailure,
+  failureDetail,
+} from "./failure-detail.ts";
 
 function safe<A, E>(work: () => Effect.Effect<A, unknown>, failure: E): Effect.Effect<A, E> {
   return Effect.suspend(work).pipe(
@@ -71,7 +78,7 @@ function safe<A, E>(work: () => Effect.Effect<A, unknown>, failure: E): Effect.E
   );
 }
 
-const evaluationSafe = <A>(work: Effect.Effect<A, unknown>) =>
+const evaluationSafe = <A>(work: Effect.Effect<A, unknown>, secrets: readonly string[]) =>
   work.pipe(
     Effect.catchCause((cause) => {
       if (Cause.hasInterrupts(cause)) return Effect.interrupt;
@@ -87,7 +94,7 @@ const evaluationSafe = <A>(work: Effect.Effect<A, unknown>) =>
             ? skills.value
             : Option.isSome(mcp)
               ? mcp.value
-              : new HostEvaluationFailed(),
+              : new HostEvaluationFailed(failureDetail(error, secrets)),
       );
     }),
   );
@@ -103,8 +110,29 @@ function jsonSchema(decoder: Schema.Decoder<unknown>) {
   });
 }
 
+/** Name what the app declared wrongly; declarations bind no accounts. */
+const declarationInvalid = (summary: string, cause?: unknown, secrets: readonly string[] = []) =>
+  new HostDeclarationInvalid({
+    source: "app",
+    errorName: "HostDeclarationInvalid",
+    message: boundFailureMessage(
+      cause === undefined ? summary : `${summary}: ${describeFailure(cause)}`,
+      secrets,
+    ),
+  });
+
+/** Like `safe`, keeping the underlying failure in a declaration error. */
+const declarationSafe = <A>(work: () => Effect.Effect<A, unknown>, summary: string) =>
+  Effect.suspend(work).pipe(
+    Effect.catchCause((cause) =>
+      Cause.hasInterrupts(cause)
+        ? Effect.interrupt
+        : Effect.fail(declarationInvalid(summary, Cause.squash(cause))),
+    ),
+  );
+
 function providerDeclaration(provider: Provider<AuthMethods>) {
-  return safe(
+  return declarationSafe(
     () =>
       Effect.gen(function* () {
         const auth = new Map<string, unknown>();
@@ -131,7 +159,7 @@ function providerDeclaration(provider: Provider<AuthMethods>) {
           auth: Object.fromEntries(auth),
         });
       }),
-    new HostDeclarationInvalid(),
+    `Account provider "${provider.name}" has an invalid declaration`,
   );
 }
 
@@ -150,7 +178,11 @@ function requirements(slots: AccountSlots, database?: typeof DeclaredRequirement
       accounts: Object.fromEntries(accounts),
       capabilities: { skills: true, toolIndex: true, skillSources: true, scheduledTools: true },
       ...(database === undefined ? {} : { database }),
-    }).pipe(Effect.mapError(() => new HostDeclarationInvalid()));
+    }).pipe(
+      Effect.mapError((cause) =>
+        declarationInvalid("The app's account or database declarations are invalid", cause),
+      ),
+    );
   });
 }
 
@@ -229,14 +261,29 @@ function dispatch(
 ): Effect.Effect<JsonValue, HostError> {
   return Effect.scoped(
     Effect.gen(function* () {
-      if (!isApp(app)) return yield* Effect.fail(new HostDeclarationInvalid());
+      if (!isApp(app))
+        return yield* Effect.fail(
+          declarationInvalid("The app module's default export is not an app created by defineApp"),
+        );
       const native = toEffectApp(app);
+      const secrets = accountSecrets(context.accounts);
+      const storageFailure = (error: unknown) =>
+        Effect.fail(new HostOperationFailed(failureDetail(error, secrets)));
       const declared = yield* requirements(native.accounts, native.database?.schema);
-      if (request.operation === "requirements")
+      if (request.operation === "requirements") {
+        if (native.database !== undefined)
+          yield* parseDatabaseSchema(native.database.schema).pipe(
+            Effect.catchTag("AppDatabaseError", (cause) =>
+              Effect.fail(
+                declarationInvalid("The app's account or database declarations are invalid", cause),
+              ),
+            ),
+          );
         return yield* safe(
           () => Schema.decodeUnknownEffect(JsonValue)(declared),
           new HostDeclarationInvalid(),
         );
+      }
       const lifetime = yield* Effect.acquireRelease(
         Effect.sync(() => new AbortController()),
         (controller) => Effect.sync(() => controller.abort()),
@@ -346,7 +393,7 @@ function dispatch(
         fetch: yield* invocationFetch(invocationSignal),
         elicit: makeElicit(delivery, invocationSignal),
       };
-      const definition = yield* evaluationSafe(native.evaluate(bound)).pipe(
+      const definition = yield* evaluationSafe(native.evaluate(bound), secrets).pipe(
         Effect.withSpan("app.evaluate"),
       );
       if (request.operation === "skills") {
@@ -362,7 +409,7 @@ function dispatch(
         const dynamic =
           source === undefined
             ? []
-            : yield* evaluationSafe(Effect.suspend(source.list)).pipe(
+            : yield* evaluationSafe(Effect.suspend(source.list), secrets).pipe(
                 Effect.withSpan("app.skills.load"),
               );
         const cached = source !== undefined && cacheCommands > before;
@@ -421,34 +468,47 @@ function dispatch(
                 new WorkflowFailure({ reason: "credentials", retryable: false }),
               );
               return {
-                ...accounts,
-                cache: authorCache(
-                  context.cache ?? unavailableCache,
-                  Redacted.value(current.accounts),
+                context: {
+                  ...accounts,
+                  cache: authorCache(
+                    context.cache ?? unavailableCache,
+                    Redacted.value(current.accounts),
+                    signal,
+                  ),
+                  files,
+                  fetch: yield* invocationFetch(signal),
                   signal,
-                ),
-                files,
-                fetch: yield* invocationFetch(signal),
-                signal,
-                runId: execution.runId,
-                stepId,
-                idempotencyKey: stepId,
+                  runId: execution.runId,
+                  stepId,
+                  idempotencyKey: stepId,
+                },
+                // The resolved values, not the app's decoded fields, which may be `Redacted`.
+                secrets: accountSecrets(current.accounts),
               };
             }),
           invocationSignal,
         );
-        const output = yield* workflowSafe(entry.run(workflowContext, input));
+        const output = yield* workflowSafe(entry.run(workflowContext, input), secrets);
         const outputSchema = entry.output;
         const decoded =
           outputSchema === undefined
             ? output
             : yield* safe(
                 () => Schema.decodeUnknownEffect(outputSchema)(output),
-                new WorkflowFailure({ reason: "output", retryable: false }),
+                new WorkflowFailure({
+                  reason: "output",
+                  retryable: false,
+                  message: "The workflow's result does not match its declared output schema.",
+                }),
               );
         return yield* safe(
           () => Schema.decodeUnknownEffect(WorkflowValue)(decoded),
-          new WorkflowFailure({ reason: "output", retryable: false }),
+          new WorkflowFailure({
+            reason: "output",
+            retryable: false,
+            message:
+              "The workflow returned a value that is not JSON, such as undefined, or is larger than 1 MiB. Return null for no result.",
+          }),
         );
       }
       if (request.operation === "inspect") {
@@ -513,7 +573,7 @@ function dispatch(
             }
             return dynamic.list();
           };
-          const discovered = yield* evaluationSafe(discover()).pipe(
+          const discovered = yield* evaluationSafe(discover(), secrets).pipe(
             Effect.flatMap((value) =>
               safe(
                 () =>
@@ -580,9 +640,10 @@ function dispatch(
         const storage = context.storage ?? unavailableStorage;
         return yield* storage.mutate(native.database.schema, executeWebhook).pipe(
           Effect.catchTags({
-            AppDatabaseError: () => Effect.fail(new HostOperationFailed()),
-            AppStorageUnavailable: () => Effect.fail(new HostOperationFailed()),
-            AppStorageError: () => Effect.fail(new HostOperationFailed()),
+            AppDatabaseError: storageFailure,
+            DatabaseLimitExceeded: (error) => Effect.fail(error),
+            AppStorageUnavailable: storageFailure,
+            AppStorageError: storageFailure,
           }),
         );
       }
@@ -607,7 +668,7 @@ function dispatch(
       const resolvedTool =
         source === undefined || declaredTool !== undefined
           ? undefined
-          : yield* evaluationSafe(source.resolve(toolName));
+          : yield* evaluationSafe(source.resolve(toolName), secrets);
       const tool = declaredTool ?? resolvedTool;
       if (tool !== undefined && tool.kind !== (kind === "query" ? "query" : "mutation"))
         return yield* new HostDeclarationInvalid();
@@ -719,7 +780,7 @@ function dispatch(
                       })
                     : Option.isSome(failure)
                       ? failure.value
-                      : new HostOperationFailed(),
+                      : new HostOperationFailed(failureDetail(error, secrets)),
               );
             }),
             Effect.withSpan("app.operation.execute", {
@@ -757,9 +818,10 @@ function dispatch(
         ),
       ).pipe(
         Effect.catchTags({
-          AppDatabaseError: () => Effect.fail(new HostOperationFailed()),
-          AppStorageUnavailable: () => Effect.fail(new HostOperationFailed()),
-          AppStorageError: () => Effect.fail(new HostOperationFailed()),
+          AppDatabaseError: storageFailure,
+          DatabaseLimitExceeded: (error) => Effect.fail(error),
+          AppStorageUnavailable: storageFailure,
+          AppStorageError: storageFailure,
         }),
       );
     }),
@@ -803,6 +865,8 @@ const errorStatus = Match.type<HostError>().pipe(
     HostToolApprovalRequired: () => 409,
     HostToolPolicyFailed: () => 500,
     HostOperationFailed: () => 500,
+    DatabaseLimitExceeded: () => 422,
+    DatabaseFieldReserved: () => 422,
     HostDeclarationInvalid: () => 500,
     HostEvaluationFailed: () => 500,
     HostOutputInvalid: () => 500,
@@ -855,12 +919,17 @@ export const createAppHandler =
         Cause.hasInterrupts(cause)
           ? Effect.interrupt
           : Effect.logError(cause).pipe(
-              Effect.as(
-                Response.json(
-                  { ok: false, error: { _tag: "HostDeclarationInvalid" } },
-                  { status: 500 },
+              Effect.andThen(
+                Schema.encodeEffect(HostError)(
+                  declarationInvalid(
+                    "The app failed while it was loaded",
+                    Cause.squash(cause),
+                    accountSecrets(context.accounts),
+                  ),
                 ),
               ),
+              Effect.map((error) => Response.json({ ok: false, error }, { status: 500 })),
+              Effect.orDie,
             ),
       ),
     );

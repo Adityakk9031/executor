@@ -34,7 +34,7 @@ import {
 } from "@executor-js/app-cache/contracts";
 import { holdLeases } from "@executor-js/app-cache";
 import { discardsEvaluated } from "@executor-js/app-cache/changes";
-import { RuntimeProtocolFailed } from "../contracts/runtime.ts";
+import { describeBuildCause, RuntimeProtocolFailed } from "../contracts/runtime.ts";
 import type { LoadedWorkerBuild, WorkerBundle } from "../contracts/worker-build.ts";
 import { appProtocol, type AppProtocol } from "./app-protocols.ts";
 import { appFacetBridge, appRpcBridge } from "./worker-bridge.ts";
@@ -133,11 +133,12 @@ interface CacheSession {
   readonly close: Effect.Effect<void>;
 }
 
-const failed = (cause: unknown) =>
-  Effect.annotateCurrentSpan(
-    "executor.runtime.cause",
-    cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause),
-  ).pipe(Effect.andThen(Effect.fail(new RuntimeProtocolFailed())));
+const failed = (cause: unknown) => {
+  const message = describeBuildCause(cause);
+  return Effect.annotateCurrentSpan("executor.runtime.cause", message).pipe(
+    Effect.andThen(Effect.fail(new RuntimeProtocolFailed({ message }))),
+  );
+};
 const attempt = <A>(work: () => Promise<A>) =>
   Effect.tryPromise({ try: work, catch: (cause) => cause }).pipe(Effect.catch(failed));
 /**

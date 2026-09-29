@@ -323,6 +323,29 @@ layer(HostedLive, { excludeTestServices: true })("App workflows", (it) => {
           const failed = yield* wait((yield* start(workflow)).id, "errored");
           expect(failed.error).toBe(reason);
         }
+        // Errored runs name the failing step and carry the app's own error.
+        const [fatal, exploded, leaked] = yield* Effect.forEach(
+          ["fatal", "explodeRun", "leak"],
+          (workflow) => Effect.flatMap(start(workflow), (run) => wait(run.id, "errored")),
+          { concurrency: 3 },
+        );
+        expect(fatal?.failure).toEqual({
+          step: "fatal",
+          errorName: "NonRetryableError",
+          message: "Synthetic private exception",
+        });
+        expect(exploded?.failure).toEqual({
+          step: "explode",
+          errorName: "TypeError",
+          message: "Synthetic mutation failure",
+        });
+        // Account credentials never appear in a recorded message.
+        expect(leaked?.failure).toEqual({
+          step: "leak",
+          errorName: "NonRetryableError",
+          message: "Rejected token [redacted]",
+        });
+        expect(JSON.stringify(leaked)).not.toContain("synthetic-original");
         yield* wait((yield* start("timeoutRun")).id, "errored");
         expect(
           (yield* body(Rows, yield* call("queries.rows"))).some(

@@ -1,6 +1,7 @@
 /** Pluggable Effect runtime. The caller resolves accounts; no database or owner policy lives here. */
 import { Context, Effect, Schema, type Stream } from "effect";
 import {
+  HostDeclarationInvalid,
   DeclaredRequirements,
   type HostInspectError,
   type HostCallError,
@@ -12,7 +13,8 @@ import {
   type WebhookCommand,
   type WorkflowCommand,
 } from "apps/contracts";
-import { SourceFiles, type BuildMemoryExceeded } from "./deployment.ts";
+import { DatabaseFieldReserved } from "@executor-js/app-data/contracts";
+import { BuildStage, SourceFiles, SourceLocation, type BuildMemoryExceeded } from "./deployment.ts";
 import { BuildId, Json } from "./shared.ts";
 
 /**
@@ -45,12 +47,46 @@ export interface RuntimeAsset {
 /** Parsed successful build result. */
 export type BuiltApp = typeof BuiltApp.Type;
 
-/** A build failed; no build reference is returned and staging output is removed. */
+/** Longest build or protocol diagnostic retained on an error. */
+export const maxBuildMessageLength = 4096;
+/** Bounded diagnostic text about the deployer's own source, such as a compiler error. */
+export const BuildMessage = Schema.String.check(Schema.isMaxLength(maxBuildMessageLength));
+/** Truncate diagnostic text to its bound. */
+export const boundBuildMessage = (message: string) =>
+  message.length <= maxBuildMessageLength
+    ? message
+    : `${message.slice(0, maxBuildMessageLength - 1)}…`;
+/**
+ * Describe an underlying failure as `Name: message`, bounded. Executor's own wrappers of an
+ * underlying failure contribute only their message.
+ */
+export const describeBuildCause = (cause: unknown) =>
+  boundBuildMessage(
+    cause instanceof Error
+      ? cause.message.length > 0
+        ? Schema.is(RuntimeProtocolFailed)(cause) || Schema.is(HostDeclarationInvalid)(cause)
+          ? cause.message
+          : `${cause.name}: ${cause.message}`
+        : cause.name
+      : typeof cause === "string"
+        ? cause
+        : (JSON.stringify(cause) ?? String(cause)),
+  );
+
+/**
+ * A build failed; no build reference is returned and staging output is removed. `message`
+ * describes the underlying failure in the deployer's own source when it is known, with the
+ * first failing source location. It never contains credentials: builds bind no accounts.
+ */
 export class RuntimeBuildFailed extends Schema.TaggedError<RuntimeBuildFailed>()(
   "RuntimeBuildFailed",
   {
-    stage: Schema.Literals(["source", "dependencies", "compile", "declaration", "retain"]),
+    stage: BuildStage,
     dependency: Schema.optional(Schema.String),
+    /** A named declaration problem the author can fix, reported with the failed deploy. */
+    declaration: Schema.optional(DatabaseFieldReserved),
+    message: Schema.optional(BuildMessage),
+    location: Schema.optional(SourceLocation),
   },
 ) {}
 /** The retained build was absent, invalid or could not load in this host. */
@@ -58,10 +94,13 @@ export class RuntimeBuildUnavailable extends Schema.TaggedError<RuntimeBuildUnav
   "RuntimeBuildUnavailable",
   {},
 ) {}
-/** The framework handler returned an invalid protocol response. */
+/**
+ * The framework handler returned an invalid protocol response, or its Worker failed to load.
+ * `message` is the underlying runtime failure; tool callers never receive it.
+ */
 export class RuntimeProtocolFailed extends Schema.TaggedError<RuntimeProtocolFailed>()(
   "RuntimeProtocolFailed",
-  {},
+  { message: Schema.optional(BuildMessage) },
 ) {}
 /**
  * The app's `apps` framework speaks a host protocol this host does not run. Builds fail before

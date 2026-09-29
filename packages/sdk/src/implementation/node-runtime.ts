@@ -5,6 +5,7 @@ import { captureTelemetry, traceHeaders } from "@executor-js/telemetry";
 import { Crypto, Effect, Exit, FileSystem, Path, Redacted, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import {
+  DatabaseFieldReserved,
   HostRequirementsError,
   HostInspectError,
   HostCallError,
@@ -432,7 +433,15 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
             },
             DeclaredRequirements,
             HostRequirementsError,
-          ).pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "declaration" })));
+          ).pipe(
+            Effect.mapError(
+              (error) =>
+                new RuntimeBuildFailed({
+                  stage: "declaration",
+                  ...(Schema.is(DatabaseFieldReserved)(error) ? { declaration: error } : {}),
+                }),
+            ),
+          );
           const ui = yield* buildUi(staging, source, dependencies, optionalPeers);
           const result = { build, requirements, ...(ui === undefined ? {} : { ui }) };
           yield* fs.writeFileString(path.join(staging, "build.json"), JSON.stringify(result)).pipe(

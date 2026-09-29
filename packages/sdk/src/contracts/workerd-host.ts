@@ -7,6 +7,7 @@ import {
   TrustedToolApproval,
   WorkflowReplay,
   WorkflowRunId,
+  WorkflowRunFailure,
   WorkflowValue,
 } from "apps/contracts";
 import { WorkflowSeed } from "./workflow-runtime.ts";
@@ -94,7 +95,11 @@ export const WorkflowHostCommand = Schema.Union([
     run: WorkflowRunId,
     result: Schema.Union([
       Schema.Struct({ ok: Schema.Literal(true), output: WorkflowValue }),
-      Schema.Struct({ ok: Schema.Literal(false), error: Schema.NonEmptyString }),
+      Schema.Struct({
+        ok: Schema.Literal(false),
+        error: Schema.NonEmptyString,
+        detail: Schema.optionalKey(WorkflowRunFailure),
+      }),
     ]),
   }),
 ]);

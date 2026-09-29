@@ -24,7 +24,11 @@ import {
 } from "../contracts/workerd-host.ts";
 import { BlobStore, type BlobStorage } from "../contracts/blobs.ts";
 import { BuildId } from "../contracts/shared.ts";
-import { RuntimeBuildFailed, RuntimeProtocolFailed } from "../contracts/runtime.ts";
+import {
+  describeBuildCause,
+  RuntimeBuildFailed,
+  RuntimeProtocolFailed,
+} from "../contracts/runtime.ts";
 import { LoadedWorkerBuild } from "../contracts/worker-build.ts";
 import type { Executor } from "../contracts/executor.ts";
 import { runtimeAdapter } from "./runtime.ts";
@@ -128,6 +132,7 @@ export const workerdHostHandler = (options: {
                 error: yield* Schema.decodeUnknownEffect(WorkflowFailure.fields.reason)(
                   command.result.error,
                 ),
+                ...(command.result.detail === undefined ? {} : { detail: command.result.detail }),
               });
             return null;
           }
@@ -226,7 +231,12 @@ export const connectedWorkerdApps = (blobs: BlobStorage, transport: WorkerdTrans
         Effect.gen(function* () {
           const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(CompileWorkerApp))({
             files,
-          }).pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "source" })));
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new RuntimeBuildFailed({ stage: "source", message: describeBuildCause(cause) }),
+            ),
+          );
           const result = yield* rpc((api) =>
             Effect.tryPromise({
               try: async () => await api.compile(encoded),
@@ -234,13 +244,24 @@ export const connectedWorkerdApps = (blobs: BlobStorage, transport: WorkerdTrans
             }),
           ).pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(CompileWorkerResult))),
-            Effect.mapError(() => new RuntimeBuildFailed({ stage: "compile" })),
+            Effect.mapError(
+              (cause) =>
+                new RuntimeBuildFailed({ stage: "compile", message: describeBuildCause(cause) }),
+            ),
           );
           if (!result.ok) return yield* Effect.fail(result.error);
           const compiled = result.value;
           const requirements = yield* Schema.decodeUnknownEffect(DeclaredRequirements)(
             compiled.requirements,
-          ).pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "declaration" })));
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new RuntimeBuildFailed({
+                  stage: "declaration",
+                  message: describeBuildCause(cause),
+                }),
+            ),
+          );
           const build = BuildId.make(`bld_${crypto.randomUUID()}`);
           const ui = yield* retainWorkerBuild(
             build,

@@ -1,9 +1,9 @@
 /** Compile server and browser source inside workerd using Cloudflare's dependency resolver. */
 import { createApp, InMemoryFileSystem } from "@cloudflare/worker-bundler";
-import { RuntimeBuildFailed } from "../contracts/runtime.ts";
+import { boundBuildMessage, describeBuildCause, RuntimeBuildFailed } from "../contracts/runtime.ts";
 import type { SourceFiles } from "../contracts/deployment.ts";
 import { prepareUiBuild } from "./ui-build.ts";
-import { Effect, Path, Schema } from "effect";
+import { Effect, Option, Path, Schema } from "effect";
 import type { Plugin } from "esbuild";
 import {
   PublishedAppFramework,
@@ -56,6 +56,50 @@ const quietCompiler: Plugin = {
   },
 };
 
+const EsbuildFailure = Schema.Struct({
+  errors: Schema.Array(
+    Schema.Struct({
+      text: Schema.String,
+      location: Schema.NullOr(
+        Schema.Struct({ file: Schema.String, line: Schema.Int, column: Schema.Int }),
+      ),
+    }),
+  ),
+});
+/** The bundler reads source from its `virtual:` namespace; report the authored path. */
+const sourcePath = (file: string) => file.replace(/^virtual:/, "");
+/** Shown compiler errors; the rest are counted. */
+const shownCompileErrors = 5;
+
+/** Keep the compiler's own errors and the first failing location for the deployer. */
+const compileFailure = (cause: unknown) =>
+  Option.match(Schema.decodeUnknownOption(EsbuildFailure)(cause), {
+    onNone: () => new RuntimeBuildFailed({ stage: "compile", message: describeBuildCause(cause) }),
+    onSome: ({ errors }) => {
+      const first = errors[0]?.location ?? undefined;
+      const lines = errors
+        .slice(0, shownCompileErrors)
+        .map(({ text, location }) =>
+          location === null
+            ? text
+            : `${sourcePath(location.file)}:${location.line}:${location.column}: ${text}`,
+        );
+      const more = errors.length - lines.length;
+      return new RuntimeBuildFailed({
+        stage: "compile",
+        message: boundBuildMessage(
+          [...lines, ...(more > 0 ? [`(${more} more errors)`] : [])].join("\n") ||
+            describeBuildCause(cause),
+        ),
+        ...(first === undefined
+          ? {}
+          : {
+              location: { file: sourcePath(first.file), line: first.line, column: first.column },
+            }),
+      });
+    },
+  });
+
 const selectedFramework = (filesystem: InMemoryFileSystem) =>
   Effect.gen(function* () {
     const selected = yield* Schema.decodeUnknownEffect(
@@ -87,8 +131,14 @@ const selectedFramework = (filesystem: InMemoryFileSystem) =>
  */
 export const compileWorkerApp = (files: SourceFiles, host: WorkerHost) =>
   Effect.gen(function* () {
-    if (files.some((file) => file.path.split("/").includes("node_modules")))
-      return yield* new RuntimeBuildFailed({ stage: "source" });
+    const vendored = files.find((file) => file.path.split("/").includes("node_modules"));
+    if (vendored !== undefined)
+      return yield* new RuntimeBuildFailed({
+        stage: "source",
+        location: { file: vendored.path },
+        message:
+          "Source files cannot include node_modules. Declare packages in package.json dependencies; the build installs them.",
+      });
     const filesystem = new InMemoryFileSystem(
       Object.fromEntries(files.map((file) => [file.path, file.content])),
     );
@@ -122,12 +172,22 @@ export const compileWorkerApp = (files: SourceFiles, host: WorkerHost) =>
             ...(browser === undefined ? [] : [browser.plugin]),
           ],
         }),
-      catch: () => new RuntimeBuildFailed({ stage: "compile" }),
+      catch: compileFailure,
     });
     const bundle = yield* Schema.decodeUnknownEffect(Schema.toType(WorkerBundle))({
       ...compiled,
       modules: { ...compiled.modules, ...frameworkModules(selected.server), ...wasm.modules },
-    }).pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "compile" })));
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new RuntimeBuildFailed({
+            stage: "compile",
+            message: boundBuildMessage(
+              `The compiled bundle is invalid: ${describeBuildCause(cause)}`,
+            ),
+          }),
+      ),
+    );
     const ui = browser === undefined ? undefined : yield* browser.finish();
     return { bundle, ui, protocol: selected.protocol };
   }).pipe(Effect.provide(Path.layer), Effect.withSpan("runtime.cloud.compile"));

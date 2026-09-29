@@ -1,4 +1,5 @@
 import {
+  HostEvaluationFailed,
   McpError,
   ProviderError,
   SkillLoadFailed,
@@ -7,7 +8,7 @@ import {
 } from "apps/contracts";
 import { appProviderFailure } from "./provider-error.ts";
 /** Snapshot the configured app, then execute with its selected credentials. */
-import { type Crypto, Effect, Match, Redacted, Result, Schema } from "effect";
+import { type Crypto, Effect, Match, Option, Redacted, Result, Schema } from "effect";
 import type { AppDatabases } from "@executor-js/app-data";
 import { bindAppStorage } from "./app-database.ts";
 import {
@@ -37,6 +38,8 @@ import { OAuthReconnectRequired } from "../contracts/oauth.ts";
 import type { makeOAuth } from "./oauth.ts";
 import {
   AppEvaluationFailed,
+  type AppFailure,
+  appFailureText,
   InputInvalid,
   ToolCallFailed,
   ToolNotFound,
@@ -307,7 +310,31 @@ function invocation(state: InvocationSnapshot, tool: ToolName, input: Json) {
   }).pipe(Effect.mapError(() => new StorageError()));
 }
 
-/** Keep a skill loader's or MCP server's safe fields; every other evaluation failure stays generic. */
+/** Builds from before failure details existed send none; keep their generic reason. */
+const appFailure = ({
+  source,
+  errorName,
+  code,
+  message,
+}: {
+  readonly source?: AppFailure["source"];
+  readonly errorName?: string;
+  readonly code?: string;
+  readonly message?: string;
+}) =>
+  source === undefined || errorName === undefined || message === undefined
+    ? Option.none<AppFailure>()
+    : Option.some<AppFailure>({
+        source,
+        errorName,
+        message,
+        ...(code === undefined ? {} : { code }),
+      });
+
+/**
+ * Keep a skill loader's or MCP server's safe fields, and the error the app's own factory or loader
+ * raised; other evaluation failures stay generic.
+ */
 export const evaluationFailure = (
   identity: { app: AppId; deployment: DeploymentId },
   error: unknown,
@@ -325,6 +352,9 @@ export const evaluationFailure = (
             ...(error.status === undefined ? {} : { status: error.status }),
           },
         }
+      : {}),
+    ...(Schema.is(HostEvaluationFailed)(error)
+      ? Option.match(appFailure(error), { onNone: () => ({}), onSome: (failure) => ({ failure }) })
       : {}),
     ...(Schema.is(McpError)(error)
       ? {
@@ -357,8 +387,21 @@ const runtimeFailure = (
       ElicitationFailed: ({ reason }) => new ToolElicitationFailed({ ...identity, reason }),
       HostToolNotFound: () => new ToolNotFound(identity),
       HostOperationNotFound: () => new ToolNotFound(identity),
-      HostOperationFailed: () =>
-        new ToolCallFailed({ ...identity, reason: "Operation execution failed" }),
+      HostOperationFailed: (error) =>
+        Option.match(appFailure(error), {
+          onNone: () => new ToolCallFailed({ ...identity, reason: "Operation execution failed" }),
+          onSome: (failure) =>
+            new ToolCallFailed({ ...identity, reason: appFailureText(failure), failure }),
+        }),
+      DatabaseLimitExceeded: (error) => {
+        const failure = {
+          source: "storage" as const,
+          errorName: error._tag,
+          code: error.limit,
+          message: error.message,
+        };
+        return new ToolCallFailed({ ...identity, reason: appFailureText(failure), failure });
+      },
       HostInputInvalid: ({ problems }) =>
         new InputInvalid({
           ...identity,
@@ -377,8 +420,7 @@ const runtimeFailure = (
         new AppEvaluationFailed({ ...identity, reason: "App evaluation failed" }),
       HostDeclarationInvalid: () =>
         new AppEvaluationFailed({ ...identity, reason: "App evaluation failed" }),
-      HostEvaluationFailed: () =>
-        new AppEvaluationFailed({ ...identity, reason: "App evaluation failed" }),
+      HostEvaluationFailed: (error) => evaluationFailure(identity, error),
       SkillLoadFailed: (error) => evaluationFailure(identity, error),
       McpError: (error) => evaluationFailure(identity, error),
       RuntimeBuildUnavailable: () =>

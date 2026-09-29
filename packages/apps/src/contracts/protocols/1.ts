@@ -30,12 +30,33 @@ import { WebhookCommand } from "../webhook-protocol.ts";
 import {
   WorkflowCommand,
   WorkflowControlCommand,
-  WorkflowFailure,
   WorkflowReplay,
   WorkflowRpcCommand,
-  WorkflowRpcResult,
   WorkflowRunId,
 } from "../workflows.ts";
+
+/** Protocol 1's workflow failure: a reason code only, as released. */
+export class WorkflowFailure extends Schema.TaggedError<WorkflowFailure>()("WorkflowFailure", {
+  reason: Schema.Literals([
+    "unavailable",
+    "not_found",
+    "input",
+    "output",
+    "operation",
+    "approval",
+    "credentials",
+    "terminated",
+    "execution",
+    "conflict",
+    "engine",
+  ]),
+  retryable: Schema.Boolean,
+}) {}
+/** Protocol 1's workflow step reply, carrying its own failure. */
+export const WorkflowRpcResult = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), value: JsonValue }),
+  Schema.Struct({ ok: Schema.Literal(false), error: WorkflowFailure }),
+]);
 
 /** Serializable auth methods shared with SDK hosts; protocol configuration has one schema. */
 export const DeclaredAuthMethod = Schema.Union([
