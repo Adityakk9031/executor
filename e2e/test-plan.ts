@@ -1434,7 +1434,7 @@ export const scenarios = {
   localAppDeclarations: {
     file: "local-app-declarations.spec.ts",
     title:
-      "local app declarations follow credentials and deployments and refresh within the stale bound",
+      "local app declarations follow credentials and deployments and refresh in the background while stale",
     targets: {
       local: scheduled,
       "self-host": na("Hosted declaration reuse is covered by appDeclarations."),

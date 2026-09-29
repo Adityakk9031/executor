@@ -9,7 +9,7 @@ import type { Deferred, Effect } from "effect";
  */
 export const declarationFreshness = {
   freshMillis: 10_000,
-  maxStaleMillis: 60_000,
+  maxStaleMillis: 24 * 60 * 60_000,
   refreshMillis: 30_000,
 } as const;
 
@@ -18,18 +18,18 @@ export const declarationFreshness = {
  * The app cache's `freshFor`/`staleFor` already bound how old a remote catalog behind a listing
  * can be, and a new deployment, profile revision, account selection or stored credential is a
  * different listing, so this window only bounds re-evaluation and inputs nothing else tracks,
- * such as a factory that fetches without the app cache. `maxStaleMillis` defaults to the agreed
- * 60 s bound for evaluated metadata. `freshMillis` defaults to 30 s, so a busy catalog is
- * re-evaluated in the background at most twice a minute.
+ * such as a factory that fetches without the app cache. `maxStaleMillis` defaults to 24 hours, so
+ * a listing read at least once a day is served from memory while it refreshes in the background.
+ * `freshMillis` defaults to 30 s, so a busy catalog is re-evaluated in the background at most twice
+ * a minute.
  *
  * `loadMillis` bounds an evaluation only while no request waits for it: a background refresh, or
  * a first listing every reader stopped waiting for. It is stopped once it has run that long with
  * no reader; a reader that waits keeps it running, so a slow app can always be listed by a caller
- * prepared to wait. It defaults to 45 s: ages count from when an evaluation started, so a listing
- * that takes longer than `maxStaleMillis` could never be served, and one that takes 45 s is still
- * served for 15 s while its replacement runs. A host whose background work has a shorter lifetime
- * sets it below that lifetime, so a stalled listing ends as a remembered timeout rather than an
- * interruption.
+ * prepared to wait. It defaults to 45 s and never exceeds `maxStaleMillis`: ages count from when an
+ * evaluation started, so a listing that takes longer than that could never be served. A host whose
+ * background work has a shorter lifetime sets it below that lifetime, so a stalled listing ends as
+ * a remembered timeout rather than an interruption.
  *
  * A slow failure is remembered for `freshMillis` after it failed: a listing that timed out or was
  * stopped after `loadMillis`, or one that failed after at least `slowFailureMillis`. Reads with a
@@ -47,7 +47,7 @@ export interface ToolListingPolicy {
 }
 export const defaultToolListingPolicy: ToolListingPolicy = {
   freshMillis: 30_000,
-  maxStaleMillis: 60_000,
+  maxStaleMillis: 24 * 60 * 60_000,
   loadMillis: 45_000,
   slowFailureMillis: 1_000,
 };
