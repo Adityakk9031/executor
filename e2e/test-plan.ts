@@ -1939,6 +1939,35 @@ export const scenarios = {
       local: na("Exercises shared OAuth registration through the hosted API."),
     },
   },
+  oauthCallbackNewTab: {
+    fixtures: "actors",
+    file: "oauth-callback-new-tab.spec.ts",
+    title: "OAuth completes when the service's sign-in link opens in a new tab",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Covers the hosted callback page; the local page has its own scenario."),
+    },
+  },
+  oauthCallbackOtherUser: {
+    fixtures: "actors",
+    file: "oauth-callback-new-tab.spec.ts",
+    title: "Another member cannot finish a sign-in from its link, and its creator still can",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Local has one owner; hosted connections belong to the member who started them."),
+    },
+  },
+  localOAuthCallbackNewTab: {
+    file: "local-oauth-callback-new-tab.spec.ts",
+    title: "Local OAuth completes when the service's sign-in link opens in a new tab",
+    targets: {
+      "self-host": na("Covers the local callback page; hosted has its own scenario."),
+      cloud: na("Covers the local callback page; hosted has its own scenario."),
+      local: scheduled,
+    },
+  },
   localOAuthCallbackFragment: {
     file: "local-oauth-callback-fragment.spec.ts",
     title: "Local OAuth completes when the service appends a fragment to the callback",

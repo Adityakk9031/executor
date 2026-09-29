@@ -18,7 +18,6 @@ import { AppWebhooksActive } from "@executor-js/sdk/core";
 /** Browser-safe read contracts for inspecting the local Executor instance. */
 import {
   AccountConnectionTargetChanged,
-  AccountConnectionId,
   AccountConnectionNotFound,
   AccountConnectionClosed,
   Account,
@@ -656,11 +655,9 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
       }),
     )
     .add(
+      // The callback's state finds its sign-in, so any tab of this dashboard can finish it.
       HttpApiEndpoint.post("completeOAuth", "/dashboard/api/accounts/oauth/complete", {
-        payload: Schema.Struct({
-          connection: AccountConnectionId,
-          callbackUrl: Schema.RedactedFromValue(HttpUrl),
-        }),
+        payload: Schema.Struct({ callbackUrl: Schema.RedactedFromValue(HttpUrl) }),
         success: Account,
         error: [
           StorageError,

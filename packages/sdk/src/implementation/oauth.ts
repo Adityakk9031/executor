@@ -15,7 +15,11 @@ import {
   SchemaRepresentation,
   Struct,
 } from "effect";
-import { StartConnectionOAuth, CompleteConnectionOAuth } from "../contracts/account-connection.ts";
+import {
+  StartConnectionOAuth,
+  CompleteConnectionOAuth,
+  FindConnectionOAuth,
+} from "../contracts/account-connection.ts";
 import {
   openConnection,
   readConnection,
@@ -777,24 +781,22 @@ export const makeOAuth = (
       return yield* decode(StoredAccount, row);
     });
 
-  const completeOAuth = (input: typeof CompleteConnectionOAuth.Type) =>
+  const failed = (reason: OAuthCompletionReason) => new OAuthCompletionFailed({ reason });
+  /** Reject the returned authorization response, recording which part failed. */
+  const rejected = (
+    reason: OAuthCompletionReason,
+    field: OAuthCallbackField,
+    detail: OAuthFailureDetail,
+  ) =>
+    Effect.annotateCurrentSpan({
+      "oauth.error.stage": "authorize",
+      "oauth.error.callback_field": field,
+      "oauth.error.detail": detail,
+    }).pipe(Effect.andThen(Effect.fail(failed(reason))));
+  /** The callback's one-time state is the only key to its pending sign-in. */
+  const pendingAttempt = (callbackUrl: Redacted.Redacted<string>) =>
     Effect.gen(function* () {
-      const connectionState = yield* readConnection(db, input);
-      if (connectionState.state.status === "completed") return connectionState.state.account;
-      const failed = (reason: OAuthCompletionReason) => new OAuthCompletionFailed({ reason });
-      /** Reject the returned authorization response, recording which part failed. */
-      const rejected = (
-        reason: OAuthCompletionReason,
-        field: OAuthCallbackField,
-        detail: OAuthFailureDetail,
-      ) =>
-        Effect.annotateCurrentSpan({
-          "oauth.error.stage": "authorize",
-          "oauth.error.callback_field": field,
-          "oauth.error.detail": detail,
-        }).pipe(Effect.andThen(Effect.fail(failed(reason))));
-      if (protocol === undefined) return yield* failed("oauth_unavailable");
-      const received = Redacted.value(input.callbackUrl);
+      const received = Redacted.value(callbackUrl);
       if (!URL.canParse(received))
         return yield* rejected("callback_malformed", "callback_url", "callback_unparseable");
       const callback = new URL(received);
@@ -822,6 +824,31 @@ export const makeOAuth = (
       if (row.expiresAt.getTime() <= now) return yield* failed("sign_in_expired");
       const attempt = yield* decrypt(id, row.encrypted, OAuthAttempt);
       yield* Effect.annotateCurrentSpan("oauth.provider.id", attempt.provider);
+      return { callback, id, attempt };
+    });
+
+  /** Another owner's sign-in is indistinguishable from an unknown one. */
+  const findOAuth = (input: typeof FindConnectionOAuth.Type) =>
+    pendingAttempt(input.callbackUrl).pipe(
+      Effect.flatMap(({ attempt }) =>
+        input.owner !== undefined && attempt.owner !== input.owner
+          ? rejected("sign_in_not_found", "state", "callback_attempt_not_found")
+          : Effect.succeed({ owner: attempt.owner, connection: attempt.connection }),
+      ),
+      Effect.tapError((error) =>
+        Schema.is(OAuthCompletionFailed)(error)
+          ? Effect.annotateCurrentSpan("oauth.completion.reason", error.reason)
+          : Effect.void,
+      ),
+      Effect.withSpan("oauth.findOAuth"),
+    );
+
+  const completeOAuth = (input: typeof CompleteConnectionOAuth.Type) =>
+    Effect.gen(function* () {
+      const connectionState = yield* readConnection(db, input);
+      if (connectionState.state.status === "completed") return connectionState.state.account;
+      if (protocol === undefined) return yield* failed("oauth_unavailable");
+      const { callback, id, attempt } = yield* pendingAttempt(input.callbackUrl);
       // This browser, or this connection, has since started a newer sign-in.
       if (attempt.connection !== input.connection) return yield* failed("sign_in_replaced");
       const connection = yield* openConnection(db, input);
@@ -1345,6 +1372,7 @@ export const makeOAuth = (
 
   return {
     connections: { oauthSetup, startOAuth, completeOAuth },
+    findOAuth,
     resolve: (account: StoredAccount, provider: ProviderDefinition) => resolve(account, provider),
     renewRejected,
     usable,

@@ -310,6 +310,13 @@ const completeOAuth = Atom.family((key: ConnectionKey) =>
       ),
   ),
 );
+/** The callback's OAuth state, not the browser tab, identifies the connection it completes. */
+export const resolveOAuthCallbackAtom = HostedClient.runtime.fn(
+  (callbackUrl: Redacted.Redacted<string>) =>
+    Effect.flatMap(HostedClient, (client) =>
+      client.oauthCallback.resolve({ payload: { callbackUrl } }),
+    ),
+);
 /** Completion reconciles account and target data before the view navigates. */
 export const submitConnectionAtom = (key: {
   organization: OrganizationReference;
@@ -372,7 +379,7 @@ const calls = Atom.family(({ organization, app, ...target }: CallKey) =>
 export const callToolAtom = (key: ConstructorParameters<typeof CallKey>[0]) =>
   calls(new CallKey(key));
 
-/** Browser-only return context. The server verifies connection ownership and OAuth state. */
+/** Return context from the tab that started sign-in; the callback page resolves it from the server. */
 export const PendingOAuth = Schema.Struct({
   organization: OrganizationReference,
   organizationSlug: Schema.NonEmptyString,

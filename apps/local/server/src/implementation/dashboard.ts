@@ -449,7 +449,16 @@ export const dashboard = (
           return { ...signIn, connection: connection.id };
         }),
       )
-      .handle("completeOAuth", ({ payload }) => executor.accountConnections.completeOAuth(payload))
+      .handle("completeOAuth", ({ payload }) =>
+        executor.accountConnections.findOAuth(payload).pipe(
+          Effect.flatMap((connection) =>
+            executor.accountConnections.completeOAuth({
+              connection: connection.id,
+              callbackUrl: payload.callbackUrl,
+            }),
+          ),
+        ),
+      )
       // Approval policy still applies: a call that needs review does not run from the dashboard.
       .handle("callTool", ({ params, payload }) =>
         executor.tools.call({ ...params, ...payload }).pipe(
