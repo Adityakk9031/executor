@@ -253,7 +253,12 @@ const exchangeFailed = (error: OAuthProtocolFailed) =>
             ),
   });
 
-/** A client with a secret uses RFC 7591's client_secret_basic default unless the server only accepts the body form. */
+/**
+ * A client entered with a secret uses Basic, which RFC 6749 section 2.3.1 requires servers to
+ * support, unless the server advertises only the body form. A server accepting both says nothing
+ * about how this client was registered (RFC 7591 section 2). Declared endpoints advertise
+ * nothing, so services that read only the body, such as HubSpot, declare `client_secret_post`.
+ */
 const secretMethod = (supported: readonly string[] | undefined) =>
   supported === undefined ||
   supported.includes("client_secret_basic") ||

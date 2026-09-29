@@ -158,6 +158,29 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
             reason: "registered_client_incompatible",
             evidence: "HTTP 200, provider error invalid_client",
           },
+          // Services that reject the client with their own code are read as invalid_client, so a
+          // client registered in this sign-in is reported as incompatible.
+          {
+            name: "GitHub incorrect_client_credentials",
+            tokenError: { status: 200, body: { error: "incorrect_client_credentials" } },
+            reason: "registered_client_incompatible",
+            evidence: "HTTP 200.",
+          },
+          {
+            name: "Salesforce invalid_client_id",
+            tokenError: { status: 400, body: { error: "invalid_client_id" } },
+            reason: "registered_client_incompatible",
+            evidence: "HTTP 400.",
+          },
+          {
+            name: "Dropbox invalid_client description",
+            tokenError: {
+              status: 400,
+              body: { error: "invalid_client: Invalid client_id or client_secret" },
+            },
+            reason: "registered_client_incompatible",
+            evidence: "HTTP 400.",
+          },
           {
             name: "HTTP 200 nonstandard error",
             tokenError: { status: 200, body: { ok: false, error: "private_nonstandard_code" } },

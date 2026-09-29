@@ -117,18 +117,32 @@ const withEvidence = (
   });
 };
 
+/**
+ * Services that reject the client's credentials with their own code instead of RFC 6749's
+ * `invalid_client`: GitHub (`incorrect_client_credentials`, with HTTP 200), Salesforce
+ * (`invalid_client_id`), and Dropbox (`invalid_client: <description>`).
+ */
+const isClientRejection = (error: string) =>
+  error === "invalid_client" ||
+  error === "incorrect_client_credentials" ||
+  error === "invalid_client_id" ||
+  error.startsWith("invalid_client:");
+
+/** The reason an RFC 6749 §5.2 error code gives for a failed token request. */
+const errorReason = (error: string) =>
+  error === "invalid_grant"
+    ? ("invalid_grant" as const)
+    : isClientRejection(error)
+      ? ("invalid_client" as const)
+      : ("request" as const);
+
 /** RFC 6749 §5.2 error codes map to reasons; unknown codes are dropped from the recorded evidence. */
 const errorResponse = (status: number, error: string) =>
   new OAuthProtocolFailed({
     code: oauth.RESPONSE_BODY_ERROR,
     status,
     ...(Schema.is(OAuthProviderErrorCode)(error) ? { providerError: error } : {}),
-    reason:
-      error === "invalid_grant"
-        ? "invalid_grant"
-        : error === "invalid_client"
-          ? "invalid_client"
-          : "request",
+    reason: errorReason(error),
   });
 
 const failure = (error: unknown): OAuthProtocolFailed => {
@@ -171,13 +185,11 @@ const failure = (error: unknown): OAuthProtocolFailed => {
       error instanceof SyntaxError ? { detail: "body_not_json" } : libraryDiagnostics(error),
     ),
     reason:
-      error instanceof oauth.ResponseBodyError && error.error === "invalid_grant"
-        ? "invalid_grant"
-        : error instanceof oauth.ResponseBodyError && error.error === "invalid_client"
-          ? "invalid_client"
-          : error instanceof oauth.OperationProcessingError || error instanceof SyntaxError
-            ? "invalid_response"
-            : "request",
+      error instanceof oauth.ResponseBodyError
+        ? errorReason(error.error)
+        : error instanceof oauth.OperationProcessingError || error instanceof SyntaxError
+          ? "invalid_response"
+          : "request",
   });
 };
 
@@ -510,13 +522,26 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
       ),
     );
 
-  const clientMethod = (server: OAuthTokenServer, configured?: OAuthClientAuth) => {
+  /**
+   * An undeclared method prefers a public client. A secret otherwise uses Basic, which RFC 6749
+   * section 2.3.1 requires servers to support and RFC 8414 makes the default when metadata lists
+   * no methods, unless the server does not advertise it. The server's list does not say how an
+   * individual client entered by hand was registered (RFC 7591 section 2), so that client keeps
+   * Basic. A client Executor registers requests the body form when advertised, which services
+   * accept more consistently than Basic.
+   */
+  const clientMethod = (
+    server: OAuthTokenServer,
+    client: "entered" | "registered",
+    configured?: OAuthClientAuth,
+  ) => {
     const supported = server.token_endpoint_auth_methods_supported;
     const method =
       configured ??
       (supported?.includes("none")
         ? "none"
-        : supported?.includes("client_secret_post") && !supported.includes("client_secret_basic")
+        : supported?.includes("client_secret_post") &&
+            (client === "registered" || !supported.includes("client_secret_basic"))
           ? "client_secret_post"
           : "client_secret_basic");
     const advertised = method === "client_secret_basic_raw" ? "client_secret_basic" : method;
@@ -650,7 +675,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
                   : { revocation_endpoint: method.revocationUrl }),
               }),
               scopes: [...method.scopes],
-              // Undeclared means the client decides: a secret uses RFC 7591's client_secret_basic default.
+              // Undeclared means the client decides: with nothing advertised, a secret uses Basic.
               tokenEndpointAuthMethod: method.tokenEndpointAuthMethod,
               ...(method.resource == null ? {} : { resource: method.resource }),
             };
@@ -699,6 +724,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
               : {
                   tokenEndpointAuthMethod: yield* clientMethod(
                     server,
+                    "entered",
                     method.tokenEndpointAuthMethod,
                   ),
                 }),
@@ -723,7 +749,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
       configured?: OAuthClientAuth,
     ) =>
       Effect.gen(function* () {
-        const method = yield* clientMethod(server, configured);
+        const method = yield* clientMethod(server, "registered", configured);
         const advertised = method === "client_secret_basic_raw" ? "client_secret_basic" : method;
         const registered = yield* request(async (settings) => {
           const response = await oauth.dynamicClientRegistrationRequest(

@@ -12,6 +12,7 @@ import {
 } from "effect/unstable/http";
 
 type TokenAuth = "client_secret_basic" | "client_secret_post" | "none";
+type SecretAuth = Exclude<TokenAuth, "none">;
 
 /** The members a standard token response carries; absent members were not issued. */
 export type IssuedTokens = {
@@ -139,20 +140,22 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let registrations = 0;
   let discoveries = 0;
   let authMethods = ["client_secret_basic"];
+  let lastRegistration: { scope: string; method: string } | undefined;
   /**
-   * How the token endpoint reads HTTP Basic credentials. RFC 6749 section 2.3.1 form-decodes them;
-   * Doorkeeper, which PlanetScale runs, compares the decoded header literally.
+   * How the service reads HTTP Basic client credentials. "form-decoded" follows RFC 6749
+   * section 2.3.1. "literal" compares them as sent, as Google and PlanetScale (Doorkeeper) do.
    */
   let basicCredentials: "form-decoded" | "literal" = "form-decoded";
-  let lastRegistration: { scope: string; method: string } | undefined;
+  /** Credentials issued by the next registrations; unset issues numbered synthetic clients. */
+  let registeredClient: { readonly clientId: string; readonly clientSecret: string } | undefined;
   /** RFC 6749 section 2.3.1 client authentication presented at the token or revocation endpoint. */
   const presentedClient = (authorization: string | undefined, input: URLSearchParams) => {
+    const read = (value: string) =>
+      basicCredentials === "literal" ? value : decodeURIComponent(value.replace(/\+/g, " "));
     const decoded = authorization?.startsWith("Basic ")
       ? Buffer.from(authorization.slice(6), "base64").toString("utf8")
       : "";
     const separator = decoded.indexOf(":");
-    const read = (value: string) =>
-      basicCredentials === "literal" ? value : decodeURIComponent(value.replace(/\+/g, " "));
     const username = separator < 0 ? undefined : read(decoded.slice(0, separator));
     const password = separator < 0 ? undefined : read(decoded.slice(separator + 1));
     const method: TokenAuth =
@@ -543,19 +546,30 @@ export const oauthSetupIssuer = Effect.gen(function* () {
             },
             { status: 400 },
           );
+        const issued = registeredClient ?? {
+          clientId: `synthetic-client-${registrations}`,
+          clientSecret: "synthetic-client-secret",
+        };
+        // The client authenticates with the method it registered, as RFC 7591 section 2 defines.
         if (!malformedRegistration)
-          clients.set(`synthetic-client-${registrations}`, {
+          clients.set(issued.clientId, {
             redirects: input.redirect_uris,
-            secret: issuePublicClients ? null : "synthetic-client-secret",
-            methods: issuePublicClients ? ["none"] : ["client_secret_basic"],
+            secret: issuePublicClients ? null : issued.clientSecret,
+            methods: issuePublicClients
+              ? ["none"]
+              : [
+                  input.token_endpoint_auth_method === "client_secret_post"
+                    ? "client_secret_post"
+                    : "client_secret_basic",
+                ],
           });
         return yield* HttpServerResponse.json(
           {
-            ...(malformedRegistration ? {} : { client_id: `synthetic-client-${registrations}` }),
+            ...(malformedRegistration ? {} : { client_id: issued.clientId }),
             ...(issuePublicClients
               ? { token_endpoint_auth_method: "none" }
               : {
-                  client_secret: "synthetic-client-secret",
+                  client_secret: issued.clientSecret,
                   ...(omitSecretExpiry ? {} : { client_secret_expires_at: expiresAt }),
                   token_endpoint_auth_method: input.token_endpoint_auth_method,
                 }),
@@ -615,8 +629,6 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly pathDiscovery?: typeof pathDiscovery;
       readonly scopes?: readonly string[];
       readonly authMethods?: readonly string[];
-      /** How the token endpoint reads HTTP Basic credentials. */
-      readonly basicCredentials?: typeof basicCredentials;
       readonly callbackIssuer?: string | null;
       readonly browserReturn?: string | null;
       /**
@@ -634,6 +646,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly refreshedExpiresIn?: number | null;
       /** Advertise an RFC 7009 endpoint that records calls, or one that always fails. */
       readonly revocation?: typeof revocation;
+      /** How the token and revocation endpoints read HTTP Basic client credentials. */
+      readonly basicCredentials?: typeof basicCredentials;
+      /** Credentials issued by the next registrations; null restores numbered synthetic clients. */
+      readonly registeredClient?: typeof registeredClient | null;
     }) =>
       Effect.sync(() => {
         if (input.mcpStatus !== undefined)
@@ -666,7 +682,6 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (input.pathDiscovery !== undefined) pathDiscovery = input.pathDiscovery;
         if (input.scopes !== undefined) scopes = [...input.scopes];
         if (input.authMethods !== undefined) authMethods = [...input.authMethods];
-        if (input.basicCredentials !== undefined) basicCredentials = input.basicCredentials;
         if (input.callbackIssuer !== undefined)
           callbackIssuer = input.callbackIssuer === null ? undefined : input.callbackIssuer;
         if (input.browserReturn !== undefined)
@@ -682,15 +697,21 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           refreshedExpiresIn =
             input.refreshedExpiresIn === null ? undefined : input.refreshedExpiresIn;
         if (input.revocation !== undefined) revocation = input.revocation;
+        if (input.basicCredentials !== undefined) basicCredentials = input.basicCredentials;
+        if (input.registeredClient !== undefined)
+          registeredClient = input.registeredClient === null ? undefined : input.registeredClient;
       }),
     /**
-     * Accept a client configured by hand at the service. One with a secret may authenticate with
-     * HTTP Basic or the request body, as Google allows; one without is a public PKCE client.
+     * Accept a client configured by hand at the service; one without a secret is a public PKCE
+     * client. One with a secret authenticates with the listed methods. RFC 6749 section 2.3.1
+     * requires HTTP Basic and makes the request body optional, so Basic alone is the default;
+     * HubSpot, Twitch and Mailchimp read only the body.
      */
     allowClient: (input: {
       readonly clientId: string;
       readonly clientSecret?: string;
       readonly redirect: string;
+      readonly methods?: readonly SecretAuth[];
     }) =>
       Effect.sync(() => {
         clients.set(input.clientId, {
@@ -699,7 +720,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           methods:
             input.clientSecret === undefined
               ? ["none"]
-              : ["client_secret_basic", "client_secret_post"],
+              : [...(input.methods ?? ["client_secret_basic"])],
         });
       }),
     /** Answer every held request; one held before processing stays unprocessed. */

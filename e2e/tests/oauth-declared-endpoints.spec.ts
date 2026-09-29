@@ -386,14 +386,18 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
           scopes: ["read"],
           grant: "authorization_code",
         });
-        const signInWith = (client: {
-          readonly clientId: string;
-          readonly clientSecret?: string;
-        }) =>
+        const signInWith = (
+          client: { readonly clientId: string; readonly clientSecret?: string },
+          methods?: readonly ("client_secret_basic" | "client_secret_post")[],
+        ) =>
           Effect.gen(function* () {
             const attempt = yield* connect(discovered);
             const started = yield* start(attempt.connection, client);
-            yield* issuer.allowClient({ ...client, redirect: started.redirectUri });
+            yield* issuer.allowClient({
+              ...client,
+              redirect: started.redirectUri,
+              ...(methods === undefined ? {} : { methods }),
+            });
             yield* expectCompleted(
               attempt,
               yield* complete(attempt.connection, yield* consent(started.authorizationUrl)),
@@ -405,7 +409,17 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
         expect(yield* signInWith(clients.public)).toBe("none");
         // A secret uses the body form when the server accepts only that one.
         yield* issuer.configure({ authMethods: ["none", "client_secret_post"] });
-        expect(yield* signInWith(clients.confidential)).toBe("client_secret_post");
+        expect(yield* signInWith(clients.confidential, ["client_secret_post"])).toBe(
+          "client_secret_post",
+        );
+        // A server can accept both forms while this client was registered for Basic only
+        // (RFC 8414 section 2, RFC 7591 section 2), so an entered secret keeps Basic.
+        yield* issuer.configure({
+          authMethods: ["none", "client_secret_basic", "client_secret_post"],
+        });
+        expect(yield* signInWith(clients.confidential, ["client_secret_basic"])).toBe(
+          "client_secret_basic",
+        );
       }),
     ),
   );

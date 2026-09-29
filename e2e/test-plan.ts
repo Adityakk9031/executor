@@ -1756,6 +1756,17 @@ export const scenarios = {
       local: na("Hosted callback page and account dialogs."),
     },
   },
+  oauthClientAuthentication: {
+    fixtures: "actors",
+    file: "oauth-client-authentication.spec.ts",
+    title:
+      "OAuth clients authenticate to services that accept only Basic credentials, read them literally, or read only the request body, through sign-in, registration, refresh and revocation",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises shared OAuth through the hosted API."),
+    },
+  },
   oauthDeclaredEndpoints: {
     fixtures: "actors",
     file: "oauth-declared-endpoints.spec.ts",
