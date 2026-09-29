@@ -2013,6 +2013,15 @@ export const scenarios = {
       local: na("Hosted authoring scenario; local skills share the same view."),
     },
   },
+  localServerRenderedDashboard: {
+    file: "local-server-rendered-dashboard.spec.ts",
+    title: "Local dashboard pages render on the server and hydrate to the same markup",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted pages are covered by the server-rendered dashboard scenario."),
+      cloud: na("Hosted pages are covered by the server-rendered dashboard scenario."),
+    },
+  },
   localAppDetailLoading: {
     file: "local-app-detail-loading.spec.ts",
     title: "Local desktop app navigation keeps a stable loading panel through live reads",
