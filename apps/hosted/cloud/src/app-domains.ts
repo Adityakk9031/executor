@@ -6,12 +6,12 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import * as Output from "alchemy/Output";
 import { Credentials, apiTokenCredentials } from "@distilled.cloud/cloudflare/Credentials";
 import { PgClient } from "@effect/sql-pg";
-import { OrganizationSlug } from "@executor-js/hosted-server/organization";
-import { Cause, Clock, Effect, Layer, Redacted, Schema, Semaphore } from "effect";
+import { Cause, Clock, DateTime, Effect, Layer, Redacted, Schema, Semaphore } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { cloudAppUiBase } from "./contracts/app-ui.ts";
 import { AppDomainZoneSettings } from "./contracts/app-domains.ts";
 import { appDomainCertificates } from "./implementation/app-domain-inventory.ts";
+import { writeAppDomainRecords } from "./implementation/app-domain-records.ts";
 import { appDomainHttpClient } from "./implementation/app-domain-http.ts";
 import { appDomainState } from "./implementation/app-domain-state.ts";
 import { reconcileAppDomainStack } from "./implementation/app-domain-stack.ts";
@@ -25,12 +25,6 @@ import {
   cloudTelemetry,
   telemetryBindings,
 } from "./infrastructure/telemetry.ts";
-
-const DomainObservation = Schema.Struct({
-  slug: OrganizationSlug,
-  status: Schema.Literals(["pending", "ready", "failed"]),
-  checkedAt: Schema.Number,
-});
 
 const observeDomainFailure = (phase: string, cause: Cause.Cause<unknown>) =>
   Effect.logError("App domain operation failed", {
@@ -55,7 +49,6 @@ const makeAppDomainCoordinator = Effect.gen(function* () {
   const base = yield* cloudAppUiBase.pipe(Effect.orDie);
   if (base === undefined || new URL(base).protocol !== "https:") {
     return Effect.succeed({
-      status: (_team: typeof Team.Type) => Effect.succeed("ready" as const),
       wake: () => Effect.void,
       heartbeat: () => Effect.void,
       alarm: () => Effect.void,
@@ -83,6 +76,18 @@ const makeAppDomainCoordinator = Effect.gen(function* () {
   const connection = yield* cloudDatabaseConnection;
   // Read during initialization, so deployment binds the preview's deadline and policy here too.
   const lifetime = yield* previewLifetime;
+  /** One short-lived connection per use; the coordinator holds none between passes. */
+  const withDatabase = <A, E, R>(use: Effect.Effect<A, E, R | SqlClient.SqlClient>) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const db = yield* PgClient.layer({
+          url: yield* connection.connectionString,
+          maxConnections: 1,
+          prepare: false,
+        }).pipe(Layer.build);
+        return yield* use.pipe(Effect.provideContext(db));
+      }),
+    ).pipe(Effect.tapCause((cause) => observeDomainFailure("database", cause)));
   return Effect.gen(function* () {
     const state = yield* Cloudflare.DurableObjectState;
     const lock = yield* Semaphore.make(1);
@@ -122,19 +127,13 @@ const makeAppDomainCoordinator = Effect.gen(function* () {
           const zone = yield* configuration;
           if (suffix !== zone.domain && !suffix.endsWith(`.${zone.domain}`))
             return yield* Effect.die(new Error("App domain suffix is outside the managed zone"));
-          const teams = yield* Effect.scoped(
-            Effect.gen(function* () {
-              const db = yield* PgClient.layer({
-                url: yield* connection.connectionString,
-                maxConnections: 1,
-                prepare: false,
-              }).pipe(Layer.build);
-              const sql = yield* SqlClient.SqlClient.pipe(Effect.provideContext(db));
-              return yield* sql`select id, slug from organization`.pipe(
+          const teams = yield* withDatabase(
+            Effect.flatMap(SqlClient.SqlClient, (sql) =>
+              sql`select id, slug from organization`.pipe(
                 Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Team))),
-              );
-            }),
-          ).pipe(Effect.tapCause((cause) => observeDomainFailure("database", cause)));
+              ),
+            ),
+          );
           const valid = teams.filter((team) => `*.${team.slug}.${suffix}`.length <= 64);
           yield* Effect.annotateCurrentSpan("app_domains.teams", teams.length);
           const apiToken = yield* secret;
@@ -153,8 +152,7 @@ const makeAppDomainCoordinator = Effect.gen(function* () {
                 );
           const now = yield* Clock.currentTimeMillis;
           yield* Effect.annotateCurrentSpan("app_domains.certificates", certificates.length);
-          let pending = false;
-          for (const team of teams) {
+          const records = teams.map((team) => {
             const hostname = `*.${team.slug}.${suffix}`;
             const matching = Array.from(certificates).filter((certificate) =>
               certificate.hosts?.includes(hostname),
@@ -179,19 +177,15 @@ const makeAppDomainCoordinator = Effect.gen(function* () {
               : failed
                 ? ("failed" as const)
                 : ("pending" as const);
-            pending ||= status === "pending";
-            yield* state.storage.put(`team:${team.id}`, {
-              slug: team.slug,
-              status,
-              checkedAt: now,
-            });
-          }
+            return { organization: team.id, slug: team.slug, status };
+          });
+          yield* withDatabase(writeAppDomainRecords(records, DateTime.makeUnsafe(now)));
+          // Observations moved to the database; remove the copies this object used to keep.
+          // Remove this cleanup in a later release, once every stage has completed a pass.
           yield* state.storage.delete("reconcileError");
-          const ids = new Set(teams.map((team) => `team:${team.id}`));
-          for (const key of (yield* state.storage.list({ prefix: "team:" })).keys()) {
-            if (!ids.has(key)) yield* state.storage.delete(key);
-          }
-          return pending ? 15_000 : 300_000;
+          const legacy = Array.from((yield* state.storage.list({ prefix: "team:" })).keys());
+          if (legacy.length > 0) yield* state.storage.delete(legacy);
+          return records.some((record) => record.status === "pending") ? 15_000 : 300_000;
         }),
       ).pipe(
         // A provider can wait five minutes after HTTP 429. Release the lock so
@@ -199,37 +193,11 @@ const makeAppDomainCoordinator = Effect.gen(function* () {
         Effect.timeout("60 seconds"),
         Effect.withSpan("app_domains.reconcile"),
         Effect.catchCause((cause) =>
-          Effect.gen(function* () {
-            yield* observeDomainFailure("reconcile", cause);
-            yield* state.storage.put("reconcileError", true);
-            return 30_000;
-          }),
+          observeDomainFailure("reconcile", cause).pipe(Effect.as(30_000)),
         ),
       ),
     );
     return {
-      status: (input: typeof Team.Type) =>
-        Effect.gen(function* () {
-          const team = yield* Schema.decodeUnknownEffect(Team)(input);
-          if (yield* state.storage.get<boolean>("stopped")) return "failed" as const;
-          if (`*.${team.slug}.${suffix}`.length > 64) return "too_long" as const;
-          const saved = yield* state.storage.get(`team:${team.id}`);
-          const observation =
-            saved === undefined
-              ? undefined
-              : yield* Schema.decodeUnknownEffect(DomainObservation)(saved);
-          if (observation === undefined || observation.slug !== team.slug) {
-            // Coalesce concurrent first visits before reading and applying the desired set.
-            yield* arm(1_000);
-            if (yield* state.storage.get<boolean>("reconcileError")) return "failed" as const;
-            return "pending" as const;
-          }
-          // An old observation is refreshed in the background. Issued certificates do not lapse
-          // because a reconciliation was late, so a ready team keeps its link meanwhile.
-          if (observation.checkedAt + 300_000 < (yield* Clock.currentTimeMillis)) yield* arm(1_000);
-          else if (observation.status !== "ready") yield* arm(15_000);
-          return observation.status;
-        }),
       wake: () => arm(1_000),
       heartbeat: () => arm(300_000),
       drain: () =>

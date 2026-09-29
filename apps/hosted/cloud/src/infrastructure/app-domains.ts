@@ -4,11 +4,13 @@ import { RuntimeContext } from "alchemy";
 import { AppUiAddressInvalid } from "@executor-js/hosted-server/app-ui/contracts";
 import { OrganizationId, OrganizationSlug } from "@executor-js/hosted-server/organization";
 import { UiFailed } from "apps/ui/contracts";
-import { Effect, Redacted, Schema } from "effect";
+import { Clock, Effect, Redacted, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { timingSafeEqual } from "node:crypto";
 import { AppDomainController } from "./app-domain-controller-worker.ts";
 import { appDomainControlSecret } from "./app-domain-control.ts";
+import { cloudAppUiBase } from "../contracts/app-ui.ts";
+import { readAppDomainRecord } from "../implementation/app-domain-records.ts";
 
 export const Team = Schema.Struct({ id: OrganizationId, slug: OrganizationSlug });
 
@@ -19,14 +21,6 @@ export class AppDomainDrainFailed extends Schema.TaggedError<AppDomainDrainFaile
 ) {}
 
 interface Coordinator {
-  /** The team's domain readiness; an unknown or renamed team wakes reconciliation. */
-  readonly status: (
-    team: typeof Team.Type,
-  ) => Effect.Effect<
-    "pending" | "ready" | "failed" | "too_long",
-    Schema.SchemaError,
-    RuntimeContext
-  >;
   /** Reconcile soon: a team was created or renamed, or a visitor found no record. */
   readonly wake: () => Effect.Effect<void, never, RuntimeContext>;
   /** Restore a missing schedule without starting an extra pass. */
@@ -46,6 +40,9 @@ export class AppDomainCoordinator extends Cloudflare.DurableObject<
   Coordinator
 >()("AppDomainCoordinator", { transferredFrom: "Api" }) {}
 
+/** Three missed five-minute passes; a scheduled pass alone keeps a record newer than this. */
+const staleAfter = 15 * 60_000;
+
 /**
  * Team creation and renames wake provisioning through the durable provisioning outbox, and visitors
  * wake it on a missing record. The coordinator's own alarm runs a full pass every five minutes,
@@ -53,6 +50,10 @@ export class AppDomainCoordinator extends Cloudflare.DurableObject<
  */
 export const cloudAppDomains = Effect.gen(function* () {
   const coordinator = yield* AppDomainCoordinator.from(AppDomainController);
+  const base = yield* cloudAppUiBase.pipe(Effect.orDie);
+  // Local development serves apps over HTTP and provisions no domains.
+  const suffix =
+    base === undefined || new URL(base).protocol !== "https:" ? undefined : new URL(base).hostname;
   const controlSecret = yield* (yield* appDomainControlSecret).text;
   const heartbeat = Effect.suspend(() => coordinator.getByName("domains").heartbeat()).pipe(
     Effect.provide(RuntimeContext.phantom),
@@ -61,18 +62,31 @@ export const cloudAppDomains = Effect.gen(function* () {
   yield* Cloudflare.Workers.cron("*/5 * * * *", () =>
     heartbeat.pipe(Effect.catchCause(() => Effect.logError("App domain heartbeat failed"))),
   );
+  const wake = Effect.suspend(() => coordinator.getByName("domains").wake()).pipe(
+    Effect.provide(RuntimeContext.phantom),
+    Effect.withSpan("app_domains.wake.rpc"),
+    Effect.catchCause(() => Effect.fail(new UiFailed({ reason: "unavailable" }))),
+  );
+  /**
+   * Reads the team's last observation from the database, beside the request's other queries.
+   * Only a team without a current record calls the coordinator, which may start a fresh isolate.
+   */
   const status = (team: typeof Team.Type) =>
-    Effect.suspend(() => coordinator.getByName("domains").status(team)).pipe(
-      Effect.provide(RuntimeContext.phantom),
-      Effect.withSpan("app_domains.status.rpc"),
-      Effect.mapError(() => new UiFailed({ reason: "unavailable" })),
-      // Expected domain outcomes must survive the Durable Object's RPC serialization.
-      Effect.flatMap((status) =>
-        status === "too_long"
-          ? Effect.fail(new AppUiAddressInvalid({ reason: "too_long" }))
-          : Effect.succeed(status),
-      ),
-    );
+    Effect.gen(function* () {
+      if (suffix === undefined) return "ready" as const;
+      if (`*.${team.slug}.${suffix}`.length > 64)
+        return yield* new AppUiAddressInvalid({ reason: "too_long" });
+      const record = yield* readAppDomainRecord(team.id);
+      if (record === undefined || record.slug !== team.slug) {
+        // Coalesce concurrent first visits into one pass before it reads the desired set.
+        yield* wake;
+        return "pending" as const;
+      }
+      // Issued certificates do not lapse because a pass was late, so a ready team keeps its link
+      // while the lost schedule is restored.
+      if (record.checked_at.getTime() + staleAfter < (yield* Clock.currentTimeMillis)) yield* wake;
+      return record.status;
+    }).pipe(Effect.withSpan("app_domains.status"));
   const control = (operation: "resume" | "drain") =>
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;

@@ -37,6 +37,8 @@ import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql";
 import { cloudBuildAsset } from "../implementation/build-storage.ts";
 import { cachedBuildAssets } from "../implementation/asset-cache.ts";
+import { AppDomainDatabase } from "../implementation/app-domain-records.ts";
+import { UiFailed } from "apps/ui/contracts";
 import { cachedDeploymentSources } from "../implementation/deployment-source-cache.ts";
 import { withExecutorAnalytics } from "../implementation/product-analytics.ts";
 import { cloudAppSources } from "./source.ts";
@@ -235,6 +237,14 @@ export const cloudExecutor = Effect.fn(function* (
       executor.pipe(
         Effect.flatMap((resources) => resources.scheduleAuthority(target)),
         Effect.provide(RuntimeContext.phantom),
+      ),
+    ),
+    Layer.succeed(
+      AppDomainDatabase,
+      database.pipe(
+        Effect.map((services) => Context.get(services, SqlClient.SqlClient)),
+        Effect.provide(RuntimeContext.phantom),
+        Effect.mapError(() => new UiFailed({ reason: "unavailable" })),
       ),
     ),
     Layer.succeed(OrganizationIcons, makeOrganizationIcons(blobs)),
