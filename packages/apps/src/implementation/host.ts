@@ -321,9 +321,18 @@ function dispatch(
       const files = yield* Schema.decodeUnknownEffect(Schema.Array(SkillFile))(
         context.files ?? [],
       ).pipe(Effect.mapError(() => new HostDeclarationInvalid()));
+      // Counts cache commands, so a skill read can tell whether its loader used the app cache.
+      let cacheCommands = 0;
+      const hostCache = context.cache ?? unavailableCache;
       const bound = {
         cache: authorCache(
-          context.cache ?? unavailableCache,
+          {
+            ...hostCache,
+            transport: (command) => {
+              cacheCommands += 1;
+              return hostCache.transport(command);
+            },
+          },
           Redacted.value(context.accounts),
           invocationSignal,
           deadline,
@@ -349,16 +358,20 @@ function dispatch(
         // Dynamic skills fail like evaluation and join the static catalog. Other operations never
         // call them. A repeated name fails the catalog check below.
         const source = definition.dynamicSkills;
+        const before = cacheCommands;
         const dynamic =
           source === undefined
             ? []
             : yield* evaluationSafe(Effect.suspend(source.list)).pipe(
                 Effect.withSpan("app.skills.load"),
               );
+        const cached = source !== undefined && cacheCommands > before;
         const skills = yield* Schema.decodeUnknownEffect(AppSkills)([...declared, ...dynamic]).pipe(
           Effect.mapError(() => new HostDeclarationInvalid()),
         );
-        return request.sources === true ? { skills, dynamic: source !== undefined } : skills;
+        return request.sources === true
+          ? { skills, dynamic: source !== undefined, cached }
+          : skills;
       }
       if (request.operation === "workflows") {
         return yield* Effect.forEach(Object.entries(definition.workflows ?? {}), ([name, entry]) =>

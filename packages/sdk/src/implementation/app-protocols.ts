@@ -28,9 +28,9 @@ export interface AppProtocol {
   readonly response: (command: HostRequest, body: unknown) => Effect.Effect<unknown>;
 }
 
-/** Protocol 1 is the host's current protocol, so its messages need no conversion. */
-const protocol1: AppProtocol = {
-  version: 1,
+/** Protocol 2 is the host's current protocol, so its messages need no conversion. */
+const protocol2: AppProtocol = {
+  version: 2,
   workerEntry: appBridge,
   nodeEntry: nodeAppEntry,
   invocation: (input) => JSON.stringify(input),
@@ -38,7 +38,17 @@ const protocol1: AppProtocol = {
   response: (_command, body) => Effect.succeed(body),
 };
 
-const protocols: ReadonlyMap<number, AppProtocol> = new Map([[protocol1.version, protocol1]]);
+/**
+ * Protocol 1 differs only in its skill catalog reply, which never says whether a loader read
+ * through the app cache. That reply is already a valid protocol 2 reply whose loader did not, so
+ * its messages need no conversion either.
+ */
+const protocol1: AppProtocol = { ...protocol2, version: 1 };
+
+const protocols: ReadonlyMap<number, AppProtocol> = new Map([
+  [protocol1.version, protocol1],
+  [protocol2.version, protocol2],
+]);
 
 /** Protocols this host builds and runs. */
 export const supportedProtocols: readonly number[] = [...protocols.keys()];

@@ -3,4 +3,4 @@
  * snapshot. Released protocols are frozen: see `protocols/1.ts` and notes/apps-publishing.md.
  * This file has no imports so the package build script can read it directly.
  */
-export const frameworkProtocol = 1;
+export const frameworkProtocol = 2;

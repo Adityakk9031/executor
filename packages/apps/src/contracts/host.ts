@@ -43,6 +43,7 @@ export { OAuthClientAuth, OAuthSecretClientAuth } from "./provider.ts";
  */
 export { frameworkProtocol } from "./protocol-version.ts";
 export { protocol1 } from "./protocols/1.ts";
+export { protocol2 } from "./protocols/2.ts";
 import {
   HostAccountsInvalid,
   HostDeclarationInvalid,
@@ -61,7 +62,7 @@ import {
   ResolvedAccounts,
   type SkillCatalogResponse,
   type TrustedToolApproval,
-} from "./protocols/1.ts";
+} from "./protocols/2.ts";
 export {
   DeclaredAuthMethod,
   DeclaredProvider,
@@ -92,7 +93,7 @@ export {
   HostError,
   HostResponse,
   HostInvocation,
-} from "./protocols/1.ts";
+} from "./protocols/2.ts";
 /** Raw host inputs; the host boundary parses and redacts these immediately. */
 export type ResolvedAccountsInput = typeof ResolvedAccounts.Encoded;
 
@@ -122,6 +123,7 @@ export const skillsCommand = (sources: boolean) =>
 export interface SkillCatalog {
   readonly skills: SkillSources["skills"];
   readonly dynamic?: boolean;
+  readonly cached?: boolean;
 }
 export const skillCatalog = (response: typeof SkillCatalogResponse.Type): SkillCatalog =>
   Schema.is(SkillSources)(response) ? response : { skills: response };

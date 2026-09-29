@@ -50,7 +50,7 @@ export const appPackageFixture = Effect.gen(function* () {
   const base = `http://127.0.0.1:${address.port}`;
   for (const [name, protocol] of [
     ["older", 1],
-    ["unsupported", 2],
+    ["unsupported", 3],
   ] as const) {
     const copy = path.join(directory, name);
     yield* fs.copy(root, copy);
