@@ -70,7 +70,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
             page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
           );
           yield* browser.use("The Accounts tab shows this user's managed account", (page) =>
-            page.getByRole("link", { name: account.label, exact: true }).waitFor(),
+            page.getByRole("radio", { name: account.label, exact: true, checked: true }).waitFor(),
           );
           yield* browser.use("Return to the app list", (page) =>
             page.getByRole("link", { name: "Back to apps", exact: true }).click(),
@@ -131,8 +131,8 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
               );
               yield* browser.use("Wait for the confirmed removal", (page) =>
                 page
-                  .getByRole("link", { name: account.label, exact: true })
-                  .waitFor({ state: "hidden" }),
+                  .getByRole("radio", { name: account.label, exact: true, checked: false })
+                  .waitFor(),
               );
               yield* browser.use("Return to the list after changing the profile", (page) =>
                 page.getByRole("link", { name: "Back to apps", exact: true }).click(),

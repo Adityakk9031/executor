@@ -143,9 +143,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
               page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
             );
             yield* browser.use("Add a personal account", (page) =>
-              page
-                .getByRole("button", { name: "Add Sharing fixture account", exact: true })
-                .click(),
+              page.getByRole("button", { name: "Connect new account", exact: true }).click(),
             );
           } else {
             const profile = yield* createProfile(actors.owner, `${prefix}/apps/${app.id}`);
@@ -174,7 +172,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
             page.getByRole("dialog").waitFor({ state: "hidden" }),
           );
           yield* browser.use("See the connected account", (page) =>
-            page.getByRole("link", { name: label, exact: true }).waitFor(),
+            page.getByRole("checkbox", { name: label, exact: true, checked: true }).waitFor(),
           );
           const profile = yield* Schema.decodeUnknownEffect(Schema.String)(
             yield* browser.use("Read the selected profile", (page) =>

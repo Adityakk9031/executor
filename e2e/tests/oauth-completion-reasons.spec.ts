@@ -210,7 +210,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* browser.use("Connect with a client the service accepts", (page) => {
           const dialog = page.getByRole("dialog");
           return page
-            .getByRole("button", { name: "Add Declared issuer account", exact: true })
+            .getByRole("button", { name: "Connect new account", exact: true })
             .click()
             .then(() => dialog.getByLabel("Account name", { exact: true }).fill("Issuer account"))
             .then(() => dialog.getByLabel("Client ID", { exact: true }).fill(client.clientId))
@@ -277,9 +277,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           Effect.gen(function* () {
             yield* openAccounts(registeredApp);
             yield* browser.use("Add an account", (page) =>
-              page
-                .getByRole("button", { name: `Add ${registeredApp.name} account`, exact: true })
-                .click(),
+              page.getByRole("button", { name: "Connect new account", exact: true }).click(),
             );
             yield* connectInDialog(registeredApp, label);
           });

@@ -4,12 +4,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult, type Atom } from "effect/unstable/reactivity";
 import { Exit, type Cause } from "effect";
 import { HugeiconsIcon } from "@hugeicons/react";
-import {
-  Add01Icon,
-  ArrowDataTransferHorizontalIcon,
-  Cancel01Icon,
-  UserCircleIcon,
-} from "@hugeicons/core-free-icons";
+import { Cancel01Icon, UserCircleIcon } from "@hugeicons/core-free-icons";
 import type {
   App,
   AccountId,
@@ -26,7 +21,7 @@ import {
 } from "../../contracts/dashboard.ts";
 import { ProviderIcon } from "./common.tsx";
 import { EmptyState } from "./empty-state.tsx";
-import { Button, type ButtonProps } from "../components/button.tsx";
+import { Button } from "../components/button.tsx";
 import { Checkbox } from "../components/checkbox.tsx";
 
 /** Explain a provider's account limit and offer a separate profile when the host permits it. */
@@ -58,34 +53,6 @@ export function ProviderAccountSupport({
         </span>
       )}
     </>
-  );
-}
-
-/** Add an account or replace the binding for a provider that uses one account. */
-export function AccountSelectionTrigger({
-  requirement,
-  selection,
-  ...props
-}: ButtonProps & {
-  readonly requirement: AccountRequirement;
-  readonly selection: SelectedAccounts[string] | undefined;
-}) {
-  const switching = requirement.cardinality === "one" && typeof selection === "string";
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      className="h-10 w-full justify-start rounded-none px-3.5 text-[13px] text-muted-foreground hover:text-foreground"
-      aria-label={`${switching ? "Switch" : "Add"} ${requirement.definition.name} account`}
-      {...props}
-    >
-      <HugeiconsIcon
-        icon={switching ? ArrowDataTransferHorizontalIcon : Add01Icon}
-        size={14}
-        aria-hidden
-      />
-      {switching ? "Switch account" : "Add account"}
-    </Button>
   );
 }
 

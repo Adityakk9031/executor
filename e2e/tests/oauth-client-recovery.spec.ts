@@ -126,7 +126,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
         );
         yield* browser.use("Choose an account for the app", (page) =>
-          page.getByRole("button", { name: "Add Recoverable OAuth account", exact: true }).click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* issuer.configure({ tokenFails: true });
         yield* browser.use("Enter a valid client while the service is unavailable", (page) =>
@@ -212,7 +212,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             )
             .then(() =>
               page
-                .getByRole("link", { name: "Recovery account", exact: true })
+                .getByRole("radio", { name: "Recovery account", exact: true, checked: true })
                 .waitFor({ state: "visible" }),
             ),
         );

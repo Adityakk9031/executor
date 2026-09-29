@@ -90,7 +90,10 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page
             .goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`)
             .then(() =>
-              page.getByRole("button", { name: "Add Sample service account", exact: true }).click(),
+              page
+                .getByRole("region", { name: "Sample service", exact: true })
+                .getByRole("button", { name: "Connect new account", exact: true })
+                .click(),
             )
             .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports")),
         );

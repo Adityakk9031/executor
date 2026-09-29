@@ -148,9 +148,9 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* loading.requested;
         yield* capture("App-loading");
         yield* loading.release;
-        yield* ready("Add Sample service account");
+        yield* ready("Connect new account");
         yield* capture("Account-entry");
-        yield* click("Add Sample service account");
+        yield* click("Connect new account");
         expect(
           yield* browser.use("The first dialog includes the account name", (page) =>
             page.getByRole("dialog").getByLabel("Account name", { exact: true }).count(),
@@ -345,10 +345,10 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* ready("Allow access");
         yield* click("Allow access");
         yield* browser.use("Wait for the saved account", (page) =>
-          page.getByRole("link", { name: "Work reports", exact: true }).waitFor(),
+          page.getByRole("radio", { name: "Work reports", exact: true, checked: true }).waitFor(),
         );
         yield* capture("Account-connected");
-        yield* click("Switch Sample service account");
+        yield* click("Connect new account");
         yield* ready("Connect Sample service");
         expect(
           yield* browser.use("Replacement starts with the account name", (page) =>
@@ -366,12 +366,14 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* click("Change OAuth client");
         yield* capture("Manual-client-dialog");
         yield* click("Close");
-        const accountHref = yield* browser.use("Read the saved account link", (page) =>
-          page.getByRole("link", { name: "Work reports", exact: true }).getAttribute("href"),
-        );
-        const accountId = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(
-          accountHref?.split("/").at(-1),
-        );
+        const accountId = (yield* body(
+          Schema.Struct({
+            accounts: Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String })),
+          }),
+          yield* api.request(actors.owner, "GET", `${prefix}/inventory`),
+        )).accounts.find((account) => account.label === "Work reports")?.id;
+        if (accountId === undefined) return yield* Effect.die("The saved account is missing");
+        const accountHref = `/org/${actors.organization.slug}/accounts/${accountId}`;
         yield* Effect.addFinalizer(() =>
           api.request(actors.owner, "DELETE", `${prefix}/accounts/${accountId}`).pipe(Effect.orDie),
         );
@@ -504,7 +506,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* browser.use("Open a provider without automatic registration", (page) =>
           page.goto(`/org/${actors.organization.slug}/apps/${manual.id}?view=accounts`),
         );
-        yield* click("Add Manual service account");
+        yield* click("Connect new account");
         yield* browser.use("Wait for mandatory manual setup", (page) =>
           page.getByLabel("Client secret", { exact: true }).waitFor(),
         );

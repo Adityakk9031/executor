@@ -87,7 +87,7 @@ layer(HostedLive, { excludeTestServices: true })("Deferred MCP setup", (it) => {
         yield* initialSetup.release;
         yield* browser.use("Open account setup on the saved app", (page) =>
           page
-            .getByRole("button", { name: `Add ${name} account`, exact: true })
+            .getByRole("button", { name: "Connect new account", exact: true })
             .click()
             .then(() =>
               page

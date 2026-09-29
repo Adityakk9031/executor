@@ -273,7 +273,10 @@ layer(HostedLive, { excludeTestServices: true })("Grouped accounts", (it) => {
         yield* Effect.gen(function* () {
           yield* browser.use("Disabled profile remains configurable", (page) =>
             page
-              .getByRole("button", { name: "Switch Grouped fixture account", exact: true })
+              .getByRole("radiogroup", { name: "Grouped fixture accounts", exact: true })
+              .getByRole("radio", { checked: false })
+              .and(page.locator(":enabled"))
+              .first()
               .waitFor(),
           );
           yield* browser.use("Disabled profile remains configurable", (page) =>

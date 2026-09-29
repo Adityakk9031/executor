@@ -546,16 +546,6 @@ export const scenarios = {
       local: na("Hosted authoring and membership scenario."),
     },
   },
-  emptyAccountSearch: {
-    fixtures: "actors",
-    file: "empty-state-recovery.spec.ts",
-    title: "Empty account searches can be cleared without losing selections",
-    targets: {
-      "self-host": scheduled,
-      cloud: scheduled,
-      local: na("Shared picker exercised through hosted connections."),
-    },
-  },
   emptyAccountTools: {
     fixtures: "actors",
     file: "empty-state-recovery.spec.ts",

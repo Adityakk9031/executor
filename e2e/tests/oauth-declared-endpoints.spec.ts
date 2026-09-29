@@ -299,7 +299,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
           page.goto(`/org/${actors.organization.slug}/apps/${formApp.id}?view=accounts`),
         );
         yield* browser.use("Open the account form", (page) =>
-          page.getByRole("button", { name: "Add Open client auth account", exact: true }).click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* browser.use("The client secret is offered as optional", (page) => {
           const dialog = page.getByRole("dialog");
@@ -337,7 +337,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
             )
             .then(() =>
               page
-                .getByRole("link", { name: "Public form account", exact: true })
+                .getByRole("radio", { name: "Public form account", exact: true, checked: true })
                 .waitFor({ state: "visible" }),
             );
         });

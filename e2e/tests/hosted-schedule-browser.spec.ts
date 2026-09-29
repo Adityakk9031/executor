@@ -356,7 +356,7 @@ export default defineApp({ accounts: { service } }, async () => ({  }));`,
           page.getByRole("button", { name: "Go to Accounts", exact: true }).click(),
         );
         yield* browser.use("The account selection action is available", (page) =>
-          page.getByRole("button", { name: "Add Schedule fixture account", exact: true }).waitFor(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).waitFor(),
         );
       }),
     ),

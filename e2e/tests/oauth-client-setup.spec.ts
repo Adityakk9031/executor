@@ -112,7 +112,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         );
         yield* check.requested;
         yield* browser.use("Open the name form before setup resolves", (page) =>
-          page.getByRole("button", { name: "Add Setup fixture account", exact: true }).click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* browser.use("A draft remains editable during the setup check", (page) =>
           page.getByRole("textbox", { name: "Account name", exact: true }).fill("Preserved name"),
@@ -174,7 +174,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.getByRole("button", { name: "Close", exact: true }).click(),
         );
         yield* browser.use("Reopen with the cached setup result", (page) =>
-          page.getByRole("button", { name: "Add Setup fixture account", exact: true }).click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* browser.use("The reopened form is ready", (page) =>
           page

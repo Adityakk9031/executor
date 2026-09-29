@@ -45,9 +45,7 @@ export default defineApp({accounts: {service}}, async () => ({queries: {}}));`,
           page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
         );
         yield* browser.use("Choose an account for the app", (page) =>
-          page
-            .getByRole("button", { name: "Add Permissions fixture account", exact: true })
-            .click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* browser.use("Wait for advanced connection options", (page) =>
           page.getByText("Advanced", { exact: true }).waitFor({ state: "visible" }),

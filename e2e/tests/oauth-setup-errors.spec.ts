@@ -107,7 +107,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           );
           yield* browser.use("Add an account", (page) =>
             page
-              .getByRole("button", { name: "Add Sample service account", exact: true })
+              .getByRole("button", { name: "Connect new account", exact: true })
               .click()
               .then(() => page.getByRole("alert").getByText(title, { exact: true }).waitFor())
               .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports")),
@@ -253,7 +253,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           );
           yield* browser.use("Add an account", (page) =>
             page
-              .getByRole("button", { name: "Add Sample service account", exact: true })
+              .getByRole("button", { name: "Connect new account", exact: true })
               .click()
               .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports"))
               .then(() =>

@@ -68,7 +68,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
           }),
         );
         yield* browser.use("Connect directly from the app account card", (page) =>
-          page.getByRole("button", { name: "Add Connection fixture account", exact: true }).click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* browser.use("Credentials open inside the app", (page) =>
           page.getByRole("dialog").waitFor({ state: "visible" }),
@@ -171,8 +171,13 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
         );
         yield* read.release;
         yield* browser.use("The new account appears on the same app", (page) =>
-          page.getByRole("link", { name, exact: true }).waitFor({ state: "visible" }),
+          page.getByRole("radio", { name, exact: true }).waitFor({ state: "visible" }),
         );
+        expect(
+          yield* browser.use("The new account is the selected one", (page) =>
+            page.getByRole("radio", { name, exact: true }).isChecked(),
+          ),
+        ).toBe(true);
         expect(
           yield* browser.use("The accounts tab stays selected", (page) =>
             page.evaluate(() => new URL(location.href).searchParams.get("view")),
@@ -187,10 +192,8 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
           ),
         ).toBe(0);
         yield* browser.checkpoint("Account connected in place");
-        yield* browser.use("Manage the connected account", (page) =>
-          page
-            .getByRole("button", { name: "Switch Connection fixture account", exact: true })
-            .click(),
+        yield* browser.use("Connect another account from the list", (page) =>
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* browser.use("Another connection opens in the shared dialog", (page) =>
           page

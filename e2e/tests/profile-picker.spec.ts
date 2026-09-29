@@ -202,16 +202,12 @@ layer(HostedLive, { excludeTestServices: true })("Profile picker", (it) => {
             expect(added?.accounts).toEqual({ extra: [] });
             expect(added?.name).toBe(label);
           }
-          yield* browser.use("Choose the profile's Inbox account", (page) =>
+          yield* browser.use("Connect a new account for the profile's Inbox", (page) =>
             page
               .getByRole("region", { name: "Inbox (service)", exact: true })
-              .getByRole("button", { name: "Add Inbox account", exact: true })
+              .getByRole("button", { name: "Connect new account", exact: true })
               .click(),
           );
-          if (label !== "Personal inbox")
-            yield* browser.use("Connect a new account instead of a saved one", (page) =>
-              page.getByRole("button", { name: "Connect new account", exact: true }).click(),
-            );
           yield* browser.use("Name this saved account", (page) =>
             page.getByRole("textbox", { name: "Account name", exact: true }).fill(label),
           );
@@ -344,19 +340,21 @@ layer(HostedLive, { excludeTestServices: true })("Profile picker", (it) => {
             .getByRole("link", { name: "Accounts", exact: true })
             .click(),
         );
-        yield* browser.use("The array selection uses account cards", (page) =>
-          page
-            .getByRole("region", { name: "Inbox (extra)", exact: true })
-            .getByRole("button", { name: "Add Inbox account", exact: true })
-            .click(),
+        const extra = yield* browser.use("The array selection lists saved accounts", (page) =>
+          Promise.resolve(page.getByRole("region", { name: "Inbox (extra)", exact: true })),
         );
         yield* browser.checkpoint("Personal accounts can be selected together");
-        yield* browser.use("Add Work inbox to the array requirement", (page) =>
-          page
-            .getByRole("dialog")
-            .getByRole("checkbox", { name: /Work inbox/ })
-            .check(),
+        const added = yield* browser.use("Add Work inbox to the array requirement", (page) =>
+          Promise.all([
+            page.waitForResponse(
+              (response) =>
+                response.request().method() === "PATCH" &&
+                new URL(response.url()).pathname.endsWith(`/profiles/${first.id}`),
+            ),
+            extra.getByRole("checkbox", { name: "Work inbox", exact: true }).click(),
+          ]).then(([response]) => response.status()),
         );
+        expect(added).toBe(200);
         // Periodic reconciliation can already be reading profiles when the tab regains focus.
         // The focus refresh supersedes that read, so every profiles read in the cycle fails.
         yield* Effect.scoped(
@@ -372,11 +370,8 @@ layer(HostedLive, { excludeTestServices: true })("Profile picker", (it) => {
             yield* read.requested;
             yield* refreshVisiblePage;
             expect(
-              yield* browser.use("The array draft remains while metadata loads", (page) =>
-                page
-                  .getByRole("dialog")
-                  .getByRole("checkbox", { name: /Work inbox/ })
-                  .isChecked(),
+              yield* browser.use("The saved choice remains while metadata loads", () =>
+                extra.getByRole("checkbox", { name: "Work inbox", exact: true }).isChecked(),
               ),
             ).toBe(true);
             yield* read.release;
@@ -386,16 +381,10 @@ layer(HostedLive, { excludeTestServices: true })("Profile picker", (it) => {
           }),
         );
         expect(
-          yield* browser.use("The array draft survives a failed refresh", (page) =>
-            page
-              .getByRole("dialog")
-              .getByRole("checkbox", { name: /Work inbox/ })
-              .isChecked(),
+          yield* browser.use("The saved choice survives a failed refresh", () =>
+            extra.getByRole("checkbox", { name: "Work inbox", exact: true }).isChecked(),
           ),
         ).toBe(true);
-        yield* browser.use("Save the scalar and array selection", (page) =>
-          page.getByRole("button", { name: "Use selected accounts", exact: true }).click(),
-        );
         yield* browser.use("Open the selected tools", (page) =>
           page.getByRole("link", { name: "Tools", exact: true }).click(),
         );
