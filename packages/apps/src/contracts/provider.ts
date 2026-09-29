@@ -26,7 +26,7 @@ export const OAuthSecretClientAuth = Schema.Literals([
 ]);
 
 /** Parameters the host sets on every authorization request; a declaration cannot replace them. */
-const reservedAuthorizationParams = new Set([
+export const reservedAuthorizationParams = [
   "response_type",
   "client_id",
   "redirect_uri",
@@ -38,23 +38,55 @@ const reservedAuthorizationParams = new Set([
   "resource",
   "request",
   "request_uri",
-]);
+] as const;
+/** A protocol parameter only the host sets on the authorization request. */
+export type ReservedAuthorizationParam = (typeof reservedAuthorizationParams)[number];
+const reserved: ReadonlySet<string> = new Set(reservedAuthorizationParams);
+
 /**
  * Extra authorization request parameters, such as `access_type: "offline"`. RFC 6749 §3.1
  * lets services define their own; the protocol and security parameters stay host-owned.
  */
 export const OAuthAuthorizationParams = Schema.Record(Schema.String, Schema.String).check(
-  Schema.makeFilter(
-    (params) => Object.keys(params).every((key) => !reservedAuthorizationParams.has(key)),
-    {
-      message:
-        "Authorization parameters cannot replace protocol parameters such as state or scope.",
-    },
-  ),
+  Schema.makeFilter((params) => Object.keys(params).every((key) => !reserved.has(key)), {
+    message: "Authorization parameters cannot replace protocol parameters such as state or scope.",
+  }),
+);
+
+/**
+ * A declared `authorizationUrl` may carry its own query (RFC 6749 §3.1 keeps it). Each parameter
+ * is declared once, in the URL or in `authorizationParams`, and never names a host-owned one.
+ */
+const declaredAuthorizationQuery = Schema.makeFilter(
+  (config: {
+    readonly authorizationUrl: string;
+    readonly authorizationParams?: Readonly<Record<string, string>>;
+  }) => {
+    const keys = [...new URL(config.authorizationUrl).searchParams.keys()];
+    const owned = keys.filter((key) => reserved.has(key));
+    if (owned.length > 0)
+      return {
+        path: ["authorizationUrl"],
+        issue: `authorizationUrl cannot set protocol parameters: ${owned.join(", ")}.`,
+      };
+    const repeated = keys.filter((key) => Object.hasOwn(config.authorizationParams ?? {}, key));
+    if (repeated.length > 0)
+      return {
+        path: ["authorizationParams"],
+        issue: `Declare each parameter once; authorizationUrl already sets: ${repeated.join(", ")}.`,
+      };
+    return undefined;
+  },
 );
 
 const oauthOptions = {
   grant: Schema.optionalKey(Schema.Literal("authorization_code")),
+  /**
+   * Service-defined authorization request parameters, such as Google's
+   * `{ access_type: "offline", prompt: "consent" }`. Host-owned protocol parameters
+   * (`state`, `scope`, `redirect_uri`, PKCE and the others in `reservedAuthorizationParams`)
+   * are rejected. A discovered endpoint's own query parameter of the same name is replaced.
+   */
   authorizationParams: Schema.optionalKey(OAuthAuthorizationParams),
   tokenEndpointAuthMethod: Schema.optionalKey(OAuthClientAuth),
   /** Omitted uses discovery; null explicitly suppresses the resource parameter. */
@@ -77,6 +109,7 @@ export const OAuth2Config = Schema.Union([
   }),
   Schema.Struct({
     ...oauthOptions,
+    /** Its query is kept; it cannot set protocol parameters or repeat `authorizationParams`. */
     authorizationUrl: HttpUrl,
     tokenUrl: HttpUrl,
     revocationUrl: Schema.optionalKey(HttpUrl),
@@ -84,7 +117,7 @@ export const OAuth2Config = Schema.Union([
     /** RFC 8414 issuer identifier. Declared issuers are checked against the callback's `iss`. */
     issuer: Schema.optionalKey(HttpUrl),
     discover: Schema.optionalKey(Schema.Never),
-  }),
+  }).check(declaredAuthorizationQuery),
   Schema.Struct({
     grant: Schema.Literal("client_credentials"),
     discover: HttpUrl,

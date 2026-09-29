@@ -1,4 +1,7 @@
-/** Declared authorization parameters reach the sign-in URL; protocol parameters stay host-owned. */
+/**
+ * Declared authorization parameters and a declared URL's own query reach the sign-in URL;
+ * protocol parameters stay host-owned.
+ */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import { FetchHttpClient, HttpClient } from "effect/unstable/http";
@@ -98,7 +101,7 @@ export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
           { clientId: "synthetic-declared-client", clientSecret: "synthetic-client-secret" },
         );
         expect(`${declared.url.origin}${declared.url.pathname}`).toBe(`${issuer.origin}/authorize`);
-        expect(declared.url.searchParams.get("tenant")).toBe("fixture");
+        expect(declared.url.searchParams.getAll("tenant")).toEqual(["fixture"]);
         expect(declared.url.searchParams.get("client_id")).toBe("synthetic-declared-client");
 
         // Complete the discovered sign-in: the extras change nothing after authorization.
@@ -138,29 +141,52 @@ export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
           )).body,
         ).toMatchObject({ accounts: { service: account.id } });
 
-        // A declaration cannot replace a host-owned protocol parameter. The same declaration
-        // without the reserved key deploys, so the reserved key alone causes the rejection.
-        for (const [config, reserved] of [
-          [{ discover: `${issuer.origin}/mcp`, scopes: ["read"] }, { state: "fixed" }],
+        // A declaration cannot replace a host-owned protocol parameter, in `authorizationParams`
+        // or in a declared URL's query, and names each parameter once. Each rejected
+        // declaration has an accepted twin that differs only in the offending parameter.
+        const endpoints = (query: string) => ({
+          authorizationUrl: `${issuer.origin}/authorize${query}`,
+          tokenUrl: `${issuer.origin}/token`,
+          scopes: ["read"],
+        });
+        for (const [rejectedConfig, acceptedConfig] of [
           [
             {
-              authorizationUrl: `${issuer.origin}/authorize`,
-              tokenUrl: `${issuer.origin}/token`,
+              discover: `${issuer.origin}/mcp`,
               scopes: ["read"],
+              authorizationParams: { ...extras, state: "fixed" },
             },
-            { redirect_uri: "https://redirect.example.test/callback" },
+            { discover: `${issuer.origin}/mcp`, scopes: ["read"], authorizationParams: extras },
+          ],
+          [
+            {
+              ...endpoints(""),
+              authorizationParams: {
+                ...extras,
+                redirect_uri: "https://redirect.example.test/callback",
+              },
+            },
+            { ...endpoints(""), authorizationParams: extras },
+          ],
+          [
+            { ...endpoints("?tenant=fixture&state=fixed"), authorizationParams: extras },
+            { ...endpoints("?tenant=fixture"), authorizationParams: extras },
+          ],
+          [
+            {
+              ...endpoints("?tenant=fixture"),
+              authorizationParams: { ...extras, tenant: "other" },
+            },
+            { ...endpoints("?tenant=fixture"), authorizationParams: extras },
           ],
         ] as const) {
-          const rejected = yield* deploy({
-            ...config,
-            authorizationParams: { ...extras, ...reserved },
-          });
+          const rejected = yield* deploy(rejectedConfig);
           expect(rejected.status, JSON.stringify(rejected.body)).toBe(422);
           expect(rejected.body).toMatchObject({
             _tag: "DeploymentBuildFailed",
             reason: "App build failed",
           });
-          const accepted = yield* deploy({ ...config, authorizationParams: extras });
+          const accepted = yield* deploy(acceptedConfig);
           expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
           const app = yield* body(Resource, accepted);
           yield* api.request(actors.owner, "DELETE", `${prefix}/apps/${app.id}`).pipe(Effect.orDie);

@@ -2102,7 +2102,8 @@ export const scenarios = {
   oauthAuthorizationParams: {
     fixtures: "actors",
     file: "oauth-authorization-params.spec.ts",
-    title: "OAuth authorization parameters reach sign-in without replacing protocol parameters",
+    title:
+      "OAuth authorization parameters and URL queries reach sign-in without replacing protocol parameters",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback OAuth issuer."),

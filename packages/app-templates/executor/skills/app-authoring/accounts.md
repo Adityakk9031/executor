@@ -138,8 +138,13 @@ pass that check: use a tenant-specific issuer URL, or declare the endpoints
 without `issuer`.
 
 `authorizationParams` adds service-defined parameters to the sign-in request,
-from the service's docs. Use it for settings such as offline access. It cannot
-replace protocol parameters such as `state`, `scope` or `redirect_uri`.
+from the service's docs. Use it for settings such as offline access or a
+service's own selector, for example `{ providers: "..." }`. It works with
+`discover` and with declared endpoints. Executor sets the protocol parameters
+itself, so these names are rejected: `response_type`, `client_id`,
+`redirect_uri`, `state`, `scope`, `code_challenge`, `code_challenge_method`,
+`nonce`, `resource`, `request` and `request_uri`. Use `scopes` and `resource`
+for those settings instead.
 
 Declare `authorizationUrl`, `tokenUrl` and `scopes` only when the service
 publishes no metadata. Then set `tokenEndpointAuthMethod` to what its docs say
@@ -148,6 +153,12 @@ for public PKCE clients), and `issuer` when the docs name one, so Executor can
 check the service's `iss` responses. Without `issuer` those checks are skipped.
 Do not copy endpoints from an OpenAPI `oauth2` scheme without checking the
 service's docs; those schemes carry no issuer or client authentication.
+
+A declared `authorizationUrl` may include a query string, such as
+`https://auth.example.com/authorize?tenant=acme`; Executor keeps it and adds the
+protocol parameters. Prefer `authorizationParams` for service settings. Declare
+each parameter in one place: a name in both the URL and `authorizationParams`,
+or a protocol parameter in the URL, fails the build.
 
 When the service documents an RFC 7009 token revocation endpoint, also declare
 `revocationUrl`. Executor calls it when a user deletes the account, so the
