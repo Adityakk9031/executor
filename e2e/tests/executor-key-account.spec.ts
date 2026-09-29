@@ -7,6 +7,7 @@ import { Actors } from "../support/actors.ts";
 import { Api, body, type Session } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
+import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { advanceToReconciliation, installBrowserClock } from "../support/query-transition.ts";
 const App = Schema.Struct({
   id: Schema.String,
@@ -187,8 +188,10 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
               directory,
             );
             yield* installBrowserClock;
-            yield* browser.use("Open Apps during team installation", (page) =>
-              page.goto(`/org/${actors.organization.slug}/apps`),
+            // A document load renders the directory on the server, beyond the browser hold.
+            yield* openThroughBrowser(
+              "Open Apps during team installation",
+              `/org/${actors.organization.slug}/apps`,
             );
             yield* held.requested;
             yield* browser.use("Missing app has one skeleton while the workflow runs", (page) =>
