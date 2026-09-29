@@ -2,7 +2,10 @@
 import { build } from "esbuild";
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { Module } from "@alchemy.run/cloudflare-runtime/core";
+import { frameworkProtocol } from "apps/contracts";
+import manifest from "apps/package.json" with { type: "json" };
 import { RuntimeBuildFailed } from "../contracts/runtime.ts";
+import type { AppFramework } from "../contracts/worker-build.ts";
 
 const HostBundle = Schema.mutable(
   Schema.Array(
@@ -124,10 +127,16 @@ export const bundleWorkerdHost = Effect.gen(function* () {
   modules.sort((a, b) =>
     a.name === "main.js" ? -1 : b.name === "main.js" ? 1 : a.name.localeCompare(b.name),
   );
+  const framework: AppFramework = {
+    protocol: frameworkProtocol,
+    version: manifest.version,
+    server,
+    browser,
+  };
   modules.push({
     name: "executor-framework",
     type: "Json",
-    content: JSON.stringify({ server, browser }),
+    content: JSON.stringify(framework),
   });
   return modules;
 }).pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "compile" })));

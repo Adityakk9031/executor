@@ -10,7 +10,9 @@ import {
   WorkflowValue,
 } from "apps/contracts";
 import { WorkflowSeed } from "./workflow-runtime.ts";
-import { WorkerBundle } from "./worker-build.ts";
+import { RetainedWorkerBuild, WorkerBundle } from "./worker-build.ts";
+import { SourceFiles } from "./deployment.ts";
+import { RuntimeBuildFailed, RuntimeProtocolUnsupported } from "./runtime.ts";
 import type { RpcTarget } from "capnweb";
 
 /**
@@ -39,9 +41,12 @@ export interface AppHostCallbacks extends RpcTarget {
   /** The invocation's encoded build, read only when the runner cold-starts its Worker. */
   load(): Promise<string>;
 }
+/** Sources without `dependencies.apps` compile against the runtime's own framework. */
+export const CompileWorkerApp = Schema.Struct({ files: SourceFiles });
 /** Compiler output is validated before it is retained by the host. */
 export const CompiledWorkerApp = Schema.Struct({
   bundle: WorkerBundle,
+  protocol: RetainedWorkerBuild.fields.protocol,
   requirements: Schema.Json,
   ui: Schema.optionalKey(
     Schema.Array(
@@ -54,10 +59,18 @@ export const CompiledWorkerApp = Schema.Struct({
   ),
 });
 export type CompiledWorkerApp = typeof CompiledWorkerApp.Type;
+/** Expected build failures cross the RPC boundary typed, so the deploy can explain them. */
+export const CompileWorkerResult = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), value: CompiledWorkerApp }),
+  Schema.Struct({
+    ok: Schema.Literal(false),
+    error: Schema.Union([RuntimeBuildFailed, RuntimeProtocolUnsupported]),
+  }),
+]);
 /** RPC surface hosted by a trusted Worker; authored modules receive no host bindings. */
 export interface WorkerdAppApi {
   cancel(): Promise<void>;
-  compile(files: string): Promise<string>;
+  compile(input: string): Promise<string>;
   invoke(input: string, callbacks: AppHostCallbacks): Promise<string>;
 }
 /** Background runs use finite host requests; no step callback or Promise lives in Node. */

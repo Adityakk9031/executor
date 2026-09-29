@@ -8,6 +8,8 @@ import { makeLocalMcpOAuth } from "./mcp-oauth.ts";
 import { localMcpConnectionHandlers } from "./mcp-connections.ts";
 import { hostedExecutorOrigin, remoteRegistry } from "@executor-js/app-registry";
 import { localAppManagement } from "./app-management.ts";
+import { runStartupDataSteps } from "@executor-js/app-management/data-steps";
+import { SqlClient } from "effect/unstable/sql";
 
 /** Local host composition. The SDK owns operations; this package owns local resources and access. */
 import {
@@ -25,7 +27,18 @@ import {
   webhookCallback,
 } from "@executor-js/sdk/core";
 import { filesystemBlobStore, workerdApps } from "@executor-js/sdk/node";
-import { Config, Effect, Layer, Path, Redacted, Result, Deferred, Schedule, Scope } from "effect";
+import {
+  Config,
+  Effect,
+  Layer,
+  Option,
+  Path,
+  Redacted,
+  Result,
+  Deferred,
+  Schedule,
+  Scope,
+} from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { recordRequestRejections, requestTiming } from "@executor-js/telemetry/http";
 import { safeHttpClient } from "@executor-js/utils/safe-fetch";
@@ -69,7 +82,7 @@ export const localApi = (
       const auth = existingAuth ?? (yield* makeLocalAuth(crypto, config.directory));
       const path = yield* Path.Path;
       const directory = path.resolve(config.directory);
-      const storage = yield* openStorage(directory);
+      const { storage, sql } = yield* openStorage(directory);
       const credentialStore = yield* credentials(config.encryptionKey, crypto);
       // Node can hook connect, so every host-side fetch re-checks the addresses a name resolves
       // to. The agent lives for this layer's scope, which is the process.
@@ -88,6 +101,10 @@ export const localApi = (
         // The bundled Executor app calls this process on 127.0.0.1, and local development
         // routinely targets a service on the operator's own machine.
         allowPrivateAppFetch: true,
+        ...Option.match(yield* Config.String("EXECUTOR_NPM_REGISTRY").pipe(Config.option), {
+          onNone: () => ({}),
+          onSome: (registry) => ({ npmRegistry: registry }),
+        }),
       }).pipe(startupPhase("runtime"));
       const registry = remoteRegistry(
         yield* Config.String("EXECUTOR_REGISTRY_URL").pipe(
@@ -121,6 +138,11 @@ export const localApi = (
         },
       }).pipe(startupPhase("sdk"));
       yield* Deferred.succeed(ready, executor);
+      // Before background work, the Executor app's regeneration and serving; the data lock is held.
+      yield* runStartupDataSteps({ executor, repositories }, "private_local").pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+        startupPhase("data-steps"),
+      );
       yield* Effect.forkScoped(
         recoverAppRepositories({ database: storage, sources, blobs }).pipe(
           Effect.catch(() => Effect.logWarning("App repository recovery failed")),

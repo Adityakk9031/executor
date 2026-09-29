@@ -1,5 +1,6 @@
 import { SourceFiles, type SourceFile } from "@executor-js/sdk/core";
 import { Effect } from "effect";
+import { packageFile } from "@executor-js/app-templates";
 /** Executor uses the same source generator, provider accounts and deployments as other API apps. */
 import type { HostedApiDocument } from "../contracts/api.ts";
 
@@ -72,14 +73,7 @@ export const executorAppSource = (
     files: SourceFiles.make([
       { path: "index.ts", content: managementIndex(origin) },
       { path: "openapi.json", content: managementConfiguration(origin, document) },
-      {
-        path: "package.json",
-        content: JSON.stringify(
-          { name: "executor", private: true, type: "module", dependencies: {} },
-          null,
-          2,
-        ),
-      },
+      packageFile("executor"),
       {
         path: "provider.ts",
         content: `import { defineProvider, object, string, secrets, oauth2 } from "apps"
@@ -119,6 +113,7 @@ export const provider = defineProvider({ name: "Executor", auth: {
 `,
       },
       { path: "openapi.json", content: managementConfiguration(origin, document) },
+      packageFile("executor"),
       ...skills.filter((file) => !file.path.startsWith("skills/")),
     ]),
   });

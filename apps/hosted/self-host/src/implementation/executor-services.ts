@@ -1,6 +1,7 @@
 import { hostedAppCapabilities } from "@executor-js/hosted-server/app-management";
 import { executorSelfHostApiDocument } from "../contracts/api.ts";
 import { AppManagementHost } from "@executor-js/app-management";
+import { runStartupDataSteps } from "@executor-js/app-management/data-steps";
 import { hostedExecutorOrigin, remoteRegistry } from "@executor-js/app-registry";
 import { gitSourceStorage } from "@executor-js/app-source";
 import type { RepositoryBackend } from "@executor-js/app-source";
@@ -94,6 +95,8 @@ export const selfHostExecutorServices = <E, R>(
         },
       );
       yield* Deferred.succeed(ready, executor);
+      // The schema is current and nothing serves or builds yet; the caller holds the data lock.
+      yield* runStartupDataSteps({ executor, repositories }, "private_hosted");
       yield* Effect.forkScoped(
         recoverAppRepositories({ database: storage, sources, blobs }).pipe(
           Effect.catch(() => Effect.logWarning("App repository recovery failed")),

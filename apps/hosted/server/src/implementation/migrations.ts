@@ -1,6 +1,7 @@
 /** Schema ownership is separate even though auth and product share one Postgres database. */
 import type { BetterAuthOptions } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
+import { createDataStepJournal } from "@executor-js/app-management/data-steps";
 import { makeExecutorStorage } from "@executor-js/sdk/core";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
@@ -56,6 +57,8 @@ const hostedProductMigrations = migrateProductSteps("private_hosted_migrations",
   }),
   "2_api_key_memberships": migrateApiKeyMemberships,
   "3_upgrade_executor_apps": queueExecutorAppUpgrades,
+  // Additive: the journal for data steps the new server runs; the running server never reads it.
+  "4_data_steps": createDataStepJournal("private_hosted"),
 });
 
 /**

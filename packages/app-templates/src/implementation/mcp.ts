@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { packageFile, sourceFiles } from "./files.ts";
+import { appsPeerVersion, packageFile, sourceFiles } from "./files.ts";
 
 /**
  * A remote MCP app whose connection was confirmed: public, or OAuth discovered from the server.
@@ -57,7 +57,9 @@ export const provider = defineProvider({
               },
             ]
           : []),
-        packageFile(name, { "@modelcontextprotocol/sdk": "1.30.0" }),
+        packageFile(name, {
+          "@modelcontextprotocol/sdk": appsPeerVersion("@modelcontextprotocol/sdk"),
+        }),
       ]),
     };
   });

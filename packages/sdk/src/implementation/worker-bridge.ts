@@ -1,26 +1,44 @@
 import { retireMethod } from "@executor-js/app-data/worker-bundle";
 import type { SourceFile } from "../contracts/deployment.ts";
-/** Retain package files in the server entry point and preserve invocation context across isolation. */
+/**
+ * Protocol 1's retained server entry. It imports the framework's host module as a namespace and
+ * uses only what protocol 1 guarantees, so it links against every protocol-1 framework. Optional
+ * later additions are feature-detected: `isolatedCacheSession` first shipped after apps
+ * 0.0.1-beta.0, and the invocation bridges skip caching when a build has no `cacheSession`.
+ */
 export const appBridge = (files: readonly SourceFile[]) => `
 import app from "./index.ts";
-import { createIsolatedAppHandler, hostContext, isolatedElicitation, isolatedWorkflowExecution, isolatedWorkflowControls, isolatedCacheSession } from "apps/host";
-const handler = createIsolatedAppHandler(app);
+import * as host from "apps/host";
+const handler = host.createIsolatedAppHandler(app);
 const files = ${JSON.stringify(files)};
 export default {
-  cacheSession: isolatedCacheSession,
+  cacheSession: host.isolatedCacheSession,
   async fetch(request, env) {
     // This entry point has no public route or host bindings. Only the trusted loader calls it.
     const { command, accounts, approval, replay, deadline, workflowRun } = await request.json();
     const lifetime = new AbortController();
     const delivery = env?.ELICITATION;
-    const elicitation = delivery == null ? undefined : isolatedElicitation((prompt) => delivery(prompt), lifetime);
+    const elicitation = delivery == null ? undefined : host.isolatedElicitation((prompt) => delivery(prompt), lifetime);
     try {
       return await handler(new Request("https://app.internal/dispatch", {
         method: "POST", headers: { "content-type": "application/json", traceparent: request.headers.get("traceparent") ?? "" }, body: JSON.stringify(command), signal: AbortSignal.any([request.signal, lifetime.signal])
-      }), { ...hostContext(accounts, approval), files, ...(env?.CACHE === undefined ? {} : { cache: env.CACHE }), ...(replay === undefined ? {} : { replay }), ...(deadline === undefined ? {} : { deadline }), ...(env?.WORKFLOW && workflowRun ? { workflow: isolatedWorkflowExecution(workflowRun, env.WORKFLOW, lifetime.signal) } : {}), ...(env?.WORKFLOW_CONTROLS ? { workflowControls: isolatedWorkflowControls(env.WORKFLOW_CONTROLS) } : {}), ...(elicitation === undefined ? {} : { elicitation }), ...(env?.STORAGE === undefined ? {} : { storage: env.STORAGE }) });
+      }), { ...host.hostContext(accounts, approval), files, ...(env?.CACHE === undefined ? {} : { cache: env.CACHE }), ...(replay === undefined ? {} : { replay }), ...(deadline === undefined ? {} : { deadline }), ...(env?.WORKFLOW && workflowRun ? { workflow: host.isolatedWorkflowExecution(workflowRun, env.WORKFLOW, lifetime.signal) } : {}), ...(env?.WORKFLOW_CONTROLS ? { workflowControls: host.isolatedWorkflowControls(env.WORKFLOW_CONTROLS) } : {}), ...(elicitation === undefined ? {} : { elicitation }), ...(env?.STORAGE === undefined ? {} : { storage: env.STORAGE }) });
     } finally { lifetime.abort(); }
   }
 };`;
+
+/** Protocol 1's entry for the SDK's in-process Node runtime. */
+export const nodeAppEntry = (files: readonly SourceFile[]) =>
+  [
+    'import app from "./source/index.ts";',
+    'import * as host from "apps/host";',
+    "export const protocol = 1;",
+    "const handler = host.createAppHandler(app);",
+    `const files = ${JSON.stringify(files)};`,
+    // Redacted owns a private store per Effect instance. Decode on
+    // the host side and re-wrap with the selected app framework.
+    "export default (request, context, accounts) => handler(request, { ...context, ...host.hostContext(accounts, context.approval), files });",
+  ].join("\n");
 
 /** Runtime-owned RPC entrypoint. Retained fetch bridges continue to work and only new bridges use the callback. */
 export const appRpcBridge = (module: string) => `

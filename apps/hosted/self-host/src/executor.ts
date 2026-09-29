@@ -3,8 +3,8 @@ import { nativeRepositories } from "@executor-js/app-source/node";
 import { filesystemBlobStore, workerdApps } from "@executor-js/sdk/node/workerd";
 import type { SourceFile } from "@executor-js/sdk/core";
 import type { HostEgress } from "@executor-js/utils/url-policy";
-import { Config, Effect, Path } from "effect";
-import { allowPrivateAppFetch, dataDirectory } from "./contracts/config.ts";
+import { Config, Effect, Option, Path } from "effect";
+import { allowPrivateAppFetch, dataDirectory, npmRegistry } from "./contracts/config.ts";
 import { selfHostExecutorServices } from "./implementation/executor-services.ts";
 
 /** Acquire the native app process and files in the product server's Effect scope. */
@@ -28,6 +28,10 @@ export const selfHostExecutor = (skills: readonly SourceFile[], egress: HostEgre
           path.resolve(directory, "workflow-engine"),
         ],
         allowPrivateAppFetch: yield* allowPrivateAppFetch,
+        ...Option.match(yield* npmRegistry, {
+          onNone: () => ({}),
+          onSome: (registry) => ({ npmRegistry: registry }),
+        }),
         selfOrigin: {
           origin,
           address: `${listener.includes(":") ? `[${listener}]` : listener}:${port}`,

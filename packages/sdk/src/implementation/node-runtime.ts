@@ -39,6 +39,8 @@ import { materializeNodeBuild, nodeBuildAsset, retainNodeBuild } from "./node-bu
 import { hostPackages, installNodeDependencies } from "./node-dependencies.ts";
 import type { NodeRuntimeOptions } from "../node.ts";
 import { PublishedAppFramework } from "../contracts/worker-build.ts";
+import { appProtocol, type AppProtocol } from "./app-protocols.ts";
+import { frameworkProtocol } from "apps/contracts";
 
 type Handler = (
   request: Request,
@@ -55,6 +57,8 @@ const HostedModule = Schema.Struct({
   // SAFETY: this is the framework-generated entry point, not the author's
   // module. Responses are parsed independently before entering the SDK.
   default: Schema.declare((value): value is Handler => typeof value === "function"),
+  /** Entries generated before protocols were recorded all speak protocol 1. */
+  protocol: Schema.Int.pipe(Schema.withDecodingDefaultKey(Effect.succeed(1))),
 });
 const Package = Schema.Struct({
   dependencies: Schema.optional(Schema.Record(Schema.NonEmptyString, Schema.NonEmptyString)),
@@ -77,7 +81,7 @@ function attempt<A, E>(work: (signal: AbortSignal) => Promise<A>, error: E) {
 }
 
 function dispatch<A, E>(
-  handler: Handler,
+  { handler, protocol }: { readonly handler: Handler; readonly protocol: AppProtocol },
   command: HostRequest,
   context: HostContext,
   value: Schema.Decoder<A>,
@@ -95,7 +99,7 @@ function dispatch<A, E>(
           new Request("https://apps.internal/dispatch", {
             method: "POST",
             headers,
-            body: JSON.stringify(request),
+            body: JSON.stringify(protocol.request(request)),
             signal,
           }),
           { ...context, telemetry },
@@ -103,7 +107,9 @@ function dispatch<A, E>(
         ),
       new RuntimeProtocolFailed(),
     );
-    const body = yield* attempt(() => response.json(), new RuntimeProtocolFailed());
+    const body = yield* attempt(() => response.json(), new RuntimeProtocolFailed()).pipe(
+      Effect.flatMap((body) => protocol.response(request, body)),
+    );
     const envelope = yield* Schema.decodeUnknownEffect(HostResponse)(body).pipe(
       Effect.mapError(() => new RuntimeProtocolFailed()),
     );
@@ -131,7 +137,7 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
   // Node has no request waitUntil. The runtime owns bounded sessions through their completion.
   const refreshes = new Set<Promise<void>>();
   const cachedDispatch = <A, E>(
-    handler: Handler,
+    handler: { readonly handler: Handler; readonly protocol: AppProtocol },
     command: HostRequest,
     context: HostContext & { readonly app: string },
     value: Schema.Decoder<A>,
@@ -178,9 +184,10 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
       const module = yield* attempt(() => import(url.href), new RuntimeBuildUnavailable()).pipe(
         Effect.withSpan("runtime.node.import"),
       );
-      return (yield* Schema.decodeUnknownEffect(HostedModule)(module).pipe(
+      const hosted = yield* Schema.decodeUnknownEffect(HostedModule)(module).pipe(
         Effect.mapError(() => new RuntimeBuildUnavailable()),
-      )).default;
+      );
+      return { handler: hosted.default, protocol: yield* appProtocol(hosted.protocol) };
     }).pipe(Effect.withSpan("runtime.node.load", { attributes: { "executor.build.id": build } }));
 
   return {
@@ -253,19 +260,23 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
               publishedFramework,
             ).pipe(Effect.withSpan("runtime.node.dependencies"));
           }
+          // Sources without `dependencies.apps` build with this runtime's installed `apps` package.
+          const protocol = yield* appProtocol(
+            publishedFramework
+              ? (yield* fs
+                  .readFileString(path.join(staging, "node_modules/apps/runtime.json"))
+                  .pipe(
+                    Effect.flatMap(
+                      Schema.decodeUnknownEffect(Schema.fromJsonString(PublishedAppFramework)),
+                    ),
+                    Effect.mapError(
+                      () => new RuntimeBuildFailed({ stage: "dependencies", dependency: "apps" }),
+                    ),
+                  )).protocol
+              : frameworkProtocol,
+          );
           yield* fs
-            .writeFileString(
-              path.join(staging, "entry.ts"),
-              [
-                'import app from "./source/index.ts";',
-                'import { createAppHandler, hostContext } from "apps/host";',
-                "const handler = createAppHandler(app);",
-                `const files = ${JSON.stringify(source)};`,
-                // Redacted owns a private store per Effect instance. Decode on
-                // the host side and re-wrap with the selected app framework.
-                "export default (request, context, accounts) => handler(request, { ...context, ...hostContext(accounts, context.approval), files });",
-              ].join("\n"),
-            )
+            .writeFileString(path.join(staging, "entry.ts"), protocol.nodeEntry(source))
             .pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "compile" })));
           const frameworkDirectory = publishedFramework
             ? path.join(staging, "node_modules/apps")
@@ -282,16 +293,6 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
               Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(FrameworkPackage))),
               Effect.mapError(() => new RuntimeBuildFailed({ stage: "dependencies" })),
             );
-          if (publishedFramework) {
-            yield* fs.readFileString(path.join(frameworkDirectory, "runtime.json")).pipe(
-              Effect.flatMap(
-                Schema.decodeUnknownEffect(Schema.fromJsonString(PublishedAppFramework)),
-              ),
-              Effect.mapError(
-                () => new RuntimeBuildFailed({ stage: "dependencies", dependency: "apps" }),
-              ),
-            );
-          }
           const optionalPeers = new Set(
             Object.keys(frameworkPackage.peerDependencies).filter(
               (name) => frameworkPackage.peerDependenciesMeta[name]?.optional === true,
@@ -424,7 +425,7 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
             Effect.mapError(() => new RuntimeBuildFailed({ stage: "declaration" })),
           );
           const requirements = yield* dispatch(
-            hosted.default,
+            { handler: hosted.default, protocol },
             { operation: "requirements" },
             {
               accounts: Redacted.make({}),

@@ -62,8 +62,23 @@ export class RuntimeProtocolFailed extends Schema.TaggedError<RuntimeProtocolFai
   "RuntimeProtocolFailed",
   {},
 ) {}
+/**
+ * The app's `apps` framework speaks a host protocol this host does not run. Builds fail before
+ * compiling, and retained builds fail before loading, rather than at module link or decode time.
+ */
+export class RuntimeProtocolUnsupported extends Schema.TaggedError<RuntimeProtocolUnsupported>()(
+  "RuntimeProtocolUnsupported",
+  { protocol: Schema.Int, supported: Schema.Array(Schema.Int) },
+) {
+  override get message() {
+    return `This app's apps framework uses host protocol ${this.protocol}. This host supports protocol ${this.supported.join(", ")}.`;
+  }
+}
 /** Loading retained code and decoding the framework protocol are host failures. */
-export type RuntimeLoadError = RuntimeBuildUnavailable | RuntimeProtocolFailed;
+export type RuntimeLoadError =
+  | RuntimeBuildUnavailable
+  | RuntimeProtocolFailed
+  | RuntimeProtocolUnsupported;
 
 /** Framework-facing operations, independent of Node or Cloudflare bindings. */
 export interface Runtime<Requirements = never> {
@@ -71,9 +86,14 @@ export interface Runtime<Requirements = never> {
    * A revision identifies all writes before that event; unversioned hosts emit void.
    */
   readonly changes?: (app: string) => Stream.Stream<number | void, RuntimeLoadError>;
+  /** Sources that declare `dependencies.apps` use that package; others use this host's framework. */
   readonly build: (input: {
     readonly files: SourceFiles;
-  }) => Effect.Effect<BuiltApp, RuntimeBuildFailed | BuildMemoryExceeded, Requirements>;
+  }) => Effect.Effect<
+    BuiltApp,
+    RuntimeBuildFailed | RuntimeProtocolUnsupported | BuildMemoryExceeded,
+    Requirements
+  >;
   readonly asset?: (input: {
     readonly build: BuildId;
     readonly path: string;

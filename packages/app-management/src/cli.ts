@@ -14,6 +14,7 @@ import {
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import type { PlatformError } from "effect/PlatformError";
 import { SourceFiles } from "@executor-js/sdk/core";
+import { packageFile } from "@executor-js/app-templates";
 import { AppClientError } from "./client-error.ts";
 import { AppOperationError, AppAccessDenied } from "./contracts/api.ts";
 import {
@@ -273,13 +274,16 @@ const readSkills = (args: {
     );
   });
 
-const starter = SourceFiles.make([
-  {
-    path: "index.ts",
-    content:
-      'import {defineApp,object,query} from "apps";\nexport default defineApp({accounts:{}},async()=>({queries:{hello:query({description:"Say hello",input:object({})},async()=>({message:"Hello"}))}}));\n',
-  },
-]);
+/** A starter app that declares the exact `apps` release this CLI was built with. */
+const starter = (name: string) =>
+  SourceFiles.make([
+    {
+      path: "index.ts",
+      content:
+        'import {defineApp,object,query} from "apps";\nexport default defineApp({accounts:{}},async()=>({queries:{hello:query({description:"Say hello",input:object({})},async()=>({message:"Hello"}))}}));\n',
+    },
+    packageFile(name),
+  ]);
 
 /** Sanitized command diagnostics. Credential values and arbitrary server bodies are never printed. */
 export const appCommandFailure = (error: unknown): string | undefined => {
@@ -336,7 +340,9 @@ export const appsCommand = (platform: string) =>
         ),
         Command.withHandler((args) =>
           Effect.gen(function* () {
-            const files = Option.isSome(args.files) ? yield* readFiles(args.files.value) : starter;
+            const files = Option.isSome(args.files)
+              ? yield* readFiles(args.files.value)
+              : starter(args.name);
             yield* send(args.host, args.organization, "/apps", { name: args.name, files });
           }),
         ),

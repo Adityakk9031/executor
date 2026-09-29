@@ -21,9 +21,7 @@ declare module "cloudflare:workers" {
 }
 /** Runtime-only modules provided by workerd, never imported by the Node host. */
 declare module "executor-framework" {
-  const framework: {
-    readonly server: Readonly<Record<string, string>>;
-    readonly browser: Readonly<Record<string, string>>;
-  };
+  /** This runtime's framework snapshot. The entry decodes it as a PublishedAppFramework. */
+  const framework: unknown;
   export default framework;
 }

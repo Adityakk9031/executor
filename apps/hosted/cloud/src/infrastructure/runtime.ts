@@ -6,6 +6,7 @@ import {
   BuildId,
   RuntimeBuildFailed,
   BuildMemoryExceeded,
+  RuntimeProtocolUnsupported,
   runtimeAdapter,
 } from "@executor-js/sdk/core";
 import { appRuntime, makeAppRunner } from "@executor-js/sdk/workerd";
@@ -18,7 +19,7 @@ import type { AppDataSupervisor } from "./app-data.ts";
 import { dataChanges } from "../implementation/data-changes.ts";
 import { cachedRuntimeBuilds } from "../implementation/runtime-build-cache.ts";
 import type { DurableObjectNamespace, Fetcher, WorkerLoader } from "@cloudflare/workers-types";
-import { CompiledCloudApp } from "../contracts/builds.ts";
+import { CloudCompileResult } from "../contracts/builds.ts";
 import { AppCompiler } from "./compiler.ts";
 import { AppOutbound } from "./app-outbound.ts";
 import {
@@ -135,13 +136,15 @@ export const cloudRuntime = Effect.fn(function* (
     const runtime = yield* appRuntime({
       name: "runtime.cloud",
       loadBuild: (build) =>
-        load(build).pipe(Effect.map(({ mainModule, modules }) => ({ mainModule, modules }))),
+        load(build).pipe(
+          Effect.map(({ mainModule, modules, protocol }) => ({ mainModule, modules, protocol })),
+        ),
       invoke: (invocation, capabilities) => withActor(runner.invoke(invocation, capabilities)),
       build: ({ files }) =>
         withActor(
           Effect.gen(function* () {
             const headers = Object.fromEntries(Object.entries(yield* traceHeaders));
-            const { bundle, ui } = yield* compiler.compile(files, headers).pipe(
+            const result = yield* compiler.compile(files, headers).pipe(
               Effect.catchTag("RpcCallError", (error) => {
                 const cause = error.cause;
                 const failure =
@@ -151,12 +154,14 @@ export const cloudRuntime = Effect.fn(function* (
                 causes.set(failure, describe(error));
                 return Effect.fail(failure);
               }),
-              Effect.flatMap(Schema.decodeUnknownEffect(CompiledCloudApp)),
+              Effect.flatMap(Schema.decodeUnknownEffect(CloudCompileResult)),
               Effect.catchTag("SchemaError", (cause) => Effect.fail(failed("compile", cause))),
               Effect.withSpan("runtime.cloud.compiler.request"),
             );
+            if (!result.ok) return yield* Effect.fail(result.error);
+            const { bundle, ui, protocol } = result.value;
             const build = BuildId.make(`bld_${crypto.randomUUID()}`);
-            const requirements = yield* runner.declare(bundle, headers).pipe(
+            const requirements = yield* runner.declare({ ...bundle, protocol }, headers).pipe(
               Effect.flatMap(Schema.decodeUnknownEffect(HostResponse)),
               Effect.flatMap((envelope) =>
                 envelope.ok
@@ -170,7 +175,11 @@ export const cloudRuntime = Effect.fn(function* (
             );
             const assets = yield* retainCloudBuild(
               build,
-              { ...bundle, database: requirements.database !== undefined },
+              {
+                ...bundle,
+                database: requirements.database !== undefined,
+                protocol,
+              },
               ui,
             ).pipe(Effect.provide(RuntimeContext.phantom));
             return { build, requirements, ...(assets === undefined ? {} : { ui: assets }) };
@@ -178,7 +187,11 @@ export const cloudRuntime = Effect.fn(function* (
             // The failing stage and its cause belong on the span; the public error stays small.
             Effect.tapError((error) =>
               Effect.annotateCurrentSpan({
-                "build.stage": Schema.is(BuildMemoryExceeded)(error) ? "compile" : error.stage,
+                "build.stage": Schema.is(BuildMemoryExceeded)(error)
+                  ? "compile"
+                  : Schema.is(RuntimeProtocolUnsupported)(error)
+                    ? "protocol"
+                    : error.stage,
                 "build.cause": causeOf(error),
               }),
             ),

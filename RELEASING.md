@@ -34,6 +34,23 @@ Rosetta, matching the optional dependencies installed by the package manager.
 Windows installers are currently unsigned. Automatic desktop updates remain
 unconfigured; use the manual installer to update Executor 2.
 
+## The apps framework release
+
+New apps pin the `apps` version in `packages/apps/package.json`, so every host
+must ship a version that npm already holds with exactly the content this
+checkout builds. Every change to the framework, including the workspace
+libraries bundled into it, needs a version bump and an approved publish before
+the host deploys; see [publishing apps](notes/apps-publishing.md).
+
+`bun run apps:build && node scripts/releases/apps-published.ts` packs the
+staged package and compares every file with the published archive of the same
+version. It fails when the version is not on npm or when `packages/apps` changed
+since that version was published. The production deploy workflow and publishing
+runs of **Executor releases** run it first. Pull request checks run it with
+`--allow-unpublished`, which only warns about an unpublished bump but still
+fails a framework change that kept a published version. Publish a bumped version
+from the reviewed PR's tree immediately before merging it.
+
 ## Publish beta
 
 Set the version to an unused `2.0.0-beta.N`, merge the reviewed release changes,

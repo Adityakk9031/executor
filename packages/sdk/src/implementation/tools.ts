@@ -309,6 +309,8 @@ const runtimeFailure = (
         new AppEvaluationFailed({ ...identity, reason: "App evaluation failed" }),
       RuntimeProtocolFailed: () =>
         new AppEvaluationFailed({ ...identity, reason: "App evaluation failed" }),
+      RuntimeProtocolUnsupported: (error) =>
+        new AppEvaluationFailed({ ...identity, reason: error.message }),
     }),
   );
 

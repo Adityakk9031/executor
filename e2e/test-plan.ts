@@ -803,6 +803,38 @@ export const scenarios = {
       local: na("Local does not publish apps."),
     },
   },
+  appFrameworkPin: {
+    fixtures: "actors",
+    managementProfiles: ["owner"],
+    serverEnvironment: { EXECUTOR_DATA_STEPS: "report" },
+    file: "app-framework-pin.spec.ts",
+    title: "Existing apps are pinned to an explicit apps framework by a data step",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloud runs the same step from its Worker's cron; see the Cloud scenario."),
+      local: na("Local runs the same step at its own startup; see the local scenario."),
+    },
+  },
+  cloudAppFrameworkPin: {
+    fixtures: "actors",
+    file: "app-framework-pin.spec.ts",
+    title: "Cloud reports the framework pin data step from the Worker's cron",
+    targets: {
+      cloud: scheduled,
+      "self-host": na("Self-host runs the same step at its startup in the hosted scenario."),
+      local: na("Local runs the same step at its startup in the local scenario."),
+    },
+  },
+  localAppFrameworkPin: {
+    serverEnvironment: { EXECUTOR_DATA_STEPS: "report" },
+    file: "app-framework-pin.spec.ts",
+    title: "Existing apps are pinned to an explicit apps framework at local startup",
+    targets: {
+      local: scheduled,
+      "self-host": na("Self-host runs the same step at its startup in the hosted scenario."),
+      cloud: na("Cloud runs the same step from its Worker's cron in the Cloud scenario."),
+    },
+  },
   appPackageMetadata: {
     fixtures: "actors",
     file: "app-package-metadata.spec.ts",
@@ -2877,6 +2909,16 @@ export const scenarios = {
   localAppsCli: {
     file: "local-apps-cli.spec.ts",
     title: "apps CLI explains sign-in, reads host skills, and creates from a directory",
+    targets: {
+      local: scheduled,
+      "self-host": na("The CLI's hosted path needs a browser OAuth login; local uses an API key."),
+      cloud: na("The CLI's hosted path needs a browser OAuth login; local uses an API key."),
+    },
+  },
+  localAppsCliStarter: {
+    file: "local-apps-cli.spec.ts",
+    title:
+      "apps CLI starter declares the host's apps release and deploys, as does the local Executor app",
     targets: {
       local: scheduled,
       "self-host": na("The CLI's hosted path needs a browser OAuth login; local uses an API key."),

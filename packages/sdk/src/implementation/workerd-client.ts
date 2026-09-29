@@ -14,7 +14,8 @@ import {
   type WorkflowRuntime,
 } from "../contracts/workflow-runtime.ts";
 import {
-  CompiledWorkerApp,
+  CompileWorkerApp,
+  CompileWorkerResult,
   WorkflowHostCommand,
   type AppHostCallbacks,
   type WorkerdAppApi,
@@ -24,7 +25,7 @@ import {
 import { BlobStore, type BlobStorage } from "../contracts/blobs.ts";
 import { BuildId } from "../contracts/shared.ts";
 import { RuntimeBuildFailed, RuntimeProtocolFailed } from "../contracts/runtime.ts";
-import { WorkerBundle } from "../contracts/worker-build.ts";
+import { LoadedWorkerBuild } from "../contracts/worker-build.ts";
 import type { Executor } from "../contracts/executor.ts";
 import { runtimeAdapter } from "./runtime.ts";
 import { appRuntime, buildLoadSpan } from "./app-runtime.ts";
@@ -107,9 +108,10 @@ export const workerdHostHandler = (options: {
                 },
               }),
             );
-            return yield* Schema.encodeEffect(WorkerBundle)({
+            return yield* Schema.encodeEffect(LoadedWorkerBuild)({
               mainModule: bundle.mainModule,
               modules: bundle.modules,
+              protocol: bundle.protocol,
             });
           }
           case "context": {
@@ -191,7 +193,7 @@ export const connectedWorkerdApps = (blobs: BlobStorage, transport: WorkerdTrans
       loadBuild: (build) =>
         loadWorkerBuild(build).pipe(
           provideBlobs,
-          Effect.map(({ mainModule, modules }) => ({ mainModule, modules })),
+          Effect.map(({ mainModule, modules, protocol }) => ({ mainModule, modules, protocol })),
         ),
       invoke: (invocation, capabilities) =>
         Effect.gen(function* () {
@@ -206,7 +208,9 @@ export const connectedWorkerdApps = (blobs: BlobStorage, transport: WorkerdTrans
             capabilities.elicit,
             capabilities.controls,
             async () =>
-              Schema.encodeSync(Schema.fromJsonString(WorkerBundle))(await capabilities.load()),
+              Schema.encodeSync(Schema.fromJsonString(LoadedWorkerBuild))(
+                await capabilities.load(),
+              ),
           );
           return yield* rpc((api) =>
             Effect.tryPromise({
@@ -220,25 +224,35 @@ export const connectedWorkerdApps = (blobs: BlobStorage, transport: WorkerdTrans
         }),
       build: ({ files }) =>
         Effect.gen(function* () {
+          const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(CompileWorkerApp))({
+            files,
+          }).pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "source" })));
           const result = yield* rpc((api) =>
             Effect.tryPromise({
-              try: async () => await api.compile(JSON.stringify(files)),
+              try: async () => await api.compile(encoded),
               catch: protocolFailure,
             }),
           ).pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(CompiledWorkerApp))),
+            Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(CompileWorkerResult))),
+            Effect.mapError(() => new RuntimeBuildFailed({ stage: "compile" })),
           );
+          if (!result.ok) return yield* Effect.fail(result.error);
+          const compiled = result.value;
           const requirements = yield* Schema.decodeUnknownEffect(DeclaredRequirements)(
-            result.requirements,
-          );
+            compiled.requirements,
+          ).pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "declaration" })));
           const build = BuildId.make(`bld_${crypto.randomUUID()}`);
           const ui = yield* retainWorkerBuild(
             build,
-            { ...result.bundle, database: requirements.database !== undefined },
-            result.ui,
+            {
+              ...compiled.bundle,
+              database: requirements.database !== undefined,
+              protocol: compiled.protocol,
+            },
+            compiled.ui,
           ).pipe(provideBlobs);
           return { build, requirements, ...(ui === undefined ? {} : { ui }) };
-        }).pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "compile" }))),
+        }),
       asset: ({ build, path }) => workerBuildAsset(build, path).pipe(provideBlobs),
       changes: transport.changes,
     });

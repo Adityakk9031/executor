@@ -186,10 +186,12 @@ hosted product’s access rules. Discover tools again in a new execute after cha
 
 ## Dependencies and current boundaries
 
-An optional `package.json` can declare normal npm dependencies, including `apps`.
-When declared, that package supplies the server and browser framework. An exact
-version keeps rebuilds on the same framework; ranges or tags can advance during
-a rebuild. The host retains the compiled version with each deployment. Missing
+Declare the exact `apps` version in `package.json` `dependencies`:
+`{ "dependencies": { "apps": "<version>" } }`. That package supplies the server
+and browser framework, and the exact version keeps rebuilds on it across host
+upgrades. New apps created by Executor already declare the host's version; copy
+it from one when writing `package.json` yourself, keep it when editing, and
+change it only to upgrade the app. The host retains the compiled version with each deployment. Missing
 or unsupported packages fail the build without replacing the active app.
 Installation disables lifecycle scripts. Do not depend on the Executor SDK in
 app code. Without a declared `apps` package, the Node SDK adapter reserves `apps`

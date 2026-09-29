@@ -10,8 +10,11 @@ const Package = Schema.Struct({
   dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
 
-/** Framework archives are loaded alone; direct npm imports retain their authored declarations and dependency graphs. */
-export const workerDependencies = (filesystem: InMemoryFileSystem) =>
+/**
+ * Framework archives are loaded alone; direct npm imports retain their authored declarations and
+ * dependency graphs. `registry` replaces the public npm registry when the host configures one.
+ */
+export const workerDependencies = (filesystem: InMemoryFileSystem, registry?: string) =>
   Effect.gen(function* () {
     const manifest = filesystem.read("package.json");
     const dependencies =
@@ -39,7 +42,7 @@ export const workerDependencies = (filesystem: InMemoryFileSystem) =>
                   list: (prefix) => filesystem.list(prefix),
                   flush: () => filesystem.flush(),
                 },
-                { transitive },
+                { transitive, ...(registry === undefined ? {} : { registry }) },
               ),
             catch: () => new RuntimeBuildFailed({ stage: "dependencies", dependency: name }),
           });

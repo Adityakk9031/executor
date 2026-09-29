@@ -28,7 +28,11 @@ import {
   SourceFiles,
 } from "../contracts/deployment.ts";
 import type { Executor } from "../contracts/executor.ts";
-import { RuntimeBuildFailed, type Runtime } from "../contracts/runtime.ts";
+import {
+  RuntimeBuildFailed,
+  RuntimeProtocolUnsupported,
+  type Runtime,
+} from "../contracts/runtime.ts";
 import {
   AppCodeId,
   AppId,
@@ -233,8 +237,9 @@ export const makeApps = (
             : new DeploymentBuildFailed({
                 owner: input.owner,
                 name: deployName,
-                reason:
-                  Schema.is(RuntimeBuildFailed)(error) && error.dependency !== undefined
+                reason: Schema.is(RuntimeProtocolUnsupported)(error)
+                  ? `${error.message} Declare a supported apps version.`
+                  : Schema.is(RuntimeBuildFailed)(error) && error.dependency !== undefined
                     ? `Add ${error.dependency} to package.json dependencies.`
                     : "App build failed",
               }),

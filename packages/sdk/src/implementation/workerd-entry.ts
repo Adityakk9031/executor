@@ -37,17 +37,20 @@ import {
   type AppWorkerResidency,
 } from "./app-worker-residency.ts";
 import { compileWorkerApp } from "../workerd-build.ts";
-import { WorkerBundle } from "../contracts/worker-build.ts";
 import {
-  CompiledWorkerApp,
+  CompileWorkerApp,
+  CompileWorkerResult,
   PreparedWorkflow,
   WorkerInvocation,
   type AppHostCallbacks,
   type WorkflowHostCommand,
 } from "../contracts/workerd-host.ts";
-import { SourceFiles } from "../contracts/deployment.ts";
+import { LoadedWorkerBuild, PublishedAppFramework } from "../contracts/worker-build.ts";
 import { decodeWorkflowFailure, workflowFailureMessage } from "../contracts/workflow-errors.ts";
-import framework from "executor-framework";
+import hostFramework from "executor-framework";
+
+/** This runtime's own framework, for sources that do not declare one. */
+const framework = Schema.decodeUnknownSync(PublishedAppFramework)(hostFramework);
 
 declare const WebSocketPair: { new (): { 0: NativeWebSocket; 1: NativeWebSocket } };
 
@@ -95,6 +98,8 @@ interface Environment {
   readonly SELF_ORIGIN: string;
   /** Reaches the product that serves `SELF_ORIGIN` without the network. */
   readonly SELF?: HttpService;
+  /** The npm registry builds resolve packages from, or empty for the public registry. */
+  readonly NPM_REGISTRY: string;
   readonly LOADER: WorkerLoader;
   /** Most app Workers this process keeps loaded, or null for the default. */
   readonly APP_WORKERS?: number | null;
@@ -220,20 +225,41 @@ class AppApi extends RpcTarget {
   async compile(input: string): Promise<string> {
     return this.#run(
       Effect.gen({ self: this }, function* () {
-        const files = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SourceFiles))(input);
-        const { bundle, ui } = yield* compileWorkerApp(files, framework);
-        const response = yield* runner(this.#env, this.#context).declare(bundle, {});
+        const request = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CompileWorkerApp))(
+          input,
+        );
+        const compiled = yield* compileWorkerApp(
+          request.files,
+          this.#env.NPM_REGISTRY === ""
+            ? { framework }
+            : { framework, registry: this.#env.NPM_REGISTRY },
+        );
+        const { bundle, ui } = compiled;
+        const response = yield* runner(this.#env, this.#context).declare(
+          { ...bundle, protocol: compiled.protocol },
+          {},
+        );
         const envelope = yield* Schema.decodeUnknownEffect(HostResponse)(response);
         if (!envelope.ok) return yield* failure();
         const requirements = yield* Schema.decodeUnknownEffect(DeclaredRequirements)(
           envelope.value,
         );
-        return yield* Schema.encodeEffect(Schema.fromJsonString(CompiledWorkerApp))({
-          bundle,
-          requirements: json(yield* Schema.encodeEffect(DeclaredRequirements)(requirements)),
-          ...(ui === undefined ? {} : { ui }),
-        });
-      }),
+        return {
+          ok: true as const,
+          value: {
+            bundle,
+            protocol: compiled.protocol,
+            requirements: json(yield* Schema.encodeEffect(DeclaredRequirements)(requirements)),
+            ...(ui === undefined ? {} : { ui }),
+          },
+        };
+      }).pipe(
+        Effect.catchTags({
+          RuntimeBuildFailed: (error) => Effect.succeed({ ok: false as const, error }),
+          RuntimeProtocolUnsupported: (error) => Effect.succeed({ ok: false as const, error }),
+        }),
+        Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(CompileWorkerResult))),
+      ),
     );
   }
   async invoke(value: string, callbacks: RpcStub<AppHostCallbacks>): Promise<string> {
@@ -242,7 +268,9 @@ class AppApi extends RpcTarget {
         Effect.flatMap(({ elicitation, workflowControls, ...invocation }) =>
           runner(this.#env, this.#context).invoke(invocation, {
             load: async () =>
-              Schema.decodeUnknownSync(Schema.fromJsonString(WorkerBundle))(await callbacks.load()),
+              Schema.decodeUnknownSync(Schema.fromJsonString(LoadedWorkerBuild))(
+                await callbacks.load(),
+              ),
             elicit: elicitation
               ? async (input) =>
                   Schema.decodeUnknownSync(encodedJson)(
@@ -393,7 +421,7 @@ export class AppWorkflows extends WorkflowEntrypoint<Environment, { run: string 
                 load: () =>
                   Effect.runPromise(
                     hostRequest(this.env, { operation: "load", run: seed.runId }).pipe(
-                      Effect.flatMap(Schema.decodeUnknownEffect(WorkerBundle)),
+                      Effect.flatMap(Schema.decodeUnknownEffect(LoadedWorkerBuild)),
                     ),
                   ),
                 elicit: null,

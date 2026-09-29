@@ -7,6 +7,7 @@ import { cloudAppUiBase } from "./contracts/app-ui.ts";
 import { AppDomainCoordinatorLive, cloudAppDomains } from "./infrastructure/app-domains.ts";
 import { AppRepositoryRecovery, WorkflowHost } from "@executor-js/sdk/core";
 import { AppWorkflows } from "./infrastructure/workflows.ts";
+import { cloudDataSteps } from "./infrastructure/data-steps.ts";
 import {
   OrganizationRemoval,
   OrganizationRemovalHost,
@@ -196,6 +197,16 @@ export default Api.make(
       ),
     );
     yield* Cloudflare.Workers.cron("* * * * *", () => dispatch.pipe(lifetime.background));
+    const dataSteps = yield* cloudDataSteps;
+    yield* Cloudflare.Workers.cron("* * * * *", () =>
+      dataSteps.pipe(
+        Effect.provide(executor),
+        reportErrors,
+        Effect.scoped,
+        Effect.catch(() => Effect.logWarning("Data steps unavailable")),
+        lifetime.background,
+      ),
+    );
     yield* Cloudflare.Workers.cron("* * * * *", () =>
       Effect.flatten(AppRepositoryRecovery).pipe(
         Effect.provide(executor),
