@@ -16,7 +16,6 @@ import { defaultScheduleWorkerOptions } from "@executor-js/sdk/scheduling";
 import { cloudExecutor } from "./executor.ts";
 import { appDataSupervisors } from "./app-data.ts";
 import { cloudAuthDatabase } from "./auth-database.ts";
-import { cloudTelemetry } from "./telemetry.ts";
 
 const makeScheduleCoordinator = Effect.gen(function* () {
   const analytics = yield* cloudAnalytics;
@@ -156,7 +155,7 @@ const makeScheduleCoordinator = Effect.gen(function* () {
         }),
     };
   });
-}).pipe(Effect.provide(Layer.mergeAll(cloudAuthDatabase, cloudTelemetry)), Effect.orDie);
+}).pipe(Effect.provide(cloudAuthDatabase), Effect.orDie);
 
 /** Only this object owns the cloud runner identity; restart recovery never claims another live runner. */
 export class ScheduleCoordinator extends Cloudflare.DurableObject<

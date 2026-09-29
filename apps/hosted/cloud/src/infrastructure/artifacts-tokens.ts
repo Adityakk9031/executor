@@ -11,19 +11,8 @@ import {
 import { RuntimeContext } from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { Stage } from "alchemy/Stage";
-import {
-  Clock,
-  Config,
-  Effect,
-  Layer,
-  Option,
-  Redacted,
-  Schedule,
-  Schema,
-  Semaphore,
-} from "effect";
+import { Clock, Config, Effect, Option, Redacted, Schedule, Schema, Semaphore } from "effect";
 import { cloudSecrets } from "./secrets.ts";
-import { cloudTelemetry } from "./telemetry.ts";
 import { providerFailureCode } from "../implementation/provider-failure.ts";
 
 const tokenLifetimeSeconds = 31_536_000;
@@ -247,10 +236,7 @@ const makeArtifactsTokenCoordinator = Effect.gen(function* () {
         ),
     };
   }).pipe(Effect.orDie);
-}).pipe(
-  Effect.provide(Layer.mergeAll(Cloudflare.Artifacts.ReadWriteNamespaceBinding, cloudTelemetry)),
-  Effect.orDie,
-);
+}).pipe(Effect.provide(Cloudflare.Artifacts.ReadWriteNamespaceBinding), Effect.orDie);
 
 /** Dispose provider RPC handles without retaining them in the credential store. */
 const disposeRpc = (value: unknown) =>

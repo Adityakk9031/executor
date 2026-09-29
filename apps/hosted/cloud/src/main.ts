@@ -242,7 +242,10 @@ export default Api.make(
       appAddresses(auth.origin, yield* cloudAppUiBase.pipe(Effect.orDie)),
       appDomains.status,
     );
-    const mcp = yield* cloudMcp;
+    // Session objects run in this isolate and share its executor and MCP identity.
+    const mcp = yield* cloudMcp.pipe(
+      Effect.provide(McpSessionsLive({ executor, identity: auth.mcpIdentity })),
+    );
     const meter = yield* BillingMeter.pipe(Effect.provide(billing));
     // One established schedule owns both independent background jobs. Each job
     // reports its own failure so a workflow problem cannot prevent email delivery.
@@ -433,7 +436,6 @@ export default Api.make(
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        McpSessionsLive,
         ScheduleCoordinatorLive,
         AppDomainCoordinatorLive,
         cloudAuthDatabase,
