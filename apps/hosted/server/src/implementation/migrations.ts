@@ -59,6 +59,8 @@ const hostedProductMigrations = migrateProductSteps("private_hosted_migrations",
   "3_upgrade_executor_apps": queueExecutorAppUpgrades,
   // Additive: the journal for data steps the new server runs; the running server never reads it.
   "4_data_steps": createDataStepJournal("private_hosted"),
+  // The template moved to routers and served framework lookups (#829, #841).
+  "5_upgrade_executor_apps": queueExecutorAppUpgrades,
 });
 
 /**
