@@ -5,38 +5,45 @@
  * new apps to code other than its own.
  *
  * Run `bun run apps:build` first. The staged package is packed as npm would publish it, and every
- * file is compared byte for byte with the published archive. npm packs `package.json` unchanged
- * and publishes the packed archive, so no field is exempt. Comparing unpacked files keeps the
- * check independent of the npm version's tar and gzip output.
+ * file is compared byte for byte with the published archive.
  *
- * Pull requests run it with `--allow-unpublished`: a version that is not on npm yet only warns,
- * because a change that bumps the version is published before it merges. A published version
- * whose content differs still fails, so a framework change that forgot the bump fails its PR.
+ * Modes:
+ * - no flag: the version must be on npm with identical content (release publication).
+ * - `--publish`: the deploy from `main` publishes an unpublished version with `NPM_TOKEN`, waits
+ *   until the registry serves it with the local archive's integrity, then compares as above. A
+ *   version already on npm is only compared, so rerunning a deploy is idempotent.
+ * - `--allow-unpublished`: pull requests only warn about an unpublished bump, because merging to
+ *   `main` publishes it. A published version whose content differs still fails.
  */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { createHash } from "node:crypto";
-import { Console, Effect, FileSystem, Path, Schema } from "effect";
+import { Config, Console, Effect, FileSystem, Path, Redacted, Schedule, Schema } from "effect";
 import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import apps from "../../packages/apps/package.json" with { type: "json" };
+import {
+  AppsReleaseMismatch,
+  differingFiles,
+  integrityOf,
+  listFiles,
+  pack,
+  staged,
+  stagedVersion,
+  unpack,
+} from "./apps-package.ts";
 
-const staged = "packages/apps/dist";
+const registry = "https://registry.npmjs.org";
 const allowUnpublished = process.argv.includes("--allow-unpublished");
-const Version = Schema.Struct({ version: Schema.String });
+const publish = process.argv.includes("--publish");
 const Published = Schema.Struct({
+  version: Schema.String,
   dist: Schema.Struct({ tarball: Schema.String, integrity: Schema.String }),
 });
-const Packed = Schema.NonEmptyArray(Schema.Struct({ filename: Schema.String }));
+const Tags = Schema.Record(Schema.String, Schema.String);
 
-class AppsReleaseMismatch extends Schema.TaggedError<AppsReleaseMismatch>()("AppsReleaseMismatch", {
-  message: Schema.String,
+class NotServed extends Schema.TaggedError<NotServed>()("NotServed", {
+  status: Schema.Number,
 }) {}
-
-const changed = (files: readonly string[]) =>
-  new AppsReleaseMismatch({
-    message: `packages/apps changed since apps@${apps.version} was published; bump the version in packages/apps/package.json and publish it before releasing or deploying this host. See notes/apps-publishing.md. Differing files (${files.length}): ${files.slice(0, 20).join(", ")}${files.length > 20 ? ", ..." : ""}`,
-  });
 
 NodeRuntime.runMain(
   Effect.gen(function* () {
@@ -44,82 +51,104 @@ NodeRuntime.runMain(
     const path = yield* Path.Path;
     const processes = yield* ChildProcessSpawner.ChildProcessSpawner;
     const http = yield* HttpClient.HttpClient;
+    const version = apps.version;
 
-    const stagedVersion = yield* fs.readFileString(path.join(staged, "package.json")).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Version))),
-      Effect.mapError(
-        () =>
-          new AppsReleaseMismatch({
-            message: `${staged} is missing; run bun run apps:build first.`,
-          }),
-      ),
-    );
-    if (stagedVersion.version !== apps.version)
+    const built = yield* stagedVersion(staged);
+    if (built !== version)
       return yield* new AppsReleaseMismatch({
-        message: `${staged} holds apps@${stagedVersion.version}, not ${apps.version}; run bun run apps:build again.`,
-      });
-
-    const response = yield* http.get(`https://registry.npmjs.org/apps/${apps.version}`);
-    const unpublished = `apps@${apps.version} is not published on npm (status ${response.status}). New apps pin this version; publish it before releasing or deploying this host. See notes/apps-publishing.md.`;
-    if (response.status === 404 && allowUnpublished)
-      return yield* Console.log(`::warning::${unpublished}`);
-    if (response.status !== 200) return yield* new AppsReleaseMismatch({ message: unpublished });
-    const published = yield* response.json.pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Published)),
-    );
-    const archive = yield* http.get(published.dist.tarball);
-    const bytes = new Uint8Array(yield* archive.arrayBuffer);
-    const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
-    if (archive.status !== 200 || integrity !== published.dist.integrity)
-      return yield* new AppsReleaseMismatch({
-        message: `The npm archive of apps@${apps.version} does not match its registry integrity.`,
+        message: `${staged} holds apps@${built}, not ${version}; run bun run apps:build again.`,
       });
 
     const directory = yield* fs.makeTempDirectoryScoped();
-    const unpack = (archivePath: string, name: string) =>
-      Effect.gen(function* () {
-        const target = path.join(directory, name);
-        yield* fs.makeDirectory(target);
-        yield* processes.string(ChildProcess.make("tar", ["-xzf", archivePath, "-C", target]));
-        return target;
-      });
-    const packed = yield* processes
-      .string(
-        ChildProcess.make(
-          "npm",
-          ["pack", staged, "--json", "--ignore-scripts", "--pack-destination", directory],
-          { stdout: "pipe", stderr: "ignore" },
-        ),
-      )
-      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Packed))));
-    yield* fs.writeFile(path.join(directory, "published.tgz"), bytes);
-    const local = yield* unpack(path.join(directory, packed[0].filename), "staged");
-    const remote = yield* unpack(path.join(directory, "published.tgz"), "published");
-
-    const files = (root: string) =>
-      fs.readDirectory(root, { recursive: true }).pipe(
-        Effect.flatMap((entries) =>
-          Effect.filter(entries, (entry) =>
-            fs.stat(path.join(root, entry)).pipe(Effect.map((info) => info.type === "File")),
-          ),
-        ),
-        Effect.map((entries) => new Set(entries)),
-      );
-    const ours = yield* files(local);
-    const theirs = yield* files(remote);
-    const differing: string[] = [];
-    for (const file of [...new Set([...ours, ...theirs])].toSorted()) {
-      if (!ours.has(file) || !theirs.has(file)) {
-        differing.push(file);
-        continue;
+    const local = yield* pack(staged, path.join(directory, "local"));
+    const lookup = Effect.gen(function* () {
+      const response = yield* http.get(`${registry}/apps/${version}`);
+      if (response.status !== 200) {
+        yield* response.text;
+        return yield* new NotServed({ status: response.status });
       }
-      const [left, right] = yield* Effect.all([
-        fs.readFile(path.join(local, file)),
-        fs.readFile(path.join(remote, file)),
-      ]);
-      if (Buffer.compare(left, right) !== 0) differing.push(file);
-    }
-    if (differing.length > 0) return yield* changed(differing);
-    yield* Effect.log(`apps@${apps.version} is published on npm and matches ${staged}.`);
+      return yield* response.json.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Published)));
+    });
+    const tags = http.get(`${registry}/-/package/apps/dist-tags`).pipe(
+      Effect.flatMap((response) => response.json),
+      Effect.flatMap(Schema.decodeUnknownEffect(Tags)),
+    );
+
+    const existing = yield* lookup.pipe(
+      Effect.map((published) => ({ published })),
+      Effect.catchTag("NotServed", (missing) => Effect.succeed({ missing })),
+    );
+    const unpublished = (status: number) =>
+      `apps@${version} is not published on npm (status ${status}). The deploy from main publishes it; see notes/apps-publishing.md.`;
+    if ("missing" in existing && allowUnpublished)
+      return yield* Console.log(`::warning::${unpublished(existing.missing.status)}`);
+
+    const publishNew = (status: number) =>
+      Effect.gen(function* () {
+        if (!publish || status !== 404)
+          return yield* new AppsReleaseMismatch({ message: unpublished(status) });
+        const token = yield* Config.Redacted("NPM_TOKEN");
+        const before = yield* tags;
+        const npmrc = path.join(directory, "npmrc");
+        // npm substitutes the explicitly supplied environment variable. The file contains no secret.
+        yield* fs.writeFileString(npmrc, "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n", {
+          mode: 0o600,
+        });
+        // Publishing the directory runs the staged package's own hook, which rejects non-beta releases.
+        const code = yield* processes.exitCode(
+          ChildProcess.make("npm", ["publish", staged, "--tag", "beta", "--access", "public"], {
+            env: { NPM_CONFIG_USERCONFIG: npmrc, NPM_TOKEN: Redacted.value(token) },
+            extendEnv: true,
+            stdout: "inherit",
+            stderr: "inherit",
+          }),
+        );
+        if (code !== 0)
+          return yield* new AppsReleaseMismatch({
+            message: `npm publish apps@${version} failed. Inspect the registry; once it serves apps@${version}, rerunning compares it instead of publishing again.`,
+          });
+        const served = yield* lookup.pipe(
+          Effect.timeout(15_000),
+          Effect.retry({ schedule: Schedule.spaced(10_000), times: 90 }),
+        );
+        if (served.dist.integrity !== local.integrity)
+          return yield* new AppsReleaseMismatch({
+            message: `The registry serves apps@${version} with integrity ${served.dist.integrity}, not the local archive's ${local.integrity}.`,
+          });
+        const after = yield* tags.pipe(
+          Effect.filterOrFail(
+            (current) => current.beta === version,
+            () => new NotServed({ status: 200 }),
+          ),
+          Effect.timeout(15_000),
+          Effect.retry({ schedule: Schedule.spaced(10_000), times: 30 }),
+        );
+        if (after.latest !== before.latest)
+          return yield* new AppsReleaseMismatch({
+            message: `Publishing apps@${version} moved latest from ${before.latest} to ${after.latest}. Restore it by hand.`,
+          });
+        yield* Console.log(`Published apps@${version} with --tag beta; latest=${after.latest}`);
+        return served;
+      });
+    const published =
+      "published" in existing ? existing.published : yield* publishNew(existing.missing.status);
+
+    const archive = yield* http.get(published.dist.tarball);
+    const bytes = new Uint8Array(yield* archive.arrayBuffer);
+    if (archive.status !== 200 || integrityOf(bytes) !== published.dist.integrity)
+      return yield* new AppsReleaseMismatch({
+        message: `The npm archive of apps@${version} does not match its registry integrity.`,
+      });
+    const remoteArchive = path.join(directory, "published.tgz");
+    yield* fs.writeFile(remoteArchive, bytes);
+    const differing = yield* differingFiles(
+      yield* unpack(local.archive, path.join(directory, "staged")),
+      yield* unpack(remoteArchive, path.join(directory, "published")),
+    );
+    if (differing.length > 0)
+      return yield* new AppsReleaseMismatch({
+        message: `packages/apps changed since apps@${version} was published; bump the version in packages/apps/package.json. See notes/apps-publishing.md. ${listFiles(differing)}`,
+      });
+    yield* Effect.log(`apps@${version} is published on npm and matches ${staged}.`);
   }).pipe(Effect.scoped, Effect.provide([FetchHttpClient.layer, NodeServices.layer])),
 );
