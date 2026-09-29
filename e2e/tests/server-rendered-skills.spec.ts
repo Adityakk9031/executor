@@ -68,6 +68,28 @@ layer(HostedLive, { excludeTestServices: true })("Server-rendered skills", (it) 
         yield* browser.use("Let the skills region hydrate", (page) => page.waitForTimeout(1500));
         expect(failures).toEqual([]);
         expect(skillReads).toEqual([]);
+        // Each skill in the list and the open file show their size in lines and estimated tokens.
+        const size = /^[\d,]+ lines? · ~[\d.]+K? tokens$/;
+        const sizes = yield* browser.use("Read the skill sizes", (page) =>
+          Promise.all([
+            page.getByRole("navigation", { name: "Skill files" }).getByText(size).allTextContents(),
+            page.locator(".sticky").getByText(size).allTextContents(),
+          ]),
+        );
+        expect(sizes[0].length).toBeGreaterThan(0);
+        expect(sizes[1]).toHaveLength(1);
+        yield* browser.use("Hovering the token count explains the estimate", (page) =>
+          page
+            .locator(".sticky")
+            .getByText(/^~[\d.]+K? tokens$/)
+            .hover()
+            .then(() =>
+              page
+                .getByRole("tooltip")
+                .getByText("Estimated at four characters per token", { exact: false })
+                .waitFor({ state: "visible" }),
+            ),
+        );
         yield* browser.checkpoint("Server-rendered skills after hydration");
       }),
     ),

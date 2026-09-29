@@ -21,6 +21,7 @@ import { CopyButton } from "./code.tsx";
 import { EmptyStatePanel } from "./empty-state.tsx";
 import { Button } from "../components/button.tsx";
 import { SkillContent } from "./skill-content.tsx";
+import { SkillSize } from "./skill-size.tsx";
 import {
   SkillDeployment,
   SkillFileEditor,
@@ -225,6 +226,10 @@ function SkillCatalog<E>({
             <span className="mt-1 hidden text-xs leading-5 text-muted-foreground min-[900px]:block">
               {skill.description}
             </span>
+            <SkillSize
+              contents={skill.files.map((item) => item.content)}
+              className="mt-1 hidden text-[11px] min-[900px]:block"
+            />
           </button>
         ))}
       </nav>
@@ -298,6 +303,7 @@ function SkillFiles<E>({
         <span aria-label="Current skill file" className="truncate text-foreground">
           {file === "SKILL.md" ? "Instructions" : file.split("/").at(-1)}
         </span>
+        <SkillSize contents={[resource.content]} className="shrink-0" />
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {actions}
