@@ -56,6 +56,8 @@ account's name and shows it beside the account. Every field is optional:
 `externalId`, `displayName`, `username`, `email`, `avatarUrl` and `profileUrl`.
 
 ```ts
+import { ProviderError, decodeJson, defineProvider, object, secrets, string } from "apps";
+
 const User = object({ id: string(), username: string(), name: string(), email: string() });
 
 const vercel = defineProvider({
@@ -93,8 +95,20 @@ refused, 429 and 5xx mean the service is unavailable. Throw
 `new ProviderError({ reason: "forbidden" })` only with explicit evidence of a
 missing permission, such as an `insufficient_scope` challenge; a bare 403 is not
 enough. Services that answer a bad token with something other than 401, as Vercel does, need
-an explicit `new ProviderError({ reason: "unauthorized" })`. Any other error or a timeout means
-the check could not verify the account.
+an explicit `new ProviderError({ reason: "unauthorized" })`. `ProviderError` carries only its
+reason and status, never a message.
+
+To tell the user why the check failed, throw an ordinary `Error` with a message written for them.
+The account form shows it after "Couldn't verify this API token:". Read the service's documented
+error fields to choose the message; do not copy a response body, URL or credential into it.
+Executor replaces the checked credentials if they appear, and shortens long messages.
+
+```ts
+if (response.status === 403 && (await response.json()).error?.code === "missing_scope")
+  throw new Error("This token lacks the accounts scope. Create a token with accounts:read.");
+```
+
+Any error or a timeout means the check could not verify the account.
 Executor never treats that as bad credentials.
 
 Account forms run the same check on entered credentials before saving them, so the user sees

@@ -190,7 +190,9 @@ export interface AccountCheckContext<Auth extends AuthMethods> {
 /**
  * A safe authenticated read proving the account works for this app. Returning passes; a thrown
  * `ProviderError` or HTTP status failure classifies the problem. Any other failure, including a
- * timeout, means the check could not verify the account, not that its credentials are bad.
+ * timeout, means the check could not verify the account, not that its credentials are bad. A
+ * thrown error's own message is shown to the user, bounded and with the checked credentials
+ * replaced, so write it for them.
  */
 export interface AccountCheck<Auth extends AuthMethods> {
   // Method syntax lets a check typed for specific methods be stored as a general one.

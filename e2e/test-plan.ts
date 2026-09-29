@@ -1801,6 +1801,17 @@ export const scenarios = {
       local: na("Local naming is covered by the local account naming scenarios."),
     },
   },
+  accountCheckFailureDetail: {
+    fixtures: "actors",
+    file: "account-check-failures.spec.ts",
+    title:
+      "The credential form shows an app check's own failure message with the credential redacted",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("The hosted and local dashboards share the credential form and check contract."),
+    },
+  },
   localPastedCredentialsNamedAfterSaving: {
     file: "local-account-naming.spec.ts",
     title:

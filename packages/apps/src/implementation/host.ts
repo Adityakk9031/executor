@@ -820,7 +820,8 @@ function dispatch(
 /**
  * Run one slot's provider check against the single account the host supplied, without evaluating
  * the app. Failures are attributed to that account. HTTP status failures from `decodeJson` are
- * classified like other provider responses; anything else means the check could not verify it.
+ * classified like other provider responses; anything else means the check
+ * could not verify it, and carries the app's own error message with account secrets replaced.
  */
 function checkAccount(
   slots: AccountSlots,
@@ -860,7 +861,7 @@ function checkAccount(
         return Effect.fail(
           Option.isSome(classified)
             ? accountProviderError(classified.value, account.id)
-            : new HostOperationFailed(),
+            : new HostOperationFailed(failureDetail(error, accountSecrets(context.accounts))),
         );
       }),
       Effect.withSpan("app.account.check"),
