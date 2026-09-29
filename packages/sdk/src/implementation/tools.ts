@@ -208,6 +208,10 @@ export function resolve(
   }).pipe(Effect.provideService(CurrentProfile, state.profile));
 }
 
+/** Whether a profile's selected accounts can run its tools; recorded on the check's span. */
+const accountsOutcome = (outcome: "ready" | "reconnect" | "account_required") =>
+  Effect.annotateCurrentSpan("executor.accounts.outcome", outcome);
+
 /** One resolved invocation: app, pinned deployment, optional profile and account selection. */
 export type InvocationSnapshot = Effect.Success<ReturnType<typeof snapshot>>;
 type InvocationContext = Effect.Success<ReturnType<typeof resolve>>;
@@ -514,6 +518,10 @@ export const makeTools = (
      * The first account selected by this profile whose saved sign-in must reconnect before the
      * profile's tools can run; undefined when every account can supply credentials. Reads stored
      * state only: it never renews a grant or evaluates the app.
+     *
+     * An account that must reconnect, or a required account that is not selected yet, is an
+     * expected account state the owner resolves, not a fault of this check. It is recorded as the
+     * span's `executor.accounts.outcome`; a missing account fails the caller only after the span.
      */
     accountNeedingReconnect: (input: { app: AppId; profile: ProfileId }) =>
       Effect.gen(function* () {
@@ -522,12 +530,25 @@ export const makeTools = (
           for (const account of accounts) {
             const usable = yield* oauth.usable(account, required.definition).pipe(Effect.result);
             if (Result.isFailure(usable)) {
-              if (Schema.is(OAuthReconnectRequired)(usable.failure)) return account.id;
-              return yield* Effect.fail(usable.failure);
+              if (!Schema.is(OAuthReconnectRequired)(usable.failure))
+                return yield* Effect.fail(usable.failure);
+              yield* accountsOutcome("reconnect");
+              return account.id;
             }
           }
+        yield* accountsOutcome("ready");
         return undefined;
-      }).pipe(Effect.withSpan("sdk.accounts.reconnectRequired")),
+      }).pipe(
+        Effect.catchIf(Schema.is(AccountRequired), (missing) =>
+          accountsOutcome("account_required").pipe(Effect.as(missing)),
+        ),
+        Effect.withSpan("sdk.accounts.reconnectRequired", {
+          attributes: { "executor.app.id": input.app, "executor.profile.id": input.profile },
+        }),
+        Effect.flatMap((found) =>
+          Schema.is(AccountRequired)(found) ? Effect.fail(found) : Effect.succeed(found),
+        ),
+      ),
     /**
      * Page through the app's evaluated catalog. The whole listing is evaluated once and, with a
      * listing store, reused across pages and requests for identical inputs.
