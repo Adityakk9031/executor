@@ -17,6 +17,7 @@ import {
   type Cursor,
   type DeploymentId,
   type Tool,
+  type ToolRouter,
   type Credentials,
   type Executor,
 } from "@executor-js/sdk/core";
@@ -265,6 +266,8 @@ export const dashboard = (
       let deployment: DeploymentId | undefined;
       const cursors = new Set<Cursor>();
       const tools: Tool[] = [];
+      // Every page lists the whole catalog's routers.
+      let routers: readonly ToolRouter[] = [];
       do {
         const page = yield* executor.tools.list({
           app,
@@ -278,13 +281,14 @@ export const dashboard = (
           return yield* new ToolCatalogChanged({ app });
         deployment = page.deployment;
         tools.push(...page.items);
+        routers = page.routers;
         cursor = page.next;
         if (cursor !== undefined) {
           if (cursors.has(cursor)) return yield* new ToolCatalogChanged({ app });
           cursors.add(cursor);
         }
       } while (cursor !== undefined);
-      return { tools };
+      return { tools, routers };
     }).pipe(
       Effect.timeoutOrElse({
         duration: config.mcp.timeoutMs,

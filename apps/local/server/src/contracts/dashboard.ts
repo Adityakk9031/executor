@@ -69,6 +69,7 @@ import {
   DeployedApp,
   Tool,
   ToolName,
+  ToolRouter,
   Json,
   ToolNotFound,
   InputInvalid,
@@ -246,8 +247,14 @@ export const DashboardApp = Schema.Struct({
 });
 export type DashboardApp = typeof DashboardApp.Type;
 
-/** Complete account-dependent catalog. Tool schemas remain dynamic, never retained deployment metadata. */
-export const DashboardTools = Schema.Struct({ tools: Schema.Array(Tool) });
+/**
+ * Complete account-dependent catalog and the routers that group it. Tool schemas remain dynamic,
+ * never retained deployment metadata.
+ */
+export const DashboardTools = Schema.Struct({
+  tools: Schema.Array(Tool),
+  routers: Schema.Array(ToolRouter),
+});
 export type DashboardTools = typeof DashboardTools.Type;
 
 /** Query results include a connection-local revision; heartbeats carry no product data. */

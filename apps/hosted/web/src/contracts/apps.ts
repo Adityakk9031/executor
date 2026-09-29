@@ -32,7 +32,7 @@ import { HostedClient } from "./api.ts";
 import { acknowledge, upsert, currentQuery, invalidate } from "@executor-js/ui/contracts/mutations";
 import { inventoryAtom } from "./organization.ts";
 import { accountAtom, acknowledgeAccount } from "./accounts.ts";
-import { selectedIds } from "@executor-js/ui/contracts/dashboard";
+import { selectedIds, type ToolCatalog } from "@executor-js/ui/contracts/dashboard";
 
 /** App data is never reused between organizations. */
 class AppKey extends Data.Class<{
@@ -485,15 +485,15 @@ function connectionSaved(
   invalidate(get, inventoryAtom(key.organization));
 }
 
-const toolLists = Atom.family((key: ToolKey) =>
+const toolCatalogs = Atom.family((key: ToolKey) =>
   Atom.map(
     toolsQuery(key),
-    AsyncResult.map((page) => page.items),
+    AsyncResult.map((page): ToolCatalog => ({ tools: page.items, routers: page.routers })),
   ),
 );
-/** Shared browser view for the selected profile. */
-export const toolListAtom = (key: ConstructorParameters<typeof ToolKey>[0]) =>
-  toolLists(new ToolKey(key));
+/** Shared browser view for the selected profile, with the routers that group its tools. */
+export const toolCatalogAtom = (key: ConstructorParameters<typeof ToolKey>[0]) =>
+  toolCatalogs(new ToolKey(key));
 class ToolDetailKey extends Data.Class<
   ConstructorParameters<typeof ToolKey>[0] & { readonly tool: ToolName }
 > {}

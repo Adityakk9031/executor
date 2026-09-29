@@ -18,7 +18,7 @@ import {
 import { ErrorNotice } from "@executor-js/ui/dashboard/error-notice";
 import { Empty } from "@executor-js/ui/dashboard/common";
 import { AppSectionHeader, AppSectionTitle } from "@executor-js/ui/dashboard/app-section-header";
-import { appError, callToolAtom, toolDetailAtom, toolListAtom } from "../../contracts/apps.ts";
+import { appError, callToolAtom, toolDetailAtom, toolCatalogAtom } from "../../contracts/apps.ts";
 import type { HostedError } from "../../contracts/errors.ts";
 import { useOrganizationRoute } from "../components/organization.tsx";
 
@@ -79,7 +79,7 @@ export function AppTools({
       )}
       <ToolBrowser
         key={`${app.id}:${app.activeDeployment}:${profile?.id}:${profile?.revision}:${JSON.stringify(profile?.accounts ?? {})}`}
-        query={toolListAtom(catalog)}
+        query={toolCatalogAtom(catalog)}
         detail={(tool) => toolDetailAtom({ ...catalog, tool: tool.name })}
         Failure={ToolsFailure}
         selected={selected}

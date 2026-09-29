@@ -387,6 +387,25 @@ export const scenarios = {
       local: na("The hosted Tools page owns this tree."),
     },
   },
+  toolRouterMetadata: {
+    fixtures: "actors",
+    file: "tool-router-metadata.spec.ts",
+    title: "Tool groups show each router's title and description",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local is covered by the local tool router metadata scenario."),
+    },
+  },
+  localToolRouterMetadata: {
+    file: "tool-router-metadata.spec.ts",
+    title: "Local tool groups show each router's title and description",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted Tools pages are covered through organization routes."),
+      cloud: na("Hosted Tools pages are covered through organization routes."),
+    },
+  },
   toolsErrorState: {
     fixtures: "actors",
     file: "tools-error-state.spec.ts",

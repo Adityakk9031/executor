@@ -17,7 +17,7 @@ import { ToolBrowser } from "@executor-js/ui/dashboard/tools";
 import { ToolRunner } from "@executor-js/ui/dashboard/tool-runner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Key01Icon } from "@hugeicons/core-free-icons";
-import { callToolAtom, toolDetailAtom, toolsAtom, toolListAtom } from "../../contracts/api.ts";
+import { callToolAtom, toolDetailAtom, toolsAtom, toolCatalogAtom } from "../../contracts/api.ts";
 import {
   appToolReadiness,
   accountSetupFailure,
@@ -156,7 +156,7 @@ function LiveAppTools({ app, accounts, selected, profile, revision, selection }:
     <ToolBrowser
       Failure={Failure}
       key={`${app.id}:${app.activeDeployment}:${profile}:${revision}:${JSON.stringify(selection)}`}
-      query={toolListAtom(catalog)}
+      query={toolCatalogAtom(catalog)}
       detail={(tool) => toolDetailAtom({ ...catalog, tool: tool.name })}
       selected={selected}
       empty={
