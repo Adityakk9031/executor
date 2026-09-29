@@ -1,5 +1,5 @@
 /** Generate searchable author contracts from the same TypeScript graph as declarations. */
-import ts from "typescript";
+import ts from "typescript-5";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve, relative } from "node:path";

@@ -1,5 +1,5 @@
 /** Check every test/helper import using Effect's filesystem and scoped Node runtime. */
-import ts from "typescript";
+import ts from "typescript-5";
 import { scenarios, type TestPlan } from "./test-plan.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -19,7 +19,7 @@ const allowed = new Set([
   "effect/unstable/cli",
   "effect",
   "effect/unstable/process",
-  "typescript",
+  "typescript-5",
   "@effect/platform-node/NodeRuntime",
   "@effect/platform-node/NodeServices",
   "@effect/platform-node/NodeHttpServer",

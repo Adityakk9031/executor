@@ -34,7 +34,7 @@ export const startScheduleWorker = (
       );
     yield* Effect.gen(function* () {
       yield* Effect.flatten(ScheduleHostReady);
-      yield* Effect.forever(
+      return yield* Effect.forever(
         executor[ProfileHost].tick(config.concurrency).pipe(
           Effect.withSpan("schedule.dispatch"),
           Effect.catch(() =>

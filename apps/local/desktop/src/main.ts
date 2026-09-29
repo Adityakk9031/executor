@@ -300,7 +300,7 @@ const desktop = Effect.gen(function* () {
         yield* Effect.logInfo("Executor desktop ready").pipe(
           Effect.annotateLogs({ origin: backend.origin }),
         );
-        yield* backend.exited;
+        return yield* backend.exited;
       }),
       Deferred.await(quit),
     );
