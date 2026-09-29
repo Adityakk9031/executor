@@ -13,6 +13,7 @@ import { cloudAppUiBase } from "./src/contracts/app-ui.ts";
 import ApiLive, { Api } from "./src/main.ts";
 import AppCompilerLive from "./src/compiler.ts";
 import AppDataLive from "./src/app-data.ts";
+import ArtifactsCredentialsLive from "./src/artifacts-credentials.ts";
 import InvocationTelemetryLive from "./src/invocation-telemetry.ts";
 import { databaseInfrastructure } from "./src/infrastructure/database.ts";
 import { previewPoolSize } from "./src/infrastructure/preview-database.ts";
@@ -75,6 +76,14 @@ export default Alchemy.Stack(
     yield* uploadCloudSourceMaps("api", api.hash).pipe(Effect.orDie);
     return { url: (yield* AlchemyContext).dev ? yield* developmentWeb(api.url) : api.url };
   }).pipe(
-    Effect.provide(Layer.mergeAll(ApiLive, AppCompilerLive, AppDataLive, InvocationTelemetryLive)),
+    Effect.provide(
+      Layer.mergeAll(
+        ApiLive,
+        AppCompilerLive,
+        AppDataLive,
+        ArtifactsCredentialsLive,
+        InvocationTelemetryLive,
+      ),
+    ),
   ),
 );
