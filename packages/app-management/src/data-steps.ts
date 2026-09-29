@@ -3,7 +3,7 @@ export * from "./contracts/data-steps.ts";
 export * from "./contracts/framework-pin.ts";
 export { createDataStepJournal, runDataSteps } from "./implementation/data-steps.ts";
 export type { DataStepRunOptions } from "./implementation/data-steps.ts";
-export { frameworkPinStep } from "./implementation/framework-pin.ts";
+export { frameworkPinStep, pinnedOnly } from "./implementation/framework-pin.ts";
 export type { FrameworkPinHost } from "./implementation/framework-pin.ts";
 export {
   hostDataSteps,

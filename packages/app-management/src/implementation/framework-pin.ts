@@ -16,7 +16,9 @@ import {
 import type { RepositoryBackend } from "@executor-js/app-source/contracts";
 import {
   frameworkPinBehindMessage,
+  frameworkPinCatchUpRelease,
   frameworkPinMessage,
+  frameworkPinRelease,
   type FrameworkPinOutcome,
 } from "../contracts/framework-pin.ts";
 import type { DataStep, DataStepMode } from "../contracts/data-steps.ts";
@@ -99,6 +101,27 @@ const withManifest = (files: SourceFiles, content: string) =>
     ...files.filter((file) => file.path !== "package.json"),
     { path: "package.json", content },
   ]);
+
+/**
+ * Whether `workspace` is `running` with only a framework pin committed on top. Pinning is a
+ * system edit, so callers that leave user edits alone can still treat such a workspace as untouched.
+ */
+export const pinnedOnly = (workspace: SourceFiles, running: SourceFiles): boolean => {
+  if (sourceFilesEqual(workspace, running)) return true;
+  const content = manifestOf(workspace);
+  const rest = (files: SourceFiles) => files.filter((file) => file.path !== "package.json");
+  const saved = new Map(rest(running).map((file) => [file.path, file.content]));
+  const unchanged =
+    rest(workspace).length === saved.size &&
+    rest(workspace).every((file) => saved.get(file.path) === file.content);
+  return (
+    unchanged &&
+    [frameworkPinRelease, frameworkPinCatchUpRelease].some((release) => {
+      const manifest = pinManifest(manifestOf(running), release);
+      return manifest.kind === "pin" && manifest.content === content;
+    })
+  );
+};
 
 /**
  * Classify one app and, when applying, commit its pin on top of the revision that was read.

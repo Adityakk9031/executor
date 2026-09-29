@@ -1,6 +1,7 @@
 import { organizationAppCreation, personalAccountCreation } from "./resource-lifecycle.ts";
 import type { HostedApiDocument } from "../contracts/api.ts";
 import { managedAccountKey } from "./api-keys.ts";
+import { pinnedOnly } from "@executor-js/app-management/data-steps";
 import { sourceFilesEqual } from "@executor-js/sdk/core";
 import {
   AccountId,
@@ -102,8 +103,9 @@ export const organizationDefaults = (
             // A failed upgrade keeps the working installation, and member setup continues.
             const upgraded = yield* Effect.gen(function* () {
               const workspace = yield* executor.apps.workspace({ owner, app: app.id });
-              // Unsaved edits mean someone is changing this copy; leave it to them.
-              if (!sourceFilesEqual(workspace.files, deployment.files)) return undefined;
+              // Unsaved edits mean someone is changing this copy; leave it to them. The framework
+              // pin is a system commit, not an edit.
+              if (!pinnedOnly(workspace.files, deployment.files)) return undefined;
               return (yield* executor.apps.deploy({ owner, app: app.id, files: source.files })).app;
             }).pipe(
               Effect.catch(() =>
@@ -128,7 +130,7 @@ export const organizationDefaults = (
             const catalog = yield* executorAppSource(origin, yield* document);
             if (!sourceFilesEqual(deployment.files, catalog.files)) return;
             const workspace = yield* executor.apps.workspace({ owner, app: app.id });
-            if (!sourceFilesEqual(workspace.files, deployment.files)) return;
+            if (!pinnedOnly(workspace.files, deployment.files)) return;
             current = (yield* executor.apps.deploy({
               owner,
               app: app.id,
