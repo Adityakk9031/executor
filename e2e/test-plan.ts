@@ -3142,6 +3142,16 @@ export const scenarios = {
       cloud: scheduled,
     },
   },
+  invitationReaccept: {
+    fixtures: "actors",
+    file: "invitation-reaccept.spec.ts",
+    title: "reopening an accepted invitation says the member already joined",
+    targets: {
+      local: na("Hosted organization invitations."),
+      "self-host": scheduled,
+      cloud: scheduled,
+    },
+  },
   invitationPrivacy: {
     fixtures: "actors",
     file: "invitation-security.spec.ts",
