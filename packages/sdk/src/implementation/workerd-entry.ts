@@ -157,6 +157,7 @@ const hostRequest = (env: Environment, command: WorkflowHostCommand) =>
  * workerd keeps this isolate, and every app Worker it loads, for the life of the process. One
  * residency, shared by every request, bounds how many app Workers stay loaded.
  */
+// oxlint-disable-next-line executor/no-module-level-mutable-state -- one process-wide residency bounds loaded app Workers across requests
 let residency: AppWorkerResidency | undefined;
 /** The shared runner over this Worker's loader, data supervisors and outbound network. */
 const runner = (env: Environment, context: Pick<ExecutionContext, "waitUntil" | "exports">) =>

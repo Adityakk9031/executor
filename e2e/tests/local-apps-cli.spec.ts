@@ -212,7 +212,7 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
         const starterWorkspace = yield* Schema.decodeUnknownEffect(
           Schema.fromJsonString(Workspace),
         )(starterSource.stdout);
-        expect(declaredApps(starterWorkspace.files)).toBe(appsVersion);
+        expect(declaredApps(starterWorkspace.files)).toBe(yield* appsVersion);
         const deployed = yield* run(
           [
             "deploy",
@@ -244,7 +244,7 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
         expect(executorSource.status).toBe(200);
         expect(
           declaredApps((yield* Schema.decodeUnknownEffect(Deployed)(executorSource.body)).files),
-        ).toBe(appsVersion);
+        ).toBe(yield* appsVersion);
       }),
     ),
   );

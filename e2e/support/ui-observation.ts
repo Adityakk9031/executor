@@ -162,6 +162,7 @@ export const captureUIObservations = (
     };
     const pattern = `${target.metadata.origin}/api/**`;
     const hold = (route: Route) =>
+      // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- Playwright route handlers must return a Promise
       Effect.runPromise(
         Effect.gen(function* () {
           const request = route.request();

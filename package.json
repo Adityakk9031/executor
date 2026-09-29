@@ -111,6 +111,7 @@
     "@kitlangton/terminal-control": "^1.2.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@napi-rs/keyring": "2.1.0",
+    "@oxlint/plugins": "^1.83.0",
     "@rhyssul/portless": "0.13.3",
     "@rrweb/replay": "2.1.6",
     "@types/node": "^26.6.1",

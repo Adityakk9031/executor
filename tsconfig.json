@@ -25,5 +25,5 @@
     "**/dist",
     "**/.blume"
   ],
-  "include": ["packages", "apps", "playground"]
+  "include": ["packages", "apps", "playground", "scripts/oxlint-plugin.ts"]
 }

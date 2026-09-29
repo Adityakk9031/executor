@@ -100,6 +100,7 @@ export const localNpmRegistry = Effect.gen(function* () {
               address === null || typeof address === "string"
                 ? ""
                 : `http://127.0.0.1:${address.port}`;
+            // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- node:http request handlers are plain callbacks
             Effect.runPromise(reply(url, base)).then(
               (result) => {
                 response.writeHead(result.status, { "Content-Type": result.type });

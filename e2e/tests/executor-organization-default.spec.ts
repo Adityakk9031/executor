@@ -47,7 +47,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor organization default"
           }),
           yield* api.request(actors.owner, "GET", `${path}/source`),
         );
-        expect(declaredApps(deployed.files)).toBe(appsVersion);
+        expect(declaredApps(deployed.files)).toBe(yield* appsVersion);
 
         const tool = yield* body(
           ListTool,

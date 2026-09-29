@@ -65,7 +65,7 @@ layer(HostedLive, { excludeTestServices: true })("App package metadata", (it) =>
           expect(metadata.name).toBe(fixture.package);
           // New apps pin the exact apps release the host ships, and the MCP SDK it is built with.
           expect(metadata.dependencies).toEqual({
-            apps: appsVersion,
+            apps: yield* appsVersion,
             "@modelcontextprotocol/sdk": "1.30.0",
           });
           const source = before.files.find((file) => file.path === "index.ts");

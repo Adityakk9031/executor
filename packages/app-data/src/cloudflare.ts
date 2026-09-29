@@ -52,6 +52,7 @@ const failed = (cause?: unknown) => {
  * could not be read, retires the name. Later calls load the same code under a fresh one.
  */
 const retired = new Map<string, string>();
+// oxlint-disable-next-line executor/no-module-level-mutable-state -- marks this isolate's cold-start failures; it carries no request data
 let coldStartToken: string | undefined;
 /** Marks this isolate's failed cold starts; authored code cannot produce it. */
 const coldStartFailure = () => (coldStartToken ??= `Worker cold start ${crypto.randomUUID()}`);
