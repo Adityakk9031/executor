@@ -149,18 +149,7 @@ export const makeListings = (options: {
                 value: outcome,
                 bytes: JSON.stringify(outcome.listing.items).length * 2,
               });
-              // Encoded with the write, so readers of this evaluation never wait for it.
-              return yield* options.declarations.persist(
-                state.app.id,
-                id,
-                Schema.encodeEffect(ListingJson)(outcome.listing).pipe(
-                  Effect.map((json) => ({
-                    at: load.started,
-                    json,
-                    until: load.started + policy.maxStaleMillis,
-                  })),
-                ),
-              );
+              return;
             }
             if (!(outcome instanceof Failed)) return;
             if (
@@ -184,6 +173,24 @@ export const makeListings = (options: {
               bytes: 0,
             });
           });
+        /**
+         * Keep a listing beyond this process. It runs after the evaluation's readers have their
+         * outcome, and encodes with the write, so they never wait for it.
+         */
+        const store = (outcome: Outcome, load: PendingLoad) =>
+          outcome instanceof Listed
+            ? options.declarations.persist(
+                state.app.id,
+                id,
+                Schema.encodeEffect(ListingJson)(outcome.listing).pipe(
+                  Effect.map((json) => ({
+                    at: load.started,
+                    json,
+                    until: load.started + policy.maxStaleMillis,
+                  })),
+                ),
+              )
+            : Effect.void;
         /**
          * Stops the evaluation once it has run for `loadMillis` with no reader waiting: at that
          * point if nobody waits, otherwise when the last waiting reader leaves.
@@ -222,7 +229,9 @@ export const makeListings = (options: {
                 yield* Deferred.succeed(load.done, new Stopped(at - load.started));
               }),
             ),
-            Effect.asVoid,
+            // In the evaluation's own fiber: background work that offered the write as new
+            // background work would find the host refusing it once the request is closing.
+            Effect.flatMap((outcome) => store(outcome, load)),
             Effect.withSpan("sdk.tools.listing.evaluate"),
             // Background work may start uninterruptible; its time bound must still stop it.
             Effect.interruptible,
