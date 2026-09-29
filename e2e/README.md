@@ -261,9 +261,9 @@ Cloudflare, PlanetScale, Google, GitHub, Context.dev, or 1Password credentials
 are needed. Docker must be running; Bun, Playwright Chromium and ffmpeg are
 normal tool prerequisites.
 
-The disposable Postgres server allows 512 connections. Local Hyperdrive forwards
-TCP directly, so concurrent requests and background jobs cannot share the deployed
-pooler's backend connections. PostgreSQL's default 100 slots can reject parallel
+The disposable Postgres server allows 512 connections. The local Worker connects
+directly, so concurrent requests and background jobs cannot share a pooler's
+backend connections. PostgreSQL's default 100 slots can reject parallel
 scenario startup. This capacity setting applies only to the managed test container.
 
 Setting `E2E_CLOUD_URL` explicitly attaches to that server instead. A failed
@@ -281,9 +281,8 @@ The SDK isolation scenario also runs on the disposable Cloud stage. Deployed
 runs use a scoped Axiom reader for delivered telemetry. This is correctness
 coverage; it does not establish Cloud load capacity.
 
-Neon stages connect directly to Neon's pooled endpoint with verified TLS and
-allocate no Hyperdrive configuration. Explicit PlanetScale stages retain Hyperdrive.
-Realistic concurrent CI coverage of that path is tracked in
+Neon stages connect to Neon's pooled endpoint and PlanetScale stages to their
+branch's PgBouncer, both directly over verified TLS. Realistic concurrent CI coverage of that path is tracked in
 [#508](https://github.com/UsefulSoftwareCo/executor-next/issues/508).
 
 ### MCP server scenarios
