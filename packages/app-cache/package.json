@@ -2,6 +2,7 @@
   "name": "@executor-js/app-cache",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
     "./contracts": "./src/contracts/cache.ts",

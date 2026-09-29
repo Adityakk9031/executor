@@ -115,21 +115,23 @@ export const appUi = (
           const source = yield* safeOperation(executor.appData.subscribe(input));
           return source.pipe(
             Stream.mapError(operationFailure),
-            Stream.map(({ value }) => ({ type: "snapshot" as const, value })),
+            Stream.map(({ value, revision }) => ({ type: "snapshot" as const, value, revision })),
             Stream.merge(
               Stream.tick("15 seconds").pipe(Stream.map(() => ({ type: "heartbeat" as const }))),
             ),
             Stream.mapEffect((frame) =>
               Effect.gen(function* () {
-                yield* operation(payload).pipe(
-                  Effect.withSpan(
-                    frame.type === "snapshot"
-                      ? "app.ui.snapshot.authorize"
-                      : "app.ui.heartbeat.authorize",
-                  ),
-                );
+                // The first result belongs to this request, which was just authorized.
+                if (frame.type === "heartbeat" || frame.revision > 0)
+                  yield* operation(payload).pipe(
+                    Effect.withSpan(
+                      frame.type === "snapshot"
+                        ? "app.ui.snapshot.authorize"
+                        : "app.ui.heartbeat.authorize",
+                    ),
+                  );
                 if (frame.type === "heartbeat") return frame;
-                return { ...frame, trace: yield* currentTraceContext };
+                return { type: frame.type, value: frame.value, trace: yield* currentTraceContext };
               }).pipe(
                 Effect.withSpan(
                   frame.type === "snapshot" ? "app.ui.snapshot.send" : "app.ui.heartbeat",

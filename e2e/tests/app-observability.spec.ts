@@ -214,7 +214,7 @@ layer(HostedLive, { excludeTestServices: true })("App observability", (it) => {
         if (assetTraceId === undefined) return yield* Effect.die("The asset has no request trace");
         if (mapName === undefined)
           return yield* Effect.die("The deployed browser entry has no source map");
-        expect(entry.cacheControl).toBe("private, no-cache, must-revalidate");
+        expect(entry.cacheControl).toBe("private, max-age=31536000, immutable");
         const etag = entry.etag;
         if (etag === undefined) return yield* Effect.die("The immutable asset has no ETag");
         const revalidated = yield* browser.use(

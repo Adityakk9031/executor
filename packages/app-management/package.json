@@ -2,6 +2,7 @@
   "name": "@executor-js/app-management",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/http.ts",
     "./http": "./src/http.ts",

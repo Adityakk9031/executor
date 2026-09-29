@@ -57,7 +57,7 @@ import {
   organizationOwner,
   type OrganizationAccess,
 } from "../contracts/organization.ts";
-import { checkAccounts, ownProfile } from "./access.ts";
+import { checkAccounts, selectedProfile } from "./access.ts";
 import type { appAddresses } from "./app-addresses.ts";
 
 /** Authorization belongs to one HTTP request, never a shared or timed cache. */
@@ -308,10 +308,7 @@ export const hostedAppUi = (
       ).pipe(Effect.mapError(unavailable));
       if (profile !== undefined) {
         const executor = yield* Effect.flatten(HostedExecutor).pipe(Effect.mapError(unavailable));
-        yield* ownProfile(executor, current.access.owner, current.app.id, profile).pipe(
-          Effect.flatMap((selected) =>
-            checkAccounts(executor, current.access.owner, selected.accounts),
-          ),
+        yield* selectedProfile(executor, current.access.owner, current.app.id, profile).pipe(
           Effect.provideService(CurrentOrganization, current.access),
           Effect.provideService(CurrentUserId, current.access.userId),
           Effect.mapError(dataFailure),
@@ -390,7 +387,10 @@ export const hostedAppUi = (
               ),
               Stream.mapEffect((snapshot) =>
                 Effect.gen(function* () {
-                  yield* access.pipe(Effect.withSpan("app.ui.snapshot.authorize"));
+                  // The first result belongs to this request, which was just authorized.
+                  // Every later result, and the heartbeat, checks access again.
+                  if (snapshot.revision > 0)
+                    yield* access.pipe(Effect.withSpan("app.ui.snapshot.authorize"));
                   return {
                     type: "snapshot" as const,
                     value: snapshot.value,
@@ -541,20 +541,16 @@ export const hostedAppUi = (
     const selected =
       profile === undefined
         ? undefined
-        : yield* ownProfile(executor, current.access.owner, current.app.id, profile).pipe(
+        : yield* selectedProfile(executor, current.access.owner, current.app.id, profile).pipe(
             Effect.provideService(CurrentOrganization, current.access),
             Effect.provideService(CurrentUserId, current.access.userId),
             Effect.mapError(() => new UiForbidden()),
           );
-    if (selected !== undefined) {
-      if (!selected.enabled || selected.status === "removing" || selected.status === "removed")
-        return yield* new UiForbidden();
-      yield* checkAccounts(executor, current.access.owner, selected.accounts).pipe(
-        Effect.provideService(CurrentOrganization, current.access),
-        Effect.provideService(CurrentUserId, current.access.userId),
-        Effect.mapError(() => new UiForbidden()),
-      );
-    }
+    if (
+      selected !== undefined &&
+      (!selected.enabled || selected.status === "removing" || selected.status === "removed")
+    )
+      return yield* new UiForbidden();
     const document = yield* appDocument({
       profile: selected?.id,
       expectedProfileRevision: selected?.revision,
