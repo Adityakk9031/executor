@@ -795,7 +795,7 @@ export const scenarios = {
   publishingDialog: {
     fixtures: "actors",
     file: "publishing-dialog.spec.ts",
-    title: "Publishing dialog explains readiness and keeps copied listings separate",
+    title: "Publishing dialog explains readiness, repairs names and keeps copied listings separate",
     targets: {
       "self-host": scheduled,
       cloud: na(
