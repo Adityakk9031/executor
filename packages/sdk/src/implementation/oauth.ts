@@ -135,7 +135,7 @@ const renewalLease = 20_000;
  */
 const heldClaims = new Set<string>();
 
-/** Why a saved grant cannot supply credentials. Recorded on the resolve span. */
+/** Why a saved grant cannot supply credentials. Recorded on the resolve and usable spans. */
 type ReconnectReason =
   | "grant_missing"
   | "grant_unusable"
@@ -153,6 +153,34 @@ const causeAttributes = (cause: OAuthFailureCause) => ({
     : { "oauth.error.provider_code": cause.providerError }),
   ...(cause.field === undefined ? {} : { "oauth.error.field": cause.field }),
 });
+
+/** Spans that can find a grant that needs reconnecting. */
+type ReconnectSpan = "oauth.resolve" | "oauth.usable";
+
+/**
+ * A grant that needs reconnecting is an expected account state, not a fault of the operation that
+ * found it. Record why as the span's outcome and return the failure as a value; the operation fails
+ * its caller with it only after the span has ended, so the span carries no error status.
+ */
+const reconnectRequired = (
+  span: ReconnectSpan,
+  account: AccountId,
+  reason: ReconnectReason,
+  cause?: OAuthFailureCause,
+) =>
+  Effect.annotateCurrentSpan({
+    [`${span}.outcome`]: "reconnect",
+    "oauth.reconnect.reason": reason,
+    ...(cause === undefined ? {} : causeAttributes(cause)),
+  }).pipe(
+    Effect.as(
+      new OAuthReconnectRequired({
+        account,
+        ...(reason === "renewal_interrupted" ? { reason } : {}),
+        ...(cause === undefined ? {} : { cause }),
+      }),
+    ),
+  );
 
 /**
  * Classify a failed request by who must act. A 2xx response that failed validation is an
@@ -983,19 +1011,7 @@ export const makeOAuth = (
         return yield* credentials.decrypt(account.id, account.encryptedCredentials);
       /** Record why the grant cannot be used on this span; only fixed vocabularies and codes. */
       const reconnect = (reason: ReconnectReason, cause?: OAuthFailureCause) =>
-        Effect.annotateCurrentSpan({
-          "oauth.resolve.outcome": "reconnect",
-          "oauth.reconnect.reason": reason,
-          ...(cause === undefined ? {} : causeAttributes(cause)),
-        }).pipe(
-          Effect.as(
-            new OAuthReconnectRequired({
-              account: account.id,
-              ...(reason === "renewal_interrupted" ? { reason } : {}),
-              ...(cause === undefined ? {} : { cause }),
-            }),
-          ),
-        );
+        reconnectRequired("oauth.resolve", account.id, reason, cause);
       // Set once this call has waited for another renewal of the grant. The token it then reads
       // is that renewal's result, and is used until it expires rather than renewed ahead again.
       let awaited = false;
@@ -1208,17 +1224,20 @@ export const makeOAuth = (
   /**
    * Fail as `resolve` would when the stored grant can no longer release credentials, without
    * renewing it or releasing anything. A grant that renewal would replace still passes; its
-   * outcome is known only once a live resolve renews it.
+   * outcome is known only once a live resolve renews it. A grant that needs reconnecting is
+   * recorded as the span's outcome, as `resolve` records it, and fails only after the span.
    */
   const usable = (account: StoredAccount, provider: ProviderDefinition) =>
     Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan("oauth.provider.id", account.provider);
       if (provider.auth[account.method]?.type === "secrets") return;
-      const reconnect = new OAuthReconnectRequired({ account: account.id });
+      const reconnect = (reason: ReconnectReason) =>
+        reconnectRequired("oauth.usable", account.id, reason);
       const row = yield* query(() =>
         db.findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) }),
       );
-      if (row === null || row.status === "reconnect") return yield* reconnect;
+      if (row === null) return yield* reconnect("grant_missing");
+      if (row.status === "reconnect") return yield* reconnect("grant_unusable");
       // A renewal in progress, or one a stopped process abandoned, is settled by the next live
       // resolve; its outcome is not known until then.
       if (!row.status.startsWith("ready_")) return;
@@ -1231,8 +1250,13 @@ export const makeOAuth = (
         (!renewable && grant.expiresAt > now)
       )
         return;
-      if (protocol === undefined || !renewable) return yield* reconnect;
-    }).pipe(Effect.withSpan("oauth.usable"));
+      if (protocol === undefined || !renewable) return yield* reconnect("not_renewable");
+    }).pipe(
+      Effect.withSpan("oauth.usable"),
+      Effect.flatMap((checked) =>
+        Schema.is(OAuthReconnectRequired)(checked) ? Effect.fail(checked) : Effect.void,
+      ),
+    );
 
   const resolve = (account: StoredAccount, provider: ProviderDefinition, rejected?: JsonObject) =>
     Effect.gen(function* () {

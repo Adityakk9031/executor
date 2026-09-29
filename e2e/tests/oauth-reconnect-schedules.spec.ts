@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
-import { Evidence } from "../support/evidence.ts";
+import { Evidence, Telemetry } from "../support/evidence.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
@@ -14,7 +14,12 @@ import { createProfile } from "../support/profiles.ts";
 import { serverControl } from "../support/server-control.ts";
 import { scenarios } from "../test-plan.ts";
 
-const AppProvider = Schema.Struct({ id: Schema.String });
+const AppProvider = Schema.Struct({
+  id: Schema.String,
+  requirements: Schema.Struct({
+    accounts: Schema.Struct({ service: Schema.Struct({ provider: Schema.String }) }),
+  }),
+});
 const SignIn = Schema.Struct({ authorizationUrl: Schema.String });
 const SetupStatus = Schema.Struct({ status: Schema.String });
 const Settings = Schema.Array(
@@ -49,6 +54,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth reconnect schedules", (i
             actors = yield* Actors,
             browser = yield* Browser,
             evidence = yield* Evidence,
+            telemetry = yield* Telemetry,
             http = yield* HttpClient.HttpClient;
           const issuer = yield* oauthSetupIssuer;
           const prefix = `/api/organizations/${actors.organization.id}`;
@@ -76,6 +82,7 @@ export default defineApp(requirements, async () => ({
           });
           expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
           const app = yield* body(AppProvider, deployed);
+          const provider = app.requirements.accounts.service.provider;
           const path = `${prefix}/apps/${app.id}`;
           yield* Effect.addFinalizer(() =>
             api.request(actors.owner, "DELETE", path).pipe(Effect.orDie),
@@ -218,6 +225,73 @@ export default defineApp(requirements, async () => ({
           ).toEqual([]);
           expect((yield* issuer.metrics).refreshes).toBe(refreshes);
           expect((yield* issuer.metrics).resourceRequests.POST).toBe(posts);
+          // Before claiming the occurrence, the dispatcher checked the account's stored grant and
+          // found it must reconnect; the schedule list runs the same check. That is an expected
+          // account state the owner resolves, recorded as the check's outcome: neither a check nor
+          // any span above it is an error.
+          const checks = yield* telemetry
+            .search("oauth.usable", { "oauth.provider.id": provider })
+            .pipe(
+              Effect.map((found) =>
+                found.data.filter(
+                  ({ span }) =>
+                    span.status === "error" || span.tags["oauth.usable.outcome"] !== undefined,
+                ),
+              ),
+              // Each check with the delivered spans above it, up to its trace's root once delivered.
+              // A request's root is the test client's span, which is exported when the case ends.
+              Effect.flatMap((found) =>
+                Effect.forEach(found, (check) =>
+                  telemetry.query(check.traceId).pipe(
+                    Effect.map((trace) => {
+                      const byId = new Map(
+                        trace.data
+                          .filter(({ span }) => !span.operationName.startsWith("[missing parent"))
+                          .map(({ span }) => [span.spanId, span]),
+                      );
+                      const path = [];
+                      for (
+                        let span = byId.get(check.span.spanId);
+                        span !== undefined;
+                        span = span.parentSpanId === null ? undefined : byId.get(span.parentSpanId)
+                      )
+                        path.push(span);
+                      return { check, path };
+                    }),
+                  ),
+                ),
+              ),
+              // The dispatcher's check runs in the background, outside any request, so its whole
+              // trace is the product's own.
+              Effect.flatMap((found) =>
+                found.some(
+                  ({ path }) =>
+                    path.at(-1)?.parentSpanId === null &&
+                    !/^(GET|POST|PUT|PATCH|DELETE) /.test(path.at(-1)?.operationName ?? ""),
+                )
+                  ? Effect.succeed(found)
+                  : Effect.fail(new Error("The dispatcher's grant check has not arrived")),
+              ),
+              Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 40 }),
+            );
+          for (const { check, path } of checks) {
+            expect(check.span.status, "A grant that must reconnect is not a failed check").not.toBe(
+              "error",
+            );
+            expect(check.span.tags).toMatchObject({
+              "oauth.provider.id": provider,
+              "oauth.usable.outcome": "reconnect",
+              "oauth.reconnect.reason": "grant_unusable",
+            });
+            expect(
+              path.filter((span) => span.status === "error").map((span) => span.operationName),
+              "No span above the check marks the reconnect state as an error",
+            ).toEqual([]);
+          }
+          yield* evidence.json(
+            "waiting-for-reconnect-checks.json",
+            checks.map(({ path }) => path),
+          );
           // The schedule's discovery reports the same account state to the owner.
           const definitions = yield* api.request(
             actors.owner,
@@ -260,6 +334,30 @@ export default defineApp(requirements, async () => ({
             (yield* runs).filter((row) => row.status !== "succeeded"),
             "No occurrence failed while the account was reconnecting",
           ).toEqual([]);
+
+          // A genuine failure on the same path is still an error: the token endpoint is down, so
+          // the occurrence's run cannot renew the grant and fails without ending it.
+          yield* issuer.configure({ tokenError: { status: 503, body: {} } });
+          yield* nextOccurrence;
+          yield* runWith("failed", 1);
+          const unavailable = yield* telemetry
+            .search("oauth.resolve", {
+              "oauth.provider.id": provider,
+              "oauth.renewal.outcome": "service_unavailable",
+            })
+            .pipe(
+              Effect.flatMap((found) =>
+                found.data.length > 0
+                  ? Effect.succeed(found.data)
+                  : Effect.fail(new Error("The failed renewal has not arrived")),
+              ),
+              Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 40 }),
+            );
+          expect(
+            unavailable.map(({ span }) => span.status),
+            "A renewal the service could not answer is a failed span",
+          ).toEqual(unavailable.map(() => "error"));
+          yield* issuer.configure({ tokenError: null });
         }),
       ),
     { timeout: 120_000 },
