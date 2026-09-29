@@ -5,6 +5,7 @@ import { Effect, Exit, type Cause } from "effect";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon } from "@hugeicons/core-free-icons";
 import { accountSelectionAtom, profileMutations } from "../../contracts/profiles.ts";
+import { accountUsageAtom, disconnectAccountAtom } from "../../contracts/accounts.ts";
 import type { DashboardError } from "../../contracts/errors.ts";
 import { Failure } from "../components/common.tsx";
 import { AccountForm } from "./add-account.tsx";
@@ -19,6 +20,7 @@ import {
 import {
   AppAccounts as SharedAccounts,
   RemoveAccountBinding,
+  useUnusedAccountPrompt,
 } from "@executor-js/ui/dashboard/app-accounts";
 import type {
   Account,
@@ -87,17 +89,22 @@ export function AppAccounts({
   readonly profile: Profile | undefined;
 }) {
   const chooser = useAccountChooser({ app, profile, onSelected });
+  const unused = useUnusedAccountPrompt({
+    usage: accountUsageAtom,
+    remove: disconnectAccountAtom,
+    Failure,
+  });
   const [connection, setConnection] = useState<{
     readonly slot: string;
     readonly requirement: AccountRequirement;
   }>();
   const [connecting, setConnecting] = useState(false);
-  // A saved account shows at once; the inventory reload replaces it with its full summary.
+  // A saved account shows at once. Drop it once the inventory lists it, so the inventory alone
+  // decides later changes: a deleted account must not reappear from this copy.
   const [added, setAdded] = useState<readonly Account[]>([]);
-  const accounts = [
-    ...data.accounts,
-    ...added.filter((account) => !data.accounts.some((item) => item.id === account.id)),
-  ];
+  const pending = added.filter((account) => !data.accounts.some((item) => item.id === account.id));
+  if (pending.length !== added.length) setAdded(pending);
+  const accounts = [...data.accounts, ...pending];
   return (
     <>
       <SharedAccounts
@@ -118,6 +125,7 @@ export function AppAccounts({
               label={label}
               update={profileMutations({ app: app.id, profile: profile.id }).update}
               Failure={Failure}
+              onRemoved={(removed) => void unused.check(removed)}
             />
           )
         }
@@ -142,6 +150,7 @@ export function AppAccounts({
         )}
       />
       {chooser.error && <Failure cause={chooser.error} />}
+      {unused.prompt}
       <Dialog
         open={connection !== undefined}
         onOpenChange={(open) => {

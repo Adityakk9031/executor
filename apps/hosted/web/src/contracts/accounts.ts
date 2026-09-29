@@ -60,6 +60,14 @@ export const reconnectAccountAtom = HostedClient.runtime.fn(
       );
     }),
 );
+/** A fresh read of which apps select an account, taken after a selection change commits. */
+export const accountUsageAtom = Atom.family((organization: OrganizationReference) =>
+  HostedClient.runtime.fn((account: AccountId) =>
+    Effect.flatMap(HostedClient, (client) =>
+      client.accounts.get({ params: { organization, account } }),
+    ),
+  ),
+);
 const disconnectAccount = Atom.family((key: AccountKey) =>
   HostedClient.runtime.fn((_: void, get) =>
     Effect.flatMap(HostedClient, (client) => client.accounts.disconnect({ params: key })).pipe(

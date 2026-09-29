@@ -16,6 +16,7 @@ import type {
 import {
   AppAccounts as SharedAccounts,
   RemoveAccountBinding,
+  useUnusedAccountPrompt,
 } from "@executor-js/ui/dashboard/app-accounts";
 import type { AccountSummary } from "@executor-js/ui/contracts/dashboard";
 import { Button } from "@executor-js/ui/components/button";
@@ -28,6 +29,7 @@ import type { HostedOAuthSignIn } from "@executor-js/hosted-server";
 import type { AccountConnectionId } from "@executor-js/sdk";
 import type { HostedError } from "../../contracts/errors.ts";
 import { accountSelectionAtom, profileMutations } from "../../contracts/profiles.ts";
+import { accountUsageAtom, disconnectAccountAtom } from "../../contracts/accounts.ts";
 import { AtomRegistry } from "effect/unstable/reactivity";
 
 /** A new profile starts with every multiple-account slot bound to no accounts. */
@@ -102,6 +104,11 @@ export function AppAccounts({
   const canUse = Option.isSome(data) && data.value.canUse;
   const editable = canUse && app.activeDeployment !== null;
   const chooser = useAccountChooser({ app, profile, onSelected });
+  const unused = useUnusedAccountPrompt({
+    usage: accountUsageAtom(organization),
+    remove: (account) => disconnectAccountAtom({ organization, account }),
+    Failure: HostedFailure,
+  });
   const [connection, setConnection] = useState<{
     readonly slot: string;
     readonly requirement: AccountRequirement;
@@ -131,6 +138,7 @@ export function AppAccounts({
               label={label}
               update={profileMutations({ organization, app: app.id, profile: profile.id }).update}
               Failure={HostedFailure}
+              onRemoved={(removed) => void unused.check(removed)}
             />
           )
         }
@@ -147,6 +155,7 @@ export function AppAccounts({
           : {})}
       />
       {chooser.error && <HostedFailure cause={chooser.error} />}
+      {unused.prompt}
       <ConnectionModal
         open={connection !== undefined}
         busy={connecting}

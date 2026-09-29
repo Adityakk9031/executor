@@ -319,11 +319,105 @@ export default defineApp({ accounts: { primary: service, mailboxes: service.many
             primary.locator(":checked").waitFor({ state: "detached" }),
           );
         });
+        const unused = yield* browser.use("Find the unused account prompt", (page) =>
+          Promise.resolve(page.getByRole("dialog", { name: "Delete unused account?" })),
+        );
+        yield* browser.use("No app uses the removed account, so deletion is offered", () =>
+          unused.waitFor({ state: "visible" }),
+        );
+        expect(
+          yield* browser.use("The prompt names the account and explains accounts and apps", () =>
+            Promise.all([
+              unused.getByText("Second account · Account fixture", { exact: true }).count(),
+              unused.getByText("Accounts are saved separately from apps", { exact: false }).count(),
+            ]),
+          ),
+        ).toEqual([1, 1]);
+        yield* browser.use("Let the prompt finish opening", (page) =>
+          page.waitForFunction(() =>
+            document.getAnimations().every((animation) => animation.playState !== "running"),
+          ),
+        );
+        yield* browser.checkpoint("Unused account prompt");
+        yield* browser.use("Keep the unused account", () =>
+          unused.getByRole("button", { name: "Keep account", exact: true }).click(),
+        );
+        yield* browser.use("Keeping the account closes the prompt", () =>
+          unused.waitFor({ state: "hidden" }),
+        );
         expect(yield* bindings).toEqual({ mailboxes: [accounts[0], third] });
         for (const account of accounts)
           expect(
             (yield* api.request(actors.owner, "GET", `${prefix}/accounts/${account}`)).status,
           ).toBe(200);
+        // Unselecting is not a removal: it never reads the account's usage or offers deletion.
+        const usageReads: string[] = [];
+        const onRequest = (request: { method: () => string; url: () => string }) => {
+          if (
+            request.method() === "GET" &&
+            new URL(request.url()).pathname.endsWith(`/accounts/${third}`)
+          )
+            usageReads.push(request.url());
+        };
+        yield* browser.use("Watch for account usage reads", (page) =>
+          Promise.resolve(page.on("request", onRequest)),
+        );
+        expect(
+          yield* saveChoice("Unselect the mailbox only it uses", () =>
+            mailboxes.getByRole("checkbox", { name: "Third account", exact: true }).click(),
+          ),
+        ).toBe(200);
+        expect(
+          yield* saveChoice("Select that mailbox again", () =>
+            mailboxes.getByRole("checkbox", { name: "Third account", exact: true }).click(),
+          ),
+        ).toBe(200);
+        yield* browser.use("Stop watching account usage reads", (page) =>
+          Promise.resolve(page.off("request", onRequest)),
+        );
+        expect(usageReads).toEqual([]);
+        expect(
+          yield* browser.use("Unselecting offers no deletion", (page) =>
+            page.getByRole("dialog").count(),
+          ),
+        ).toBe(0);
+        expect(yield* bindings).toEqual({ mailboxes: [accounts[0], third] });
+        expect(
+          yield* browser.use("Only selected mailboxes offer removal", () =>
+            Promise.all(
+              ["First account", "Second account", "Third account"].map((label) =>
+                mailboxes.getByRole("button", { name: `Remove ${label}`, exact: true }).count(),
+              ),
+            ),
+          ),
+        ).toEqual([1, 0, 1]);
+        yield* Effect.gen(function* () {
+          yield* browser.use("Remove the mailbox from its row", () =>
+            mailboxes.getByRole("checkbox", { name: "Third account", exact: true }).hover(),
+          );
+          yield* browser.use("Remove the mailbox from its row", () =>
+            mailboxes.getByRole("button", { name: "Remove Third account", exact: true }).click(),
+          );
+        });
+        yield* browser.use("Removing the last use offers deletion", () =>
+          unused.waitFor({ state: "visible" }),
+        );
+        yield* browser.use("Delete the unused account", () =>
+          unused.getByRole("button", { name: "Delete account", exact: true }).click(),
+        );
+        yield* browser.use("Deleting the account closes the prompt", () =>
+          unused.waitFor({ state: "hidden" }),
+        );
+        const inventory = yield* body(
+          Schema.Struct({ accounts: Schema.Array(Schema.Struct({ id: Schema.String })) }),
+          yield* api.request(actors.owner, "GET", `${prefix}/inventory`),
+        );
+        expect(inventory.accounts.map((account) => account.id)).not.toContain(third);
+        expect(yield* bindings).toEqual({ mailboxes: [accounts[0]] });
+        yield* shows("mailboxes", "The deleted account is no longer offered", [
+          "First account ✓",
+          "Second account",
+        ]);
         yield* browser.use("Use the chooser at phone width", (page) =>
           page.setViewportSize({ width: 390, height: 844 }),
         );

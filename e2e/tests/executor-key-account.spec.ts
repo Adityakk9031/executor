@@ -129,6 +129,18 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
                     .getByRole("button", { name: `Remove ${account.label}`, exact: true })
                     .click(),
               );
+              // No other app uses the managed key, so the page offers to delete it; keep it.
+              yield* browser.use("Keep the managed account when offered its deletion", (page) =>
+                page
+                  .getByRole("dialog", { name: "Delete unused account?" })
+                  .getByRole("button", { name: "Keep account", exact: true })
+                  .click(),
+              );
+              yield* browser.use("The deletion offer closes", (page) =>
+                page
+                  .getByRole("dialog", { name: "Delete unused account?" })
+                  .waitFor({ state: "hidden" }),
+              );
               yield* browser.use("Wait for the confirmed removal", (page) =>
                 page
                   .getByRole("radio", { name: account.label, exact: true, checked: false })

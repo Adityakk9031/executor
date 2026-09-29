@@ -16,6 +16,7 @@ import type {
 import {
   providerDisplayUrl,
   accountNeedsSignIn,
+  type AccountDetail,
   type AccountSummary,
   type FailureProps,
 } from "../../contracts/dashboard.ts";
@@ -23,6 +24,13 @@ import { ProviderIcon } from "./common.tsx";
 import { EmptyState } from "./empty-state.tsx";
 import { Button } from "../components/button.tsx";
 import { Checkbox } from "../components/checkbox.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from "../components/dialog.tsx";
 
 /** Explain a provider's account limit and offer a separate profile when the host permits it. */
 export function ProviderAccountSupport({
@@ -64,6 +72,7 @@ export function RemoveAccountBinding<E>({
   label,
   update,
   Failure,
+  onRemoved,
 }: {
   readonly profile: Profile;
   readonly slot: string;
@@ -75,6 +84,7 @@ export function RemoveAccountBinding<E>({
     E
   >;
   readonly Failure: ComponentType<FailureProps<E>>;
+  readonly onRemoved?: ((account: AccountId) => void) | undefined;
 }) {
   const save = useAtomSet(update, { mode: "promiseExit" });
   const result = useAtomValue(update);
@@ -104,6 +114,7 @@ export function RemoveAccountBinding<E>({
           const saved = await save({ accounts: next, expectedRevision: profile.revision });
           setPending(false);
           if (Exit.isFailure(saved)) setError(saved.cause);
+          else onRemoved?.(account);
         }}
       >
         <HugeiconsIcon icon={Cancel01Icon} size={13} aria-hidden />
@@ -114,6 +125,100 @@ export function RemoveAccountBinding<E>({
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * Accounts are saved separately from the apps that select them, so removing one from an app
+ * keeps it. After an explicit removal leaves no app selecting an account, offer to delete it.
+ * Unselecting an account in a chooser is not a removal and does not prompt.
+ */
+export function useUnusedAccountPrompt<E, A>({
+  usage,
+  remove,
+  Failure,
+}: {
+  readonly usage: Atom.AtomResultFn<AccountId, AccountDetail, unknown>;
+  readonly remove: (account: AccountId) => Atom.AtomResultFn<void, A, E>;
+  readonly Failure: ComponentType<FailureProps<E>>;
+}) {
+  const read = useAtomSet(usage, { mode: "promiseExit" });
+  const [unused, setUnused] = useState<AccountDetail>();
+  const check = async (account: AccountId) => {
+    const exit = await read(account);
+    // The removal already succeeded; a failed read only skips this optional prompt.
+    if (Exit.isSuccess(exit) && exit.value.canManage && exit.value.apps.length === 0)
+      setUnused(exit.value);
+  };
+  return {
+    check,
+    prompt: unused && (
+      <DeleteUnusedAccount
+        key={unused.account.id}
+        data={unused}
+        remove={remove(unused.account.id)}
+        Failure={Failure}
+        onClose={() => setUnused(undefined)}
+      />
+    ),
+  };
+}
+
+function DeleteUnusedAccount<E, A>({
+  data,
+  remove,
+  Failure,
+  onClose,
+}: {
+  readonly data: AccountDetail;
+  readonly remove: Atom.AtomResultFn<void, A, E>;
+  readonly Failure: ComponentType<FailureProps<E>>;
+  readonly onClose: () => void;
+}) {
+  const run = useAtomSet(remove, { mode: "promiseExit" });
+  const result = useAtomValue(remove);
+  const pending = AsyncResult.isWaiting(result);
+  const provider = data.provider.definition.name;
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !pending) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogTitle>Delete unused account?</DialogTitle>
+        <div className="flex min-w-0 items-center gap-2.5 text-sm font-medium">
+          <ProviderIcon name={provider} url={providerDisplayUrl(data.provider.definition)} />
+          <span className="min-w-0 break-words">
+            {data.account.label || "Unnamed account"} · {provider}
+          </span>
+        </div>
+        <DialogDescription>
+          Accounts are saved separately from apps, so any app can reuse them. Removing an account
+          from an app keeps it saved. No app uses this account now.
+        </DialogDescription>
+        <p className="text-sm text-muted-foreground">
+          Delete it if you no longer need it. This removes the saved credentials from Executor but
+          does not revoke access at {provider}.
+        </p>
+        {AsyncResult.isFailure(result) && <Failure cause={result.cause} />}
+        <DialogFooter>
+          <Button variant="outline" disabled={pending} onClick={onClose}>
+            Keep account
+          </Button>
+          <Button
+            variant="destructive"
+            loading={pending}
+            onClick={async () => {
+              if (Exit.isSuccess(await run())) onClose();
+            }}
+          >
+            Delete account
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -295,8 +400,8 @@ export function AppAccounts({
                             </>
                           )}
                           {status}
+                          {/* Unchecking only unselects; removal is its own action and may offer deletion. */}
                           {bound &&
-                            !(chooser && many) &&
                             removeAccountAction?.(slot, id, label ?? "Account disconnected")}
                         </li>
                       );

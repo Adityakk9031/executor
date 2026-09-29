@@ -264,6 +264,44 @@ layer(TestLive, { excludeTestServices: true })("Local profile picker", (it) => {
         expect(yield* saved(defaultProfile)).toEqual({ service: personal, mailboxes: [personal] });
         yield* browser.checkpoint("Connected accounts are chosen in place");
 
+        // An account connected here and then deleted leaves the list, even before any reload.
+        const mailboxRows = browser.use("Read the mailbox rows", (page) =>
+          slotRegion(page, "mailboxes")
+            .getByRole("checkbox")
+            .evaluateAll((boxes) => boxes.map((box) => box.closest("label")?.textContent ?? "")),
+        );
+        const rowsBefore = yield* mailboxRows;
+        yield* connect("mailboxes", "Old mailbox");
+        const oldMailbox = (page: Page) =>
+          slotRegion(page, "mailboxes").getByRole("checkbox", { name: "Old mailbox", exact: true });
+        yield* browser.use("The old mailbox is chosen", (page) =>
+          slotRegion(page, "mailboxes")
+            .getByRole("checkbox", { name: "Old mailbox", exact: true, checked: true })
+            .waitFor(),
+        );
+        yield* browser.use("Remove the old mailbox from its row", (page) =>
+          oldMailbox(page).hover(),
+        );
+        yield* browser.use("Remove the old mailbox from its row", (page) =>
+          slotRegion(page, "mailboxes")
+            .getByRole("button", { name: "Remove Old mailbox", exact: true })
+            .click(),
+        );
+        yield* browser.use("Delete the old mailbox when offered", (page) =>
+          page
+            .getByRole("dialog", { name: "Delete unused account?" })
+            .getByRole("button", { name: "Delete account", exact: true })
+            .click(),
+        );
+        yield* browser.use("The deletion offer closes", (page) =>
+          page.getByRole("dialog", { name: "Delete unused account?" }).waitFor({ state: "hidden" }),
+        );
+        yield* browser.use("The deleted mailbox leaves the list", (page) =>
+          oldMailbox(page).waitFor({ state: "detached" }),
+        );
+        expect((yield* saved(workProfile)).mailboxes).toEqual([personal, archive]);
+        expect(yield* mailboxRows).toEqual(rowsBefore);
+
         yield* browser.use("Open tools after choosing accounts in place", (page) =>
           page
             .getByRole("navigation", { name: "App navigation" })

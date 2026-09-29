@@ -55,6 +55,10 @@ export const replaceAccountCredentialsAtom = Atom.family((account: AccountId) =>
     ).pipe(Effect.tap((saved) => Effect.sync(() => accountCredentialsChanged(get, saved)))),
   ),
 );
+/** A fresh read of which apps select an account, taken after a selection change commits. */
+export const accountUsageAtom = DashboardClient.runtime.fn((account: AccountId) =>
+  Effect.flatMap(DashboardClient, (client) => client.dashboard.account({ params: { account } })),
+);
 /** Preserve unresolved app selections when their saved account is removed. */
 export const disconnectAccountAtom = Atom.family((account: AccountId) =>
   DashboardClient.runtime.fn((_: void, get) =>
