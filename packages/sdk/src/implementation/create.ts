@@ -41,6 +41,7 @@ export const createExecutor = (
     );
     const declarations = makeDeclarations({
       cache,
+      durable: options.durableDeclarations,
       background: options.background,
       resolveAccount: oauth.resolve,
       accountUsable: oauth.usable,

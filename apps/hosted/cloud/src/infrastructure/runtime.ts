@@ -1,5 +1,6 @@
 /** Cloud's app runtime: the shared runner in the API Worker, with R2 and the Cache API as build store. */
-import { CacheCommand, changesCache } from "@executor-js/app-cache/contracts";
+import { CacheCommand } from "@executor-js/app-cache/contracts";
+import { discardsEvaluated } from "@executor-js/app-cache/changes";
 import { traceHeaders } from "@executor-js/telemetry";
 import {
   AppCacheChanges,
@@ -123,7 +124,7 @@ export const cloudRuntime = Effect.fn(function* (
               yield* Effect.annotateCurrentSpan("cache.operation", parsed.operation);
               const reply = yield* target.cache(namespace, parsed);
               // Cache commands can arrive after the invocation, from a background refresh.
-              if (changesCache(parsed)) yield* (yield* AppCacheChanges).changed(app);
+              if (discardsEvaluated(parsed)) yield* (yield* AppCacheChanges).changed(app);
               return reply;
             }).pipe(Effect.provide(RuntimeContext.phantom), Effect.withSpan("runtime.cloud.cache")),
         };

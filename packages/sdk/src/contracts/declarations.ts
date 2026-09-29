@@ -116,9 +116,8 @@ export interface PendingLoad {
 
 /**
  * Process or isolate memory of evaluated declarations and tool listings. Keys digest every
- * evaluation input. Values are whatever the app returned, which can include text derived from
- * credentials, so they stay in this process and are never written to a shared or persistent
- * store. `pending`, `begin` and `end` track the one evaluation of each key running in this process.
+ * evaluation input. `pending`, `begin` and `end` track the one evaluation of each key running in
+ * this process.
  */
 export interface DeclarationCache {
   readonly get: (key: string) => Effect.Effect<KeptEntry | undefined>;
@@ -128,12 +127,37 @@ export interface DeclarationCache {
   readonly begin: (key: string, load: PendingLoad) => void;
   readonly end: (key: string, load: PendingLoad) => void;
   /**
-   * The app's cached upstream data changed at `at`: an app cache entry was refreshed, replaced
-   * or invalidated, for example after an MCP server announced a changed tool list. Results of
+   * The app's cached upstream data was invalidated or explicitly refreshed at `at`, for example
+   * after an MCP server announced a changed tool list. Results of
    * that app whose evaluation started no later than then are forgotten, including remembered
    * failures, and evaluations already running are not kept.
    */
   readonly changed: (app: string, at: number) => void;
+  /** Whether a result of the app evaluated from `at` predates an invalidation seen here. */
+  readonly outdated: (app: string, at: number) => boolean;
+}
+
+/** A result kept beyond this process: its JSON text and when the read that produced it began. */
+export interface DurableEntry {
+  readonly at: number;
+  readonly json: string;
+}
+
+/**
+ * Evaluated results kept where every process or isolate of a host reads them, under the same keys
+ * as `DeclarationCache`. Values can include text derived from credentials, so a host keeps them
+ * only where it already keeps the app's account-scoped cache, never in a store shared across
+ * owners. An app cache invalidation must make the host forget the app's results evaluated no
+ * later than then. `get` never fails: a failure or a slow store is a miss. `set` may drop a
+ * result, and keeps it at most until `until`.
+ */
+export interface DurableDeclarations {
+  readonly get: (app: string, key: string) => Effect.Effect<DurableEntry | undefined>;
+  readonly set: (
+    app: string,
+    key: string,
+    entry: DurableEntry & { readonly until: number },
+  ) => Effect.Effect<void>;
 }
 
 /**

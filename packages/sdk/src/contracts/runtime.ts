@@ -16,10 +16,11 @@ import { SourceFiles, type BuildMemoryExceeded } from "./deployment.ts";
 import { BuildId, Json } from "./shared.ts";
 
 /**
- * Runtimes report that an invocation replaced or removed the app's cached upstream data, such as
- * a refreshed MCP catalog or one invalidated after `notifications/tools/list_changed`, including
- * a refresh that finishes after the invocation. The SDK then stops reusing results it evaluated
- * for that app from the earlier data.
+ * Runtimes report that an invocation invalidated or explicitly refreshed the app's cached
+ * upstream data, such as an MCP catalog after `notifications/tools/list_changed`, including one
+ * that happens after the invocation. The SDK then stops reusing results it evaluated for that app
+ * from the earlier data. Routine refreshes are not reported; kept results pick them up when they
+ * refresh.
  */
 export const AppCacheChanges = Context.Reference<{
   readonly changed: (app: string) => Effect.Effect<void>;

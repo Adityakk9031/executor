@@ -6,6 +6,8 @@ import {
   type BackgroundWork,
   type DeclarationCache,
   type DeclarationLimits,
+  type DurableDeclarations,
+  type DurableEntry,
   type KeptEntry,
   type PendingLoad,
 } from "../contracts/declarations.ts";
@@ -64,6 +66,7 @@ export const makeDeclarationCache = (
       changes.set(app, Math.max(at, changes.get(app) ?? at));
       for (const [key, entry] of entries) if (entry.app === app && entry.at <= at) remove(key);
     },
+    outdated: (app, at) => at <= (changes.get(app) ?? -Infinity),
   };
 };
 
@@ -76,6 +79,7 @@ const JsonText = Schema.fromJsonString(Schema.Unknown);
  */
 export const makeDeclarations = (options: {
   readonly cache: DeclarationCache;
+  readonly durable: DurableDeclarations | undefined;
   readonly background: BackgroundWork | undefined;
   readonly resolveAccount: ReturnType<typeof makeOAuth>["resolve"];
   readonly accountUsable: ReturnType<typeof makeOAuth>["usable"];
@@ -139,9 +143,33 @@ export const makeDeclarations = (options: {
         { concurrency: "unbounded", discard: true },
       );
     }).pipe(Effect.provideService(CurrentProfile, state.profile));
+  /** A result another process or isolate kept, if the host keeps results beyond this one. */
+  const recall = (app: string, id: string) =>
+    options.durable === undefined ? Effect.succeed(undefined) : options.durable.get(app, id);
+  /**
+   * Keep a result beyond this process, after its readers have it when the host allows. `entry`
+   * runs only when the host keeps results beyond this process.
+   */
+  const persist = <E>(
+    app: string,
+    id: string,
+    entry: Effect.Effect<DurableEntry & { readonly until: number }, E>,
+  ) =>
+    Effect.gen(function* () {
+      const durable = options.durable;
+      if (durable === undefined) return;
+      const write = entry.pipe(
+        Effect.flatMap((kept) => durable.set(app, id, kept)),
+        Effect.catchCause(() => Effect.logWarning("Durable declaration write failed")),
+      );
+      if (options.background === undefined) return yield* write;
+      yield* options.background(write);
+    });
   return {
     key,
     authorize,
+    recall,
+    persist,
     /**
      * Read `command` for this invocation state. `retain` keeps only results determined by these
      * inputs; a result that reflects a live publisher is never reused. `current` rejects a cached
@@ -178,10 +206,41 @@ export const makeDeclarations = (options: {
             Effect.mapError(() => new StorageError()),
           );
           yield* options.cache.set(id, { kind: "json", app: state.app.id, at: started, json });
+          yield* persist(
+            state.app.id,
+            id,
+            Effect.succeed({
+              at: started,
+              json,
+              until: started + declarationFreshness.maxStaleMillis,
+            }),
+          );
           return value;
         });
-        const kept = yield* options.cache.get(id);
-        const cached = kept?.kind === "json" ? kept : undefined;
+        const current = (entry: KeptEntry | undefined, now: number) =>
+          entry?.kind === "json" && now - entry.at < declarationFreshness.maxStaleMillis
+            ? entry
+            : undefined;
+        const kept = current(yield* options.cache.get(id), yield* Clock.currentTimeMillis);
+        // Another isolate's result, unless an invalidation seen here replaced it. It is kept here
+        // too when it fits.
+        const recalled =
+          kept === undefined
+            ? yield* recall(state.app.id, id).pipe(
+                Effect.flatMap((found) =>
+                  Effect.gen(function* () {
+                    if (found === undefined || options.cache.outdated(state.app.id, found.at))
+                      return undefined;
+                    const entry: KeptEntry = { kind: "json", app: state.app.id, ...found };
+                    yield* options.cache.set(id, entry);
+                    return current(entry, yield* Clock.currentTimeMillis);
+                  }),
+                ),
+              )
+            : undefined;
+        const cached = kept ?? recalled;
+        if (recalled !== undefined)
+          yield* Effect.annotateCurrentSpan("executor.declarations.source", "durable");
         const age = cached === undefined ? Infinity : (yield* Clock.currentTimeMillis) - cached.at;
         if (cached === undefined || age >= declarationFreshness.maxStaleMillis) {
           yield* Effect.annotateCurrentSpan("executor.declarations.cache", "miss");

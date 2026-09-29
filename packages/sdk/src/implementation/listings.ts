@@ -1,5 +1,5 @@
 /** Evaluated tool listings, reused across requests through the declaration store. */
-import { Clock, Deferred, Effect, Exit } from "effect";
+import { Clock, Deferred, Effect, Exit, Option, Schema } from "effect";
 import {
   defaultToolListingPolicy,
   type BackgroundWork,
@@ -9,13 +9,14 @@ import {
 } from "../contracts/declarations.ts";
 import type { ResourceLifecycle } from "../contracts/executor.ts";
 import {
+  Tool,
   ToolListingTimedOut,
   type AppEvaluationFailed,
   type AppProviderFailed,
-  type Tool,
   type ToolListOptions,
 } from "../contracts/tools.ts";
-import type { DeploymentId, ProfileId } from "../contracts/shared.ts";
+import { ProfileRevision } from "../contracts/profiles.ts";
+import { DeploymentId, ProfileId } from "../contracts/shared.ts";
 import type { Declarations } from "./declarations.ts";
 import type { makeOAuth } from "./oauth.ts";
 import { resolve, type InvocationSnapshot } from "./tools.ts";
@@ -29,6 +30,18 @@ export interface ToolListing {
   };
   readonly items: ReadonlyArray<Tool>;
 }
+/** A listing's JSON text, as another process or isolate kept it. */
+const ListingJson = Schema.fromJsonString(
+  Schema.Struct({
+    catalog: Schema.Struct({
+      deployment: DeploymentId,
+      profile: Schema.optionalKey(ProfileId),
+      profileRevision: Schema.optionalKey(ProfileRevision),
+    }),
+    items: Schema.Array(Tool),
+  }),
+);
+
 /** Failures of the evaluation itself. Credential and storage failures are never remembered. */
 export type ListingFailure = AppEvaluationFailed | AppProviderFailed | ToolListingTimedOut;
 type ResolveError = Effect.Error<ReturnType<typeof resolve>>;
@@ -123,14 +136,27 @@ export const makeListings = (options: {
         /** Keep a listing, or a slow failure unless a listing that may still be served exists. */
         const keep = (outcome: Outcome, load: PendingLoad) =>
           Effect.gen(function* () {
-            if (outcome instanceof Listed)
-              return yield* cache.set(id, {
+            if (outcome instanceof Listed) {
+              yield* cache.set(id, {
                 kind: "value",
                 app: state.app.id,
                 at: load.started,
                 value: outcome,
                 bytes: JSON.stringify(outcome.listing.items).length * 2,
               });
+              // Encoded with the write, so readers of this evaluation never wait for it.
+              return yield* options.declarations.persist(
+                state.app.id,
+                id,
+                Schema.encodeEffect(ListingJson)(outcome.listing).pipe(
+                  Effect.map((json) => ({
+                    at: load.started,
+                    json,
+                    until: load.started + policy.maxStaleMillis,
+                  })),
+                ),
+              );
+            }
             if (!(outcome instanceof Failed)) return;
             if (
               outcome.error._tag !== "ToolListingTimedOut" &&
@@ -255,27 +281,53 @@ export const makeListings = (options: {
             return yield* outcome(done.value);
           });
 
+        // Without background work a stale listing is evaluated again first, like a missing one.
+        const servable = (at: number) =>
+          now - at < policy.freshMillis ||
+          (now - at < policy.maxStaleMillis && background !== undefined);
+        /** Serve a kept listing, refreshing it in the background once it is past `freshMillis`. */
+        const serve = (at: number, listed: Listed, source: "memory" | "durable") =>
+          Effect.gen(function* () {
+            yield* authorize;
+            const stale = now - at >= policy.freshMillis;
+            yield* Effect.annotateCurrentSpan({
+              "executor.declarations.cache": stale ? "stale" : "hit",
+              "executor.declarations.source": source,
+              "executor.declarations.age_ms": now - at,
+            });
+            if (stale) yield* refresh;
+            return listed.listing;
+          });
+
         const entry = yield* cache.get(id);
         const kept =
           entry?.kind === "value" &&
           (entry.value instanceof Listed || entry.value instanceof Failed)
             ? { at: entry.at, value: entry.value }
             : undefined;
-        if (kept?.value instanceof Listed) {
-          const age = now - kept.at;
-          // Without background work a stale listing is evaluated again first, like a missing one.
-          if (
-            age < policy.freshMillis ||
-            (age < policy.maxStaleMillis && background !== undefined)
-          ) {
-            yield* authorize;
-            const stale = age >= policy.freshMillis;
-            yield* Effect.annotateCurrentSpan({
-              "executor.declarations.cache": stale ? "stale" : "hit",
-              "executor.declarations.age_ms": age,
+        if (kept?.value instanceof Listed && servable(kept.at))
+          return yield* serve(kept.at, kept.value, "memory");
+        // Another isolate's listing, unless an invalidation seen here replaced it. It is kept
+        // here too when it fits. A remembered failure here does not hide it.
+        const recalled = yield* options.declarations.recall(state.app.id, id);
+        if (
+          recalled !== undefined &&
+          servable(recalled.at) &&
+          !cache.outdated(state.app.id, recalled.at)
+        ) {
+          const decoded = yield* Schema.decodeEffect(ListingJson)(recalled.json).pipe(
+            Effect.option,
+          );
+          if (Option.isSome(decoded)) {
+            const listed = new Listed(decoded.value);
+            yield* cache.set(id, {
+              kind: "value",
+              app: state.app.id,
+              at: recalled.at,
+              value: listed,
+              bytes: recalled.json.length * 2,
             });
-            if (stale) yield* refresh;
-            return kept.value.listing;
+            return yield* serve(recalled.at, listed, "durable");
           }
         }
         // A remembered failure spares a reader with a wait bound, such as MCP discovery, from

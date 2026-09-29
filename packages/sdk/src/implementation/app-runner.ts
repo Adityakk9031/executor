@@ -30,10 +30,10 @@ import {
   CacheCommand,
   CacheError,
   CacheReply,
-  changesCache,
   type CacheTransport,
 } from "@executor-js/app-cache/contracts";
 import { holdLeases } from "@executor-js/app-cache";
+import { discardsEvaluated } from "@executor-js/app-cache/changes";
 import { RuntimeProtocolFailed } from "../contracts/runtime.ts";
 import type { LoadedWorkerBuild, WorkerBundle } from "../contracts/worker-build.ts";
 import { appProtocol, type AppProtocol } from "./app-protocols.ts";
@@ -475,7 +475,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
                   Effect.flatMap(leases.transport),
                   Effect.tap(() =>
                     Effect.sync(() => {
-                      if (changesCache(command)) cacheChanged = true;
+                      if (discardsEvaluated(command)) cacheChanged = true;
                     }),
                   ),
                   Effect.match({
