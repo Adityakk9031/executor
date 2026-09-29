@@ -4,7 +4,7 @@ import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { pollingQuery, whileLoaded } from "@executor-js/ui/contracts/polling";
 import { Data, Effect } from "effect";
 import { Atom, AsyncResult } from "effect/unstable/reactivity";
-import type { AccountId, AppId, Profile } from "@executor-js/sdk";
+import type { Account, AccountId, AppId, Profile } from "@executor-js/sdk";
 import type { OrganizationReference } from "@executor-js/hosted-server/organization";
 import type {
   AppAudience,
@@ -76,6 +76,28 @@ export const refreshResourceDirectory = (
 ) => {
   invalidate(get, resourceDirectoryAtom(organization));
   invalidate(get, resourceDirectoryAtom(organization, "managed"));
+  get.refresh(inventoryAtom(organization));
+};
+/**
+ * Apply a confirmed rename or deletion to account rows in place. Access is unchanged, so the
+ * lists stay visible while they reconcile instead of being discarded.
+ */
+export const acknowledgeResourceAccount = (
+  get: Atom.FnContext,
+  organization: OrganizationReference,
+  account: AccountId,
+  saved: Account | undefined,
+) => {
+  for (const view of ["available", "managed"] as const)
+    acknowledge(get, resourceDirectoryAtom(organization, view), (data) => ({
+      ...data,
+      accounts:
+        saved === undefined
+          ? data.accounts.filter((entry) => entry.account.id !== account)
+          : data.accounts.map((entry) =>
+              entry.account.id === account ? { ...entry, account: saved } : entry,
+            ),
+    }));
   get.refresh(inventoryAtom(organization));
 };
 /** Keep app cards in sync with a confirmed personal profile change before navigation. */

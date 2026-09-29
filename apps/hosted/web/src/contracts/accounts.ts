@@ -1,7 +1,7 @@
 import { hydrated } from "@executor-js/ui/contracts/http";
 import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { refreshProfiles } from "./profiles.ts";
-import { refreshResourceDirectory } from "./resource-access.ts";
+import { acknowledgeResourceAccount } from "./resource-access.ts";
 import { protectedQuery } from "./protected-query.ts";
 /** Account queries remain independent across organizations, including OAuth returns. */
 import type { Account, AccountId } from "@executor-js/sdk";
@@ -73,8 +73,8 @@ const disconnectAccount = Atom.family((key: AccountKey) =>
     Effect.flatMap(HostedClient, (client) => client.accounts.disconnect({ params: key })).pipe(
       Effect.tap(() =>
         Effect.sync(() => {
-          refreshResourceDirectory(get, key.organization);
           refreshCredentialDependents(get, key.organization, key.account);
+          acknowledgeResourceAccount(get, key.organization, key.account, undefined);
           acknowledge(get, inventoryAtom(key.organization), (data) => ({
             ...data,
             accounts: data.accounts.filter((account) => account.id !== key.account),
@@ -98,7 +98,7 @@ export function acknowledgeAccount(
   saved: Account,
   credentialsChanged = false,
 ) {
-  refreshResourceDirectory(get, organization);
+  acknowledgeResourceAccount(get, organization, saved.id, saved);
   acknowledge(get, accountAtom({ organization, account: saved.id }), (data) => ({
     ...data,
     account: saved,

@@ -14,7 +14,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "../components/dropdown-menu.tsx";
-import { ProviderIcon, SectionHeading } from "./common.tsx";
+import { ProviderIcon } from "./common.tsx";
 import { useDashboard } from "./context.tsx";
 
 /** Account management lives on its list row; products supply the menu items they support. */
@@ -185,20 +185,23 @@ export function DisconnectAccountForm<E>({
       <AccountDialogIdentity data={data} />
       <p className="text-sm text-muted-foreground">
         This deletes the saved credentials from Executor. It does not revoke access at{" "}
-        {provider.definition.name}.
+        {provider.definition.name}. {apps.length === 0 && "No apps use this account."}
       </p>
-      <section>
-        <SectionHeading>
-          Affected apps <span className="muted text-muted-foreground">{apps.length}</span>
-        </SectionHeading>
-        <AccountApps apps={apps} />
-        {impact ??
-          (apps.length > 0 && (
+      {apps.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-[13px] font-medium">
+            Used by {apps.length} {apps.length === 1 ? "app" : "apps"}
+          </h3>
+          <div className="rounded-md border px-3">
+            <AccountApps apps={apps} />
+          </div>
+          {impact ?? (
             <p className="field-hint text-muted-foreground text-[12px] font-normal leading-[1.5]">
               These apps will need an account selected before they can run.
             </p>
-          ))}
-      </section>
+          )}
+        </section>
+      )}
       {error && <Failure cause={error} />}
       <div className="flex items-center gap-5 text-[13px] [&_a]:text-muted-foreground">
         <Button

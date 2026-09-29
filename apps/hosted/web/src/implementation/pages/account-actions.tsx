@@ -211,9 +211,8 @@ function DeleteDialogBody({
     <DisconnectAccountForm<HostedError>
       submitLabel="Delete account"
       impact={
-        <p className="text-sm text-muted-foreground">
-          This account and its app selections will be removed. Other selected accounts stay
-          connected.
+        <p className="text-[12px] leading-[1.5] text-muted-foreground">
+          These apps lose this account. Their other selected accounts stay connected.
         </p>
       }
       data={data}
