@@ -3070,6 +3070,16 @@ export const scenarios = {
       cloud: scheduled,
     },
   },
+  invitationDialog: {
+    fixtures: "actors",
+    file: "invitation-dialog.spec.ts",
+    title: "sending an invitation shows a success view with its link",
+    targets: {
+      local: na("Hosted organization invitations."),
+      "self-host": scheduled,
+      cloud: scheduled,
+    },
+  },
   invitationPrivacy: {
     fixtures: "actors",
     file: "invitation-security.spec.ts",
