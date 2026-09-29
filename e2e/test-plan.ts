@@ -1369,6 +1369,17 @@ export const scenarios = {
       local: na("Exercises shared catalog and OAuth instrumentation through hosted APIs."),
     },
   },
+  oauthFailureDiagnostics: {
+    fixtures: "actors",
+    file: "oauth-diagnostics.spec.ts",
+    title:
+      "OAuth failures deliver safe provider, challenge, claim and callback diagnostics, and a successful discovery fallback records no error",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer to provoke OAuth failures."),
+      local: na("Exercises shared OAuth instrumentation through hosted APIs."),
+    },
+  },
   mcpAuthDiscovery: {
     fixtures: "actors",
     file: "mcp-auth-discovery.spec.ts",

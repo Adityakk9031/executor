@@ -66,6 +66,7 @@ import {
   type OAuthProtocolFailed,
 } from "./oauth-protocol.ts";
 import { ownedAccount } from "./accounts.ts";
+import type { OAuthCallbackField, OAuthFailureDetail } from "./oauth-diagnostics.ts";
 
 const decode = <A>(schema: Schema.Decoder<A>, value: unknown) =>
   Schema.decodeUnknownEffect(schema)(value).pipe(Effect.mapError(() => new StorageError()));
@@ -721,27 +722,40 @@ export const makeOAuth = (
       const connectionState = yield* readConnection(db, input);
       if (connectionState.state.status === "completed") return connectionState.state.account;
       const failed = (reason: OAuthCompletionReason) => new OAuthCompletionFailed({ reason });
+      /** Reject the returned authorization response, recording which part failed. */
+      const rejected = (
+        reason: OAuthCompletionReason,
+        field: OAuthCallbackField,
+        detail: OAuthFailureDetail,
+      ) =>
+        Effect.annotateCurrentSpan({
+          "oauth.error.stage": "authorize",
+          "oauth.error.callback_field": field,
+          "oauth.error.detail": detail,
+        }).pipe(Effect.andThen(Effect.fail(failed(reason))));
       if (protocol === undefined) return yield* failed("oauth_unavailable");
-      const callback = yield* Effect.try({
-        try: () => new URL(Redacted.value(input.callbackUrl)),
-        catch: () => failed("callback_malformed"),
-      });
+      const received = Redacted.value(input.callbackUrl);
+      if (!URL.canParse(received))
+        return yield* rejected("callback_malformed", "callback_url", "callback_unparseable");
+      const callback = new URL(received);
       const states = callback.searchParams.getAll("state");
       const state = states[0];
-      if (
-        state === undefined ||
-        state.length < 32 ||
-        states.length !== 1 ||
-        callback.href.includes("#") ||
-        callback.username !== "" ||
-        callback.password !== ""
-      )
-        return yield* failed("callback_malformed");
+      if (state === undefined)
+        return yield* rejected("callback_malformed", "state", "callback_state_missing");
+      if (states.length !== 1)
+        return yield* rejected("callback_malformed", "state", "callback_state_repeated");
+      if (state.length < 32)
+        return yield* rejected("callback_malformed", "state", "callback_state_short");
+      if (callback.href.includes("#"))
+        return yield* rejected("callback_malformed", "callback_url", "callback_fragment");
+      if (callback.username !== "" || callback.password !== "")
+        return yield* rejected("callback_malformed", "callback_url", "callback_credentials");
       const id = OAuthAttemptId.make(`oauth_${yield* hash(state)}`);
       const row = yield* query(() =>
         db.findFirst("oauthAttempts", { where: (b) => b("id", "=", id) }),
       );
-      if (row === null) return yield* failed("sign_in_not_found");
+      if (row === null)
+        return yield* rejected("sign_in_not_found", "state", "callback_attempt_not_found");
       // Claimed and completed attempts are never reopened, including after a failed completion.
       if (row.status !== "pending") return yield* failed("sign_in_used");
       const now = yield* Clock.currentTimeMillis;
@@ -765,7 +779,7 @@ export const makeOAuth = (
           );
         })
       )
-        return yield* failed("redirect_mismatch");
+        return yield* rejected("redirect_mismatch", "redirect_uri", "callback_redirect_mismatch");
       const claim = `claim_${yield* nextId}`;
       // Conditional UPDATE is atomic even on adapters without row locks or update counts.
       yield* query(() =>
@@ -906,7 +920,14 @@ export const makeOAuth = (
           return saved;
         }),
       );
-    }).pipe(Effect.withSpan("oauth.completeOAuth"));
+    }).pipe(
+      Effect.tapError((error) =>
+        Schema.is(OAuthCompletionFailed)(error)
+          ? Effect.annotateCurrentSpan("oauth.completion.reason", error.reason)
+          : Effect.void,
+      ),
+      Effect.withSpan("oauth.completeOAuth"),
+    );
 
   const resolveCredentials = (account: StoredAccount, provider: ProviderDefinition) =>
     Effect.gen(function* () {

@@ -16,6 +16,16 @@ import {
   type OAuthClientAuth,
 } from "../contracts/oauth.ts";
 import type { ProviderAuthMethod } from "../contracts/provider.ts";
+import {
+  challengeDiagnostics,
+  descriptionLength,
+  diagnosticAttributes,
+  libraryDiagnostics,
+  mediaType,
+  OAuthDiagnostics,
+  type OAuthMediaType,
+  providerCodeDiagnostics,
+} from "./oauth-diagnostics.ts";
 import { probeOAuthChallenge } from "./oauth-probe.ts";
 
 const ProtocolCode = Schema.Literals([
@@ -58,8 +68,54 @@ export class OAuthProtocolFailed extends Schema.TaggedError<OAuthProtocolFailed>
       "unsupported",
       "subject_changed",
     ]),
+    diagnostics: Schema.optional(OAuthDiagnostics),
   },
-) {}
+) {
+  /** Only the sanitized evidence above; telemetry records this as the exception message. */
+  override get message(): string {
+    const diagnostics = this.diagnostics;
+    return [
+      this.reason,
+      this.code,
+      this.status === undefined ? undefined : `HTTP ${this.status}`,
+      this.providerError,
+      this.field === undefined ? undefined : `field ${this.field}`,
+      diagnostics?.detail,
+      diagnostics?.claim === undefined ? undefined : `claim ${diagnostics.claim}`,
+      diagnostics?.attribute === undefined ? undefined : `attribute ${diagnostics.attribute}`,
+      diagnostics?.callbackField === undefined
+        ? undefined
+        : `callback ${diagnostics.callbackField}`,
+      diagnostics?.challengeScheme === undefined
+        ? undefined
+        : `challenge ${diagnostics.challengeScheme}${diagnostics.challengeError === undefined ? "" : ` ${diagnostics.challengeError}`}`,
+      diagnostics?.providerCode === undefined ? undefined : `error ${diagnostics.providerCode}`,
+      diagnostics?.contentType,
+    ]
+      .filter((part) => part !== undefined)
+      .join(", ");
+  }
+}
+
+/** Keep diagnostics only when there is evidence to record. */
+const withDiagnostics = (diagnostics: OAuthDiagnostics) =>
+  Object.values(diagnostics).some((value) => value !== undefined) ? { diagnostics } : {};
+
+/** Add response evidence to a failure. Evidence the failure already carries wins. */
+const withEvidence = (
+  failed: OAuthProtocolFailed,
+  evidence: { readonly status?: number | undefined; readonly diagnostics: OAuthDiagnostics },
+) => {
+  const status = failed.status ?? evidence.status;
+  return new OAuthProtocolFailed({
+    reason: failed.reason,
+    ...(failed.code === undefined ? {} : { code: failed.code }),
+    ...(status === undefined ? {} : { status }),
+    ...(failed.providerError === undefined ? {} : { providerError: failed.providerError }),
+    ...(failed.field === undefined ? {} : { field: failed.field }),
+    ...withDiagnostics({ ...evidence.diagnostics, ...failed.diagnostics }),
+  });
+};
 
 /** RFC 6749 §5.2 error codes map to reasons; unknown codes are dropped from the recorded evidence. */
 const errorResponse = (status: number, error: string) =>
@@ -111,6 +167,9 @@ const failure = (error: unknown): OAuthProtocolFailed => {
     ...(status === undefined ? {} : { status }),
     ...(providerError === undefined ? {} : { providerError }),
     ...(Schema.is(OAuthResponseField)(fieldValue) ? { field: fieldValue } : {}),
+    ...withDiagnostics(
+      error instanceof SyntaxError ? { detail: "body_not_json" } : libraryDiagnostics(error),
+    ),
     reason:
       error instanceof oauth.ResponseBodyError && error.error === "invalid_grant"
         ? "invalid_grant"
@@ -138,6 +197,7 @@ const observeFailure = (error: OAuthProtocolFailed) =>
       ? {}
       : { "oauth.error.provider_code": error.providerError }),
     ...(error.field === undefined ? {} : { "oauth.error.field": error.field }),
+    ...diagnosticAttributes(error.diagnostics),
   });
 const protocolStage =
   (
@@ -318,7 +378,15 @@ const tokenResponse = async (response: Response) => {
   if (body === undefined) return response;
   const error = Reflect.get(body, "error");
   if (typeof error === "string" && error !== "" && Reflect.get(body, "access_token") === undefined)
-    throw errorResponse(response.status, error);
+    throw withEvidence(errorResponse(response.status, error), {
+      diagnostics: {
+        detail: "response_body_error",
+        ...providerCodeDiagnostics(error),
+        descriptionLength: descriptionLength(Reflect.get(body, "error_description")),
+        contentType: mediaType(response.headers.get("content-type")),
+        ...challengeDiagnostics(response.headers.get("www-authenticate")),
+      },
+    });
   if (response.status !== 200) return response;
   return new Response(JSON.stringify(normalizedTokens(body)), {
     status: response.status,
@@ -353,11 +421,18 @@ export const idTokenSubject = (tokens: oauth.TokenEndpointResponse) => {
   return subject === "" ? undefined : subject;
 };
 
+/** Issuer metadata, or the answer that said it is missing there. */
+type IssuerMissing = { readonly missing: OAuthProtocolFailed };
+type IssuerDiscovery = { readonly server: OAuthTokenServer } | IssuerMissing;
+
 /** Resolve protocol operations against one host-supplied Effect HTTP client. */
 export const makeOAuthProtocol = (options: OAuthOptions) => {
   // This callback is the external library boundary, not an internal Promise implementation.
   const transport =
-    (telemetry: Effect.Success<typeof captureTelemetry>, received: (status: number) => void) =>
+    (
+      telemetry: Effect.Success<typeof captureTelemetry>,
+      received: (status: number, contentType: OAuthMediaType | undefined) => void,
+    ) =>
     (url: string, init: oauth.CustomFetchOptions<string, BodyInit | undefined>) =>
       Effect.runPromiseWith(telemetry.context)(
         Effect.gen(function* () {
@@ -378,7 +453,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
           });
           const response = yield* options.httpClient.execute(request);
           yield* Effect.annotateCurrentSpan("http.response.status_code", response.status);
-          received(response.status);
+          received(response.status, mediaType(response.headers["content-type"]));
           const body = yield* response.arrayBuffer.pipe(Effect.withSpan("oauth.response.read"));
           return new Response(body, { status: response.status, headers: response.headers });
         }).pipe(
@@ -390,7 +465,7 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
   const requestOptions = (
     signal: AbortSignal,
     telemetry: Effect.Success<typeof captureTelemetry>,
-    received: (status: number) => void,
+    received: (status: number, contentType: OAuthMediaType | undefined) => void,
   ) => ({
     [oauth.customFetch]: transport(telemetry, received),
     [oauth.allowInsecureRequests]: true,
@@ -400,26 +475,21 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
     Effect.gen(function* () {
       const telemetry = yield* captureTelemetry;
       // The last response status tells a rejection (4xx) from a response we could not use (2xx).
-      let status: number | undefined;
+      let last: { status: number; contentType: OAuthMediaType | undefined } | undefined;
       return yield* Effect.tryPromise({
         try: (signal) =>
           run(
-            requestOptions(signal, telemetry, (received) => {
-              status = received;
+            requestOptions(signal, telemetry, (status, contentType) => {
+              last = { status, contentType };
             }),
           ),
         catch: (error) => {
           const failed = failure(error);
-          return failed.status !== undefined || status === undefined
+          return last === undefined
             ? failed
-            : new OAuthProtocolFailed({
-                reason: failed.reason,
-                status,
-                ...(failed.code === undefined ? {} : { code: failed.code }),
-                ...(failed.providerError === undefined
-                  ? {}
-                  : { providerError: failed.providerError }),
-                ...(failed.field === undefined ? {} : { field: failed.field }),
+            : withEvidence(failed, {
+                status: last.status,
+                diagnostics: { contentType: last.contentType },
               });
         },
       });
@@ -464,17 +534,40 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
     return response;
   };
 
-  const discoverIssuer = (issuer: URL) =>
-    request(async (settings) => {
+  /**
+   * Missing metadata is an answer, not a failed request: a caller may fall back to another
+   * issuer location, so the request span records only the status that said so.
+   */
+  const discoverIssuer = (issuer: URL): Effect.Effect<IssuerDiscovery, OAuthProtocolFailed> =>
+    request(async (settings): Promise<{ server: oauth.AuthorizationServer } | IssuerMissing> => {
       let response = await oauth.discoveryRequest(issuer, { ...settings, algorithm: "oauth2" });
       if (response.status === 404)
         response = await oauth.discoveryRequest(issuer, { ...settings, algorithm: "oidc" });
       // A well-known URL that refuses the request serves no metadata. Atlassian's MCP endpoint
       // answers the appended OpenID path with 401.
       if (response.status >= 400 && response.status < 500 && response.status !== 429)
-        throw new OAuthProtocolFailed({ reason: "metadata_missing" });
-      return oauth.processDiscoveryResponse(issuer, discoveryResponse(response));
-    }).pipe(Effect.flatMap((server) => decode(OAuthTokenServer, server)));
+        return {
+          missing: new OAuthProtocolFailed({
+            reason: "metadata_missing",
+            status: response.status,
+            ...withDiagnostics({
+              detail: "unexpected_status",
+              contentType: mediaType(response.headers.get("content-type")),
+            }),
+          }),
+        };
+      return { server: await oauth.processDiscoveryResponse(issuer, discoveryResponse(response)) };
+    }).pipe(
+      Effect.flatMap((found): Effect.Effect<IssuerDiscovery, OAuthProtocolFailed> =>
+        "missing" in found
+          ? Effect.succeed(found)
+          : decode(OAuthTokenServer, found.server).pipe(Effect.map((server) => ({ server }))),
+      ),
+    );
+  const requireIssuer = (
+    found: IssuerDiscovery,
+  ): Effect.Effect<OAuthTokenServer, OAuthProtocolFailed> =>
+    "missing" in found ? Effect.fail(found.missing) : Effect.succeed(found.server);
 
   const secureUrl = (value: string) => {
     const url = parseDestination(value, options.urlPolicy);
@@ -573,12 +666,16 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
             ? discoverIssuer(issuerUrl).pipe(
                 // Only missing metadata falls back. Served metadata that is invalid or names another
                 // issuer is a failure, never a reason to try a different issuer.
-                Effect.catchIf(
-                  (error) => error.reason === "metadata_missing",
-                  () => discoverIssuer(new URL(issuerUrl.origin)),
+                Effect.flatMap((path) =>
+                  "missing" in path
+                    ? Effect.annotateCurrentSpan("oauth.discovery.fallback", "origin").pipe(
+                        Effect.andThen(discoverIssuer(new URL(issuerUrl.origin))),
+                      )
+                    : Effect.succeed(path),
                 ),
+                Effect.flatMap(requireIssuer),
               )
-            : discoverIssuer(issuerUrl);
+            : discoverIssuer(issuerUrl).pipe(Effect.flatMap(requireIssuer));
           const scopes = new Set(method.scopes ?? found?.scopes_supported ?? []);
           if (
             method.grant !== "client_credentials" &&
@@ -725,7 +822,10 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
             input.state,
           );
           if (!parameters.get("code"))
-            throw new OAuthProtocolFailed({ reason: "invalid_response" });
+            throw new OAuthProtocolFailed({
+              reason: "invalid_response",
+              diagnostics: { detail: "callback_code_missing", callbackField: "code" },
+            });
           return parameters;
         },
         catch: failure,
