@@ -95,6 +95,9 @@ export default Alchemy.Stack(
     const publicBranch = yield* Config.NonEmptyString("PUBLIC_EXPORT_BRANCH").pipe(
       Config.withDefault("v2"),
     );
+    const runnerMode = yield* Config.Literals(["blacksmith", "desktop"], "CI_RUNNER_MODE").pipe(
+      Config.withDefault("blacksmith" as const),
+    );
     const enforcement = yield* Config.Literals(
       ["evaluate", "active", "disabled"],
       "CI_RULESET_ENFORCEMENT",
@@ -183,6 +186,15 @@ export default Alchemy.Stack(
       ...target,
       name: "CLOUDFLARE_ACCOUNT_ID",
       value: accountId,
+    }).pipe(retain());
+
+    // Secretless PR and main checks can run on the trusted desktop runner when requested.
+    // Deployment, staging and release workflows intentionally keep their own Blacksmith
+    // capacity because they hold credentials or require an OS-specific runner matrix.
+    yield* GitHub.Variable("CiRunnerMode", {
+      ...target,
+      name: "CI_RUNNER_MODE",
+      value: runnerMode,
     }).pipe(retain());
 
     /**
