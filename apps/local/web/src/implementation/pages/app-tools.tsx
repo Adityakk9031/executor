@@ -14,7 +14,7 @@ import {
 import type { DashboardAccount } from "@executor-js/local-server/contracts";
 import { Cause, Option, Schema } from "effect";
 import { ToolBrowser } from "@executor-js/ui/dashboard/tools";
-import { ToolRunner } from "@executor-js/ui/dashboard/tool-runner";
+import { ToolRunner, toolRunContext } from "@executor-js/ui/dashboard/tool-runner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Key01Icon } from "@hugeicons/core-free-icons";
 import { callToolAtom, toolDetailAtom, toolsAtom, toolCatalogAtom } from "../../contracts/api.ts";
@@ -33,6 +33,8 @@ interface AppToolsProps {
   readonly selected: string | undefined;
   readonly profile?: ProfileId | undefined;
   readonly revision?: number | undefined;
+  /** The selected profile's name in the page's profile picker. */
+  readonly label: string;
 }
 
 function AccountSetup({
@@ -121,7 +123,15 @@ function AccountReconnect({ accounts }: { readonly accounts: ReadonlyArray<Dashb
 }
 
 /** Browse the complete live tool catalog with a stable, separate schema inspector. */
-function LiveAppTools({ app, accounts, selected, profile, revision, selection }: AppToolsProps) {
+function LiveAppTools({
+  app,
+  accounts,
+  selected,
+  profile,
+  revision,
+  selection,
+  label,
+}: AppToolsProps) {
   const navigate = useNavigate();
   const catalog = {
     app: app.id,
@@ -185,6 +195,7 @@ function LiveAppTools({ app, accounts, selected, profile, revision, selection }:
           })}
           detail={toolDetailAtom({ ...catalog, tool: tool.name })}
           Failure={Failure}
+          context={profile === undefined ? undefined : toolRunContext(label, selection, accounts)}
         />
       )}
     />

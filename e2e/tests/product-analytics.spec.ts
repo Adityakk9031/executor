@@ -220,8 +220,8 @@ export default defineApp({ accounts: {} }, async () => ({ tools: router({
         yield* open(`/org/${actors.organization.slug}/apps/${app.id}?view=tools`);
         yield* browser.use("Run a tool with private input", (page) =>
           page
-            .getByLabel("Input", { exact: true })
-            .fill(JSON.stringify({ message: "PRIVATE_TOOL_INPUT" }))
+            .getByLabel("Message", { exact: true })
+            .fill("PRIVATE_TOOL_INPUT")
             .then(() => page.getByRole("button", { name: "Run tool", exact: true }).click())
             .then(() => page.getByRole("region", { name: "Tool result" }).waitFor())
             .then(() => page.getByRole("region", { name: "Tool result" }).innerText())
@@ -231,8 +231,8 @@ export default defineApp({ accounts: {} }, async () => ({ tools: router({
         yield* browser.checkpoint("tool-result-live");
         const toolError = yield* browser.use("Run a failing tool", (page) =>
           page
-            .getByLabel("Input", { exact: true })
-            .fill(JSON.stringify({ message: "PRIVATE_TOOL_FAILURE" }))
+            .getByLabel("Message", { exact: true })
+            .fill("PRIVATE_TOOL_FAILURE")
             .then(() => page.getByRole("button", { name: "Run tool", exact: true }).click())
             .then(() => page.getByRole("alert").innerText()),
         );

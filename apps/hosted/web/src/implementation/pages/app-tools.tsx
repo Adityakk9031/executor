@@ -8,7 +8,7 @@ import { Cause, Option, Schema } from "effect";
 import { UnexpectedError, type UserFacingError } from "@executor-js/utils/user-facing-error";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { ToolBrowser } from "@executor-js/ui/dashboard/tools";
-import { ToolRunner } from "@executor-js/ui/dashboard/tool-runner";
+import { ToolRunner, toolRunContext } from "@executor-js/ui/dashboard/tool-runner";
 import {
   appToolReadiness,
   unfilledAccountSlots,
@@ -28,11 +28,14 @@ export function AppTools({
   accounts,
   selected,
   profile,
+  label,
 }: {
   readonly app: App;
   readonly accounts: readonly AccountSummary[];
   readonly selected: string | undefined;
   readonly profile: Profile | undefined;
+  /** The selected profile's name in the page's profile picker. */
+  readonly label: string;
 }) {
   const { organization, slug: organizationSlug } = useOrganizationRoute();
   const navigate = useNavigate();
@@ -112,6 +115,9 @@ export function AppTools({
             })}
             detail={toolDetailAtom({ ...catalog, tool: tool.name })}
             Failure={ToolCallFailure}
+            context={
+              profile === undefined ? undefined : toolRunContext(label, profile.accounts, accounts)
+            }
           />
         )}
       />
