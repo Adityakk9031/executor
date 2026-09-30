@@ -72,7 +72,7 @@ import {
   organizationRoot,
 } from "./implementation/dashboard.ts";
 import { withHostPipeline } from "@executor-js/dashboard-start/in-process";
-import dashboardRoutes from "@executor-js/hosted-cloud-web/routes";
+import dashboardRoutes from "@executor-js/hosted-cloud-web/routes" with { type: "json" };
 import { postHogBindings } from "./infrastructure/posthog.ts";
 import { cloudAnalytics } from "./implementation/product-analytics.ts";
 import { sentryWorkerBuild } from "./infrastructure/sentry-build.ts";

@@ -5,6 +5,7 @@
   "exports": {
     "./vite": "./vite.ts",
     "./document": "./src/implementation/document.ts",
+    "./development": "./src/implementation/development.ts",
     "./shell": "./src/implementation/shell.tsx",
     "./api": "./src/contracts/api.ts",
     "./registry": "./src/implementation/registry.tsx",
@@ -15,6 +16,7 @@
   },
   "dependencies": {
     "@effect/atom-react": "https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
+    "@effect/platform-node": "https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
     "@executor-js/ui": "workspace:*",
     "@tanstack/react-router": "1.170.41",
     "@tanstack/react-start": "1.168.60",
