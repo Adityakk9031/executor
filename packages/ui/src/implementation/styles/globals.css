@@ -91,7 +91,7 @@
   @media (pointer: fine) {
     html,
     body {
-      overscroll-behavior: none;
+      overscroll-behavior-y: none;
     }
   }
   body {

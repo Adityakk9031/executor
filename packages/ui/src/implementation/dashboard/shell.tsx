@@ -101,7 +101,7 @@ export function DashboardShell({
       </a>
       {banner && <div className="col-span-full">{banner}</div>}
       <aside
-        className={`sidebar flex flex-col border-r border-r-border py-0 px-[8px] min-h-0 overflow-y-auto overflow-x-hidden pointer-fine:overscroll-none max-[740px]:hidden ${navigationClass} ${collapsed ? collapsedClass : ""}`}
+        className={`sidebar flex flex-col border-r border-r-border py-0 px-[8px] min-h-0 overflow-y-auto overflow-x-hidden pointer-fine:overscroll-y-none max-[740px]:hidden ${navigationClass} ${collapsed ? collapsedClass : ""}`}
       >
         <div className="sidebar-header flex items-center gap-1 min-h-12 shrink-0">
           {medium ? (
@@ -136,7 +136,7 @@ export function DashboardShell({
       </aside>
       <main
         id="main"
-        className="main flex flex-col overflow-y-auto pointer-fine:overscroll-none min-w-0 min-h-0 max-[740px]:pt-[env(safe-area-inset-top)]"
+        className="main flex flex-col overflow-y-auto pointer-fine:overscroll-y-none min-w-0 min-h-0 max-[740px]:pt-[env(safe-area-inset-top)]"
         tabIndex={-1}
       >
         {children}
