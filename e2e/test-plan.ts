@@ -927,6 +927,15 @@ export const scenarios = {
       local: na("Cloudflare's static asset rewrites are Cloud-only."),
     },
   },
+  openAiAppsChallenge: {
+    file: "openai-apps-challenge.spec.ts",
+    title: "Cloud serves the ChatGPT app domain verification token at its exact path",
+    targets: {
+      cloud: scheduled,
+      "self-host": na("ChatGPT app domain verification is for the hosted Cloud domain."),
+      local: na("ChatGPT app domain verification is for the hosted Cloud domain."),
+    },
+  },
   appPackage: {
     fixtures: "actors",
     file: "app-package.spec.ts",

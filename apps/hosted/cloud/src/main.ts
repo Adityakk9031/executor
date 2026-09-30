@@ -65,6 +65,7 @@ import { cloudEntryApi, cloudEntryDocument, resolveCloudEntry } from "./implemen
 import { browserReturnTo } from "@executor-js/hosted-server/browser/contracts";
 import { HttpServerRequest } from "effect/unstable/http";
 import { homepage } from "./implementation/homepage.ts";
+import { openAiAppsChallenge } from "./implementation/openai-apps-challenge.ts";
 import {
   cloudDashboard,
   dashboardPageRoutes,
@@ -409,6 +410,7 @@ export default Api.make(
         HttpRouter.provideRequest(auth.identity),
       ),
       mcpRoutes,
+      HttpRouter.add("GET", "/.well-known/openai-apps-challenge", openAiAppsChallenge),
       Layer.mergeAll(
         HttpRouter.add("GET", "/api/mcp/approvals/:requestId", mcp.approvals),
         HttpRouter.add("POST", "/api/mcp/approvals/:requestId", mcp.approvals),
