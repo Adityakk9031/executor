@@ -1,7 +1,8 @@
 # Executor 2 beta
 
 Install with `npm i -g executor@beta`. Requires Node 24.14 or newer.
-Run `executor` to start the server and open the dashboard. Use `executor serve`
+Run `executor` to start the server and open the dashboard. It checks npm daily
+for a newer release and prints the install command; set `EXECUTOR_NO_UPDATE_CHECK=1` to skip it. Use `executor serve`
 for headless operation and `executor pair` to get a new browser connection link.
 
 The package includes the dashboard, framework, runtime compiler, pinned Bun,

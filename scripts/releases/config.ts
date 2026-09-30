@@ -1,6 +1,17 @@
 /** One release identity shared by builders, publishers, infrastructure and install links. */
 import { Schema } from "effect";
+import {
+  ReleaseVersion,
+  releaseChannel,
+  type ReleaseChannel,
+} from "@executor-js/utils/release-version";
 import manifest from "../../apps/cli/package.json" with { type: "json" };
+
+export {
+  compareReleaseVersions,
+  ReleaseVersion,
+  type ReleaseChannel,
+} from "@executor-js/utils/release-version";
 
 /** Conservative compressed archive budget, checked before npm receives any upload. */
 export const npmArchiveBudgetBytes = 180 * 1024 * 1024;
@@ -53,11 +64,8 @@ export const platforms = [
 /** A supported native build target. */
 export type Platform = (typeof platforms)[number];
 
-/** Reject arbitrary tags and unexpected prerelease channels before creating artifacts. */
-export const ReleaseVersion = Schema.String.check(Schema.isPattern(/^2\.\d+\.\d+(?:-beta\.\d+)?$/));
-
 const version = Schema.decodeUnknownSync(ReleaseVersion)(manifest.version);
-const channel: ReleaseChannel = version.includes("-beta.") ? "beta" : "latest";
+const channel = releaseChannel(version);
 const repository = "UsefulSoftwareCo/executor";
 const tag = `executor@${version}`;
 const nodeEngine = Schema.decodeUnknownSync(
@@ -85,9 +93,6 @@ export const release = {
   },
 } as const;
 
-/** Release channels; beta installs also receive newer stable releases. */
-export type ReleaseChannel = "beta" | "latest";
-
 /**
  * Executor 1 reads GitHub's release list in the same public repository, so v2
  * never uses its feed file names. One published prerelease holds the current
@@ -105,18 +110,6 @@ export const desktopUpdateFile = (target: Platform, channel: ReleaseChannel): st
   if (target.platform === "darwin") return `${name}-mac.yml`;
   if (target.platform === "win32") return `${name}.yml`;
   return target.arch === "x64" ? `${name}-linux.yml` : `${name}-linux-${target.arch}.yml`;
-};
-
-/** Order release versions; the pattern above is the only accepted shape. */
-export const compareReleaseVersions = (left: string, right: string): number => {
-  const parse = (value: string) => {
-    const [core = "", beta] = Schema.decodeUnknownSync(ReleaseVersion)(value).split("-beta.");
-    return [...core.split(".").map(Number), beta === undefined ? Infinity : Number(beta)];
-  };
-  const a = parse(left);
-  const b = parse(right);
-  const index = a.findIndex((part, position) => part !== b[position]);
-  return index === -1 ? 0 : Math.sign((a[index] ?? 0) - (b[index] ?? 0));
 };
 
 /** Immutable npm version for one native runtime, aliased by the launcher package. */

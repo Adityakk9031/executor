@@ -53,6 +53,7 @@ value that does not match the directory stops startup and changes nothing.
 | Variable | Purpose |
 | --- | --- |
 | `EXECUTOR_PORT` | Port, default `4312`. |
+| `EXECUTOR_NO_UPDATE_CHECK` | Set to `1` to skip the daily check for a newer release. |
 | `EXECUTOR_DATA_DIR` | Data directory, default `~/.executor/v2/cli`. |
 | `EXECUTOR_BROWSER_ORIGIN` | Exact HTTPS origin for generated browser links. |
 | `EXECUTOR_WEBHOOK_ORIGIN` | Exact HTTPS origin that receives webhooks. |
@@ -82,7 +83,10 @@ your secret manager.
 Missing keys stop startup. Executor will not generate replacements for an
 existing installation. Restore the original keys to recover access.
 
-Run the install command again to update. The v2 data directory stays the same
+`executor` and `executor serve` check npm at most once a day for a newer
+release on their channel and print the install command. Beta installs are told
+about stable once it is newer. The check never installs anything and is skipped
+in CI. Run the install command again to update. The v2 data directory stays the same
 when beta becomes stable. Uninstalling the package does not delete data or keys.
 
 The desktop app uses the same local server with a separate
