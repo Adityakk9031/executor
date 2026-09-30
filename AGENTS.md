@@ -153,10 +153,13 @@ the same SDK and CLI on demand.
 Every push to `main` deploys production directly, without a deployed-test gate.
 The deployed suite remains available for manual dispatch with Neon or PlanetScale.
 
-Blacksmith runners run five check jobs. Local and Cloud E2E jobs use
-`blacksmith-16vcpu-ubuntu-2404`. Self-host uses a 12-vCPU M4 Mac for its 16 concurrent
-product servers and browsers. The load job uses a 6-vCPU M4 Mac for its
-single-threaded PGlite workload. Static checks use 4 vCPUs.
+Blacksmith Linux runners run five check jobs. Local, self-host and Cloud E2E jobs use
+`blacksmith-16vcpu-ubuntu-2404`. The load job uses 4 vCPUs for its single-threaded
+PGlite workload. Static checks use 4 vCPUs.
+
+Do not run CI checks on macOS runners. They cost 5-20x as much per minute as Linux
+runners and were most of the CI bill, and no check needs macOS. Fix slow or flaky
+scenarios on Linux instead of moving them to a Mac.
 
 - `check` runs `bun run check`: the format check, `oxlint`, the typecheck, the
   no-tests-outside-`e2e/` check and the e2e boundary check.
@@ -164,7 +167,7 @@ single-threaded PGlite workload. Static checks use 4 vCPUs.
   its `--test-name` pattern, or skips the job when none of its scenarios is selected.
   Its job patterns hold the exclusions and splits below.
 - `e2e-local` and `e2e-self-host` run `bun run e2e:prepare`, then `e2e:local`
-  under `xvfb-run` and `e2e:self-host` headlessly on macOS. The self-host run excludes the Claude
+  and `e2e:self-host` under `xvfb-run`. The self-host run excludes the Claude
   Code MCP scenario, which needs a model API key that CI does not hold.
 - `e2e-self-host-scale` runs the 1,000-account workload and then the 7,000-tool MCP
   catalog scenario and the slow and stalled tool listing scenarios on its own runner,
