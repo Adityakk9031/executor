@@ -1697,10 +1697,20 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
-  oauthRenewalRepeatedCrashes: {
+  oauthRenewalDiesDuringRecovery: {
     fixtures: "actors",
     file: "oauth-renewal-interruption.spec.ts",
-    title: "OAuth renewal converges after the process dies again during each recovery",
+    title: "OAuth renewal converges after the process dies again during its recovery",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Kills and restarts a runner-owned product process."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalRecoveredNewestToken: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title: "OAuth renewal recovered after a crash and an outage keeps the newest refresh token",
     targets: {
       "self-host": scheduled,
       cloud: na("Kills and restarts a runner-owned product process."),
