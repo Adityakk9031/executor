@@ -1,6 +1,6 @@
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 import { expect, layer } from "@effect/vitest";
-import { Effect, Fiber, Schema } from "effect";
+import { Effect, Fiber, Schedule, Schema } from "effect";
 import { randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
@@ -23,6 +23,7 @@ const Completed = Schema.Struct({
 });
 const Selection = Schema.Struct({ accounts: Schema.Struct({ service: Schema.String }) });
 const Read = Schema.Struct({ authenticated: Schema.Boolean, generation: Schema.Number });
+const SetupStatus = Schema.Struct({ status: Schema.String });
 
 layer(HostedLive, { excludeTestServices: true })("Machine OAuth", (it) => {
   it.effect(scenarios.oauthClientForm.title, (context) =>
@@ -181,6 +182,17 @@ export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
           actors = yield* Actors;
         const issuer = yield* clientCredentialsIssuer;
         const prefix = `/api/organizations/${actors.organization.id}`;
+        /** Background profile setup's outcome, once it has finished. */
+        const setupStatus = (path: string) =>
+          api.request(actors.owner, "GET", path).pipe(
+            Effect.flatMap((response) => body(SetupStatus, response)),
+            Effect.flatMap((current) =>
+              current.status === "pending"
+                ? Effect.fail(new Error("Profile setup has not finished"))
+                : Effect.succeed(current.status),
+            ),
+            Effect.retry({ schedule: Schedule.spaced("200 millis"), times: 100 }),
+          );
         // The inventory baseline must include the asynchronously provisioned personal account.
         yield* managementApp(actors.owner);
         for (const authMethod of [
@@ -285,8 +297,12 @@ export default defineApp({accounts:{service}},async({accounts})=>({tools: router
               ),
             )).accounts.service,
           ).toBe(completed.account.id);
-          // Keep idempotency independent of background setup. Only the renewal
-          // phase issues a token inside the host's refresh window.
+          // Selecting the account started background profile setup, which resolves the account.
+          // Once the renewal phase issues tokens inside the host's refresh window, every resolve
+          // renews, so setup must be done before then or its renewals are counted here.
+          expect(yield* setupStatus(`${prefix}/apps/${app.id}/profiles/${profile.id}`)).toBe(
+            "ready",
+          );
           yield* issuer.configure({ expiresIn: 20 });
           const expiringConnection = yield* body(
             Resource,
