@@ -154,8 +154,9 @@ Every push to `main` deploys production directly, without a deployed-test gate.
 The deployed suite remains available for manual dispatch with Neon or PlanetScale.
 
 Blacksmith Linux runners run five check jobs. Local, self-host and Cloud E2E jobs use
-`blacksmith-16vcpu-ubuntu-2404`. The load job uses 4 vCPUs for its single-threaded
-PGlite workload. Static checks use 4 vCPUs.
+`blacksmith-16vcpu-ubuntu-2404`. The load job also uses 16 vCPUs: on 4 vCPUs the
+product server, PGlite and the test driver contend and the inventory case missed its
+60-second deadline. Static checks use 4 vCPUs.
 
 Do not run CI checks on macOS runners. They cost 5-20x as much per minute as Linux
 runners and were most of the CI bill, and no check needs macOS. Fix slow or flaky
