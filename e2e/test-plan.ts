@@ -244,6 +244,16 @@ export const scenarios = {
       local: na("Hosted deployment API scenario"),
     },
   },
+  liveOpenapiYaml: {
+    fixtures: "actors",
+    file: "live-openapi-yaml.spec.ts",
+    title: "Live OpenAPI reads YAML with aliases and refuses alias bombs",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Loopback upstream fixture"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
   liveOpenapiCache: {
     fixtures: "actors",
     file: "live-openapi-cache.spec.ts",
