@@ -67,10 +67,12 @@ or the scenario instead.
 For application features, fixes, and behavior-preserving refactors, use the
 [executor-e2e skill](.agents/skills/executor-e2e/SKILL.md).
 
-For authenticated development testing, use the local-only
-[test account command](notes/test-accounts.md). It provisions synthetic users,
-organization roles, and short-lived sessions for self-host and cloud dev.
-Keep session files private and out of tool output.
+For authenticated testing and bug reproduction, use
+[test accounts](notes/test-accounts.md). The fixture command provisions
+synthetic users, organization roles and short-lived sessions for self-host,
+cloud dev and running test stages. On production, agents sign in through real
+email codes to `@agents.executor.engineering` inboxes. Keep session files
+private and out of tool output.
 
 Run `bun run format` before committing. `bun run check` runs the format check,
 `oxlint`, and the typecheck; CI-style verification should use it. Lint rules
