@@ -43,36 +43,48 @@ layer(HostedLive, { excludeTestServices: true })("Product analytics", (it) => {
         const before = readEvents(
           yield* fs.readFileString(`${target.directory}/analytics.ndjson`),
         ).length;
-        const response = yield* api.request(
-          actors.owner,
-          "GET",
-          `/api/organizations/${actors.organization.id}/inventory`,
-        );
+        const prefix = `/api/organizations/${actors.organization.id}`;
+        // Reads are traced but never exported; dashboard refetches would otherwise dominate.
+        expect((yield* api.request(actors.owner, "GET", `${prefix}/inventory`)).status).toBe(200);
+        const response = yield* api.request(actors.owner, "POST", `${prefix}/feedback`, {
+          message: "Synthetic feedback from the product analytics scenario",
+        });
         expect(response.status).toBe(200);
+        // Cases share one collector, so only this case's organization is considered.
         const events = yield* fs.readFileString(`${target.directory}/analytics.ndjson`).pipe(
-          Effect.map((text) => readEvents(text).slice(before)),
+          Effect.map((text) =>
+            readEvents(text)
+              .slice(before)
+              .filter((event) => event.properties.organization_id === actors.organization.id),
+          ),
           Effect.repeat({
             schedule: Schedule.spaced("100 millis"),
             until: (events) =>
               events.some(
                 (event) =>
                   event.event === "product_operation_completed" &&
-                  event.properties.operation === "inventory",
+                  event.properties.area === "feedback",
               ),
           }),
           Effect.timeout("10 seconds"),
         );
+        expect(
+          events.filter(
+            (event) =>
+              event.event.startsWith("product_operation_") &&
+              event.properties.operation === "inventory",
+          ),
+        ).toEqual([]);
         const completed = events.filter(
           (event) =>
-            event.event === "product_operation_completed" &&
-            event.properties.operation === "inventory",
+            event.event === "product_operation_completed" && event.properties.area === "feedback",
         );
         expect(completed).toHaveLength(1);
         expect(completed[0]).toMatchObject({
           distinct_id: actor.user.id,
           properties: {
             source: "dashboard",
-            area: "organization",
+            operation: "submit",
             organization_id: actors.organization.id,
             ok: true,
             executor_test: true,
