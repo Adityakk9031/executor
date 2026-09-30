@@ -509,6 +509,48 @@ export const scenarios = {
       "self-host": na("Local key storage setup"),
     },
   },
+  desktopCrashRecovery: {
+    file: "desktop-recovery.spec.ts",
+    title:
+      "desktop restarts a stopped or crashed local server with backoff, stops after a crash loop and restarts from the recovery page",
+    targets: {
+      local: {
+        status: "not-run",
+        reason:
+          "Runs against the packaged desktop in the release workflow with desktop-recovery.config.ts.",
+      },
+      cloud: na("Desktop process supervision"),
+      "self-host": na("Desktop process supervision"),
+    },
+  },
+  desktopReset: {
+    file: "desktop-recovery.spec.ts",
+    title:
+      "desktop missing-key failure offers reset, which backs up the data with a manifest and starts fresh, or leaves it in place when the move fails",
+    targets: {
+      local: {
+        status: "not-run",
+        reason:
+          "Runs against the packaged desktop in the release workflow with desktop-recovery.config.ts.",
+      },
+      cloud: na("Desktop data reset"),
+      "self-host": na("Desktop data reset"),
+    },
+  },
+  desktopResetWithheld: {
+    file: "desktop-recovery.spec.ts",
+    title:
+      "desktop does not offer reset when its data is in use, its key settings do not match, or the OS credential store is unavailable or denies access",
+    targets: {
+      local: {
+        status: "not-run",
+        reason:
+          "Runs against the packaged desktop in the release workflow with desktop-recovery.config.ts.",
+      },
+      cloud: na("Desktop data reset"),
+      "self-host": na("Desktop data reset"),
+    },
+  },
   memberControls: {
     fixtures: "actors",
     file: "member-controls.spec.ts",

@@ -109,16 +109,18 @@ backend and collector logs.
 
 `e2e/tests/desktop-recovery.spec.ts` stops and kills the real backend to check
 exit classification, restart delays, crash-loop recovery and **Restart**. It starts
-from mismatched key setup to check the configuration recovery page, a failed move
+from a missing key file to check the configuration recovery page, a failed move
 that leaves data in place, and reset with its backup manifest, including reset of a
-running server. It checks that a locked data directory and, except on Windows, an
-unavailable OS credential store never offer reset. It uses synthetic supplied keys
-or an unreachable credential store, so it never touches a real OS credential. The
+running server whose `keys.json` moves with the backup. It checks that a locked data
+directory, supplied keys or `EXECUTOR_KEY_STORAGE` that do not match the data, and an
+unusable OS credential store never offer reset. The store is made absent on Linux and
+refuses access on macOS; Windows has no such case. It uses synthetic supplied keys, a
+key file or an unusable store, so it never touches a real OS credential. The
 release workflow runs it against each packaged desktop. Locally, build the entry
 and run it; set `EXECUTOR_E2E_DESKTOP_EXECUTABLE` to test a packaged app:
 
 ```sh
-bun run apps:build && bun run telemetry:build && bun run web:build
+bun run apps:build && bun run e2e:apps && bun run telemetry:build && bun run web:build
 node apps/local/desktop/scripts/build.mjs
 bunx vitest run --config e2e/desktop-recovery.config.ts
 ```
