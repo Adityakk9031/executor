@@ -24,6 +24,8 @@ export const TestPlan = Schema.Struct({
   fixtures: Schema.optional(Schema.Literals(["actors", "cli"])),
   appOrigin: Schema.optional(Schema.Literal(true)),
   managementProfiles: Schema.optional(Schema.Array(Schema.Literals(["owner", "admin", "member"]))),
+  /** Labels of extra Testing SDK scenarios created during setup; each has its own closeable scope. */
+  sdkScenarios: Schema.optional(Schema.Array(Schema.NonEmptyString)),
   /** Operator settings the scenario's own product process starts with. */
   serverEnvironment: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   targets: Schema.Struct({
@@ -442,6 +444,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "testing-sdk.spec.ts",
     title: "Testing SDK isolates overlapping populated organizations and cleans failed scenarios",
+    sdkScenarios: ["Overlapping organization"],
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -3105,10 +3108,31 @@ export const scenarios = {
       cloud: na("Local paired source routes."),
     },
   },
-  codeFormatting: {
+  codeFormattingSource: {
     fixtures: "actors",
     file: "code-formatting.spec.ts",
-    title: "code blocks format source and copy without changing stored content",
+    title: "code blocks format deployed source and copy without changing stored content",
+    targets: {
+      local: na("Shared source viewer covered through hosted."),
+      "self-host": scheduled,
+      cloud: scheduled,
+    },
+  },
+  codeFormattingWorkspace: {
+    fixtures: "actors",
+    file: "code-formatting.spec.ts",
+    title: "code blocks format workspace source and copy without changing stored content",
+    targets: {
+      local: na("Shared source viewer covered through hosted."),
+      "self-host": scheduled,
+      cloud: scheduled,
+    },
+  },
+  codeFormattingLarge: {
+    fixtures: "actors",
+    file: "code-formatting.spec.ts",
+    title:
+      "code blocks load a large file formatted on its own and copy without changing stored content",
     targets: {
       local: na("Shared source viewer covered through hosted."),
       "self-host": scheduled,

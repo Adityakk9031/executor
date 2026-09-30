@@ -59,7 +59,9 @@ server and provision the actors declared in the test plan. Provisioning belongs 
 the setup deadline; scenario actions retain their full deadline. Scenarios that need
 the default management app can declare `managementProfiles` with the required actor
 roles. Setup waits for those committed profiles through public APIs. Scenarios that
-exercise provisioning progress leave that prerequisite undeclared. Native cleanup
+exercise provisioning progress leave that prerequisite undeclared. Scenarios that need
+another Testing SDK scenario declare `sdkScenarios`; setup creates each one in a
+child scope the test may close. Native cleanup
 hooks release those fixtures and close the server scope. `withCase` provides the per-case Layers;
 `@effect/vitest` owns suite sharing and test interruption. The scenario deadline
 is 60 seconds, with separate 60-second setup and cleanup deadlines and no retries.
