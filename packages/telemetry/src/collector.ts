@@ -43,6 +43,9 @@ const serveMotel = (bundle: string, data: string, port: number) =>
           stdout: "pipe",
           stderr: "pipe",
           additionalFds: { fd3: { type: "output" } },
+          // workerd does not watch its parent. Sharing the parent's process group lets whoever
+          // supervises the parent, such as the desktop, stop both after the parent is killed.
+          detached: false,
           killSignal: "SIGTERM",
           forceKillAfter: 3_000,
         },

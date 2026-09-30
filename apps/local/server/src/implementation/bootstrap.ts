@@ -8,27 +8,28 @@ import {
   FileSystem,
   Option,
   Path,
+  PlatformError,
   Redacted,
   Result,
   Schema,
 } from "effect";
 import { lock } from "proper-lockfile";
 import { config, keyStorageConfig, type KeyStorage } from "../contracts/config.ts";
+import {
+  LocalConfigurationReason,
+  LocalCredentialService,
+  LocalInstallation as Installation,
+} from "../contracts/auth.ts";
 
 /** Safe startup instructions. Key values are never displayed; native error text is sanitized. */
 export class LocalConfigurationError extends Schema.TaggedError<LocalConfigurationError>()(
   "LocalConfigurationError",
   {
+    reason: LocalConfigurationReason,
     message: Schema.String,
   },
 ) {}
 
-const Installation = Schema.Struct({
-  version: Schema.Literal(1),
-  id: Schema.String.check(Schema.isUUID()),
-  // Binaries released before "file" reject that record as invalid instead of misreading it.
-  state: Schema.Literals(["pending", "ready", "external", "file"]),
-});
 const Keys = Schema.Struct({
   apiKey: Schema.RedactedFromValue(Schema.String.check(Schema.isMinLength(32))),
   encryptionKey: Schema.RedactedFromValue(
@@ -51,6 +52,7 @@ const optIn = "set EXECUTOR_KEY_STORAGE=file to keep this new directory's keys i
 /** `firstStart` here means EXECUTOR_KEY_STORAGE=os ruled out the automatic key file. */
 const unavailable = (reason: string, firstStart: boolean) =>
   new LocalConfigurationError({
+    reason: "credential-unavailable",
     message: firstStart
       ? `The OS credential store could not be found (${reason}), and EXECUTOR_KEY_STORAGE=os requires it. On Linux, start a Secret Service such as GNOME Keyring, or ${optIn}. No keys were created.`
       : `The OS credential store could not be found (${reason}), and this directory keeps its keys there. On Linux, start a Secret Service such as GNOME Keyring. No replacement keys were created.`,
@@ -62,6 +64,7 @@ const unlock: Readonly<Record<string, string>> = {
 // Kept apart from `unavailable` so the desktop can offer a restart, which prompts again.
 const denied = (reason: string, platform: string, firstStart: boolean) =>
   new LocalConfigurationError({
+    reason: "credential-denied",
     message: [
       `Access to the OS credential store was denied, or the store is locked (${reason}).`,
       "Start Executor again to be asked again, then allow access or unlock the store.",
@@ -74,6 +77,7 @@ const denied = (reason: string, platform: string, firstStart: boolean) =>
   });
 const mismatch = (requested: KeyStorage, kept: KeyStorage) =>
   new LocalConfigurationError({
+    reason: "misconfigured",
     message: `This directory keeps its keys in ${kept === "file" ? "keys.json" : "the OS credential store"}, so EXECUTOR_KEY_STORAGE=${requested} cannot apply. Executor never switches key storage or moves keys. Unset EXECUTOR_KEY_STORAGE, or use a new EXECUTOR_DATA_DIR. Nothing was changed.`,
   });
 
@@ -107,12 +111,23 @@ const classify =
   });
 const invalid = () =>
   new LocalConfigurationError({
+    reason: "invalid",
     message:
       "Executor's saved key or installation record is invalid. Restore the original OS credential or key file and installation.json from your backup. Keys have not been replaced.",
   });
 
-const keyFileUnusable = (keyFile: string) =>
+/** One message for an unusable key file; the reason says whether it is gone, unreadable or damaged. */
+const keyFileUnusable = (
+  keyFile: string,
+  error: PlatformError.PlatformError | Schema.SchemaError,
+) =>
   new LocalConfigurationError({
+    reason:
+      error._tag === "SchemaError"
+        ? "invalid"
+        : error.reason._tag === "NotFound"
+          ? "credential-missing"
+          : "io",
     message: `Executor's key file ${keyFile} is missing or invalid. Restore it from your backup. Keys have not been replaced.`,
   });
 
@@ -128,6 +143,7 @@ export const localConfiguration = (platform: string) =>
         Effect.mapError(
           () =>
             new LocalConfigurationError({
+              reason: "misconfigured",
               message:
                 'EXECUTOR_KEY_STORAGE must be "file" (keep keys in keys.json) or "os" (OS credential store only), or unset. Nothing was changed.',
             }),
@@ -149,6 +165,7 @@ export const localConfiguration = (platform: string) =>
             lock(directory, { retries: 0, lockfilePath: path.join(directory, ".bootstrap.lock") }),
           catch: () =>
             new LocalConfigurationError({
+              reason: "locked",
               message:
                 "Executor could not lock its data directory. Start one instance per directory.",
             }),
@@ -165,6 +182,7 @@ export const localConfiguration = (platform: string) =>
       const explicit = Option.isSome(explicitApi) || Option.isSome(explicitEncryption);
       if (!explicit && !savedMarker && existing)
         return yield* new LocalConfigurationError({
+          reason: "credential-missing",
           message:
             "Existing Executor data has no installation record. Supply its original EXECUTOR_API_KEY and EXECUTOR_ENCRYPTION_KEY, or restore installation.json and its matching OS credential or key file. No new keys were created.",
         });
@@ -225,16 +243,19 @@ export const localConfiguration = (platform: string) =>
       if (explicit) {
         if (Option.isSome(keyStorage))
           return yield* new LocalConfigurationError({
+            reason: "misconfigured",
             message:
               "Supplied EXECUTOR_API_KEY and EXECUTOR_ENCRYPTION_KEY are never stored, so EXECUTOR_KEY_STORAGE cannot apply. Unset one or the other.",
           });
         if (Option.isNone(explicitApi) || Option.isNone(explicitEncryption))
           return yield* new LocalConfigurationError({
+            reason: "misconfigured",
             message:
               "Supply both EXECUTOR_API_KEY and EXECUTOR_ENCRYPTION_KEY, or leave both unset to use the OS credential store.",
           });
         if (installation.state !== "external")
           return yield* new LocalConfigurationError({
+            reason: "misconfigured",
             message: `This directory uses ${installation.state === "file" ? "its key file" : "the OS credential store"}. Unset EXECUTOR_API_KEY and EXECUTOR_ENCRYPTION_KEY to use its saved keys. Changing key storage requires an explicit transfer.`,
           });
         const settings = yield* config;
@@ -243,12 +264,13 @@ export const localConfiguration = (platform: string) =>
       }
       if (installation.state === "external")
         return yield* new LocalConfigurationError({
+          reason: "credential-missing",
           message:
             "This directory uses supplied keys. Set its original EXECUTOR_API_KEY and EXECUTOR_ENCRYPTION_KEY. No replacement keys were created.",
         });
       const readKeyFile = fs.readFileString(keyFile).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Keys))),
-        Effect.mapError(() => keyFileUnusable(keyFile)),
+        Effect.mapError((error) => keyFileUnusable(keyFile, error)),
       );
       // Only a directory that has never held keys may choose the key file. Once a
       // record says "ready" or data exists, the credential store stays mandatory.
@@ -298,7 +320,7 @@ export const localConfiguration = (platform: string) =>
         });
         const entry = yield* Effect.try({
           try: () =>
-            new AsyncEntry("com.usefulsoftware.executor.v2", installation.id, {
+            new AsyncEntry(LocalCredentialService, installation.id, {
               linux: { store: "secret-service" },
             }),
           catch: absent,
@@ -320,6 +342,7 @@ export const localConfiguration = (platform: string) =>
       }
       if (!firstStart)
         return yield* new LocalConfigurationError({
+          reason: "credential-missing",
           message:
             "Executor's OS credential is missing for an existing installation. Restore that credential from your backup. It has not been replaced.",
         });
@@ -337,6 +360,7 @@ export const localConfiguration = (platform: string) =>
     Effect.catchTag("PlatformError", () =>
       Effect.fail(
         new LocalConfigurationError({
+          reason: "io",
           message:
             "Executor could not read or write its installation record. Check the data directory permissions and available disk space. Existing keys have not been replaced.",
         }),

@@ -281,8 +281,10 @@
         "@executor-js/telemetry": "workspace:*",
         "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
         "electron-updater": "6.6.8",
+        "proper-lockfile": "4.1.2",
       },
       "devDependencies": {
+        "@types/proper-lockfile": "4.1.4",
         "electron": "44.4.2",
         "electron-builder": "26.15.6",
         "esbuild": "0.28.2",
@@ -833,6 +835,7 @@
     "tree-sitter@0.22.4": "patches/tree-sitter@0.22.4.patch",
     "@cloudflare/worker-bundler@0.2.4": "patches/@cloudflare%2Fworker-bundler@0.2.4.patch",
     "alchemy@2.0.0-beta.79": "patches/alchemy@2.0.0-beta.79.patch",
+    "@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d": "patches/@effect%2Fplatform-node-shared@c7d1ffff.patch",
     "@better-auth/oauth-provider@1.7.5": "patches/@better-auth%2Foauth-provider@1.7.5.patch",
     "bun@1.4.2": "patches/bun@1.4.2.patch",
     "@better-auth/sso@1.7.5": "patches/@better-auth%2Fsso@1.7.5.patch",

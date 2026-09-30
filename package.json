@@ -148,6 +148,7 @@
     "alchemy@2.0.0-beta.79": "patches/alchemy@2.0.0-beta.79.patch",
     "@distilled.cloud/cloudflare@1.0.0-rc.12": "patches/@distilled.cloud%2Fcloudflare@1.0.0-rc.12.patch",
     "@effect/sql-pg@https://pkg.pr.new/Effect-TS/effect/@effect/sql-pg@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d": "patches/@effect%2Fsql-pg@c7d1ffff.patch",
+    "@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d": "patches/@effect%2Fplatform-node-shared@c7d1ffff.patch",
     "@cloudflare/worker-bundler@0.2.4": "patches/@cloudflare%2Fworker-bundler@0.2.4.patch",
     "miniflare@4.20260730.0": "patches/miniflare@4.20260730.0.patch",
     "@alchemy.run/cloudflare-runtime@2.0.0-beta.79": "patches/@alchemy.run%2Fcloudflare-runtime@2.0.0-beta.79.patch",

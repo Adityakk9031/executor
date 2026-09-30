@@ -117,6 +117,13 @@ use the local API and decrypt saved accounts. Changing an encryption key does
 not re-encrypt existing accounts. Database rows contain encrypted bytes, and
 each ciphertext is bound to its account ID.
 
+A refused key setup reports one reason: `credential-unavailable` (the
+directory needs an OS store and there is none), `credential-denied`,
+`credential-missing`, `invalid` (a damaged record or key), `misconfigured`
+(`EXECUTOR_KEY_STORAGE` or supplied keys cannot apply to this directory),
+`locked` or `io`. The desktop backend also sends that reason on its private fd4
+pipe so the desktop can choose recovery actions.
+
 SDK routes, including `/mcp` and `/openapi.json`, require `Authorization: Bearer …`.
 The local token grants access to the whole local instance. Owner filters do not
 represent user authentication. SDK and MCP requests with a browser `Origin`

@@ -67,8 +67,61 @@ MCP clients can then use that browser for local consent.
 - Desktop warms the entry graph and keeps the renderer unthrottled during startup.
   HMR uses a separate ephemeral loopback listener and Vite cache, so it can
   run alongside the browser development server.
-- Failed startup, server exit, and renderer failure produce a safe native error.
-  Shutdown is scoped and force-kills an unresponsive backend after four seconds.
+- A supervisor restarts the backend after an unexpected exit, waiting 500 ms and
+  doubling to at most 10 s; readiness resets the delay. Each run gets a fresh one-use
+  fd3 token and the window reloads with its new pairing link. Three unexpected exits
+  within 60 seconds stop restarts and show the recovery page.
+- Start, readiness and key-setup failures show the same script-free recovery page.
+  Its buttons navigate to `executor-recovery:restart|logs|reset|quit`, which the
+  main process intercepts; there is still no preload or IPC. Actions depend on the
+  failure. Reset is never offered when the OS credential store is unavailable or
+  denies access, when `EXECUTOR_KEY_STORAGE` or supplied keys do not match the
+  data, or when the data is locked by another process. A denied store offers
+  **Restart**, which prompts again.
+- A crashed renderer reloads up to three times per minute. After that the app
+  says the window kept crashing, names the diagnostics folder and quits. The native
+  error box is otherwise used only when the window itself fails.
+- Shutdown is scoped and force-kills an unresponsive backend after four seconds.
+
+## Reset with backup
+
+**Help → Reset Executor data…** and the recovery page's **Reset data…** ask for
+confirmation (Cancel is the default). Reset then stops the backend, waits for its
+telemetry collector to exit and takes the data directory's bootstrap lock. It
+renames the whole data directory to `backups/data-<time>-<random>` beside it
+(`<userData>/backups/` for installed apps) and writes `executor-backup.json` there:
+app version, time, source path, installation ID, key source and, for the OS
+credential store, its service/account. It never contains a key. Executor restarts with fresh data and
+names the backup, with **Show in folder**.
+
+Nothing is deleted. The old OS credential entry stays where it is, still paired
+with the backup through its installation ID; a `keys.json` moves with the backup. To restore, quit Executor and move the
+backup directory back to the data path. There is no restore UI or automatic cleanup.
+If the rename fails, for example because another program holds a file open on
+Windows, the data stays in place and Executor restarts on it. No restart can begin
+while a reset holds the stopped backend. The desktop log continues in a new
+`executor-desktop.jsonl` under the fresh data directory.
+
+**Help → Show diagnostics folder** opens the directory holding the desktop,
+backend and collector logs.
+
+## Recovery scenarios
+
+`e2e/tests/desktop-recovery.spec.ts` stops and kills the real backend to check
+exit classification, restart delays, crash-loop recovery and **Restart**. It starts
+from mismatched key setup to check the configuration recovery page, a failed move
+that leaves data in place, and reset with its backup manifest, including reset of a
+running server. It checks that a locked data directory and, except on Windows, an
+unavailable OS credential store never offer reset. It uses synthetic supplied keys
+or an unreachable credential store, so it never touches a real OS credential. The
+release workflow runs it against each packaged desktop. Locally, build the entry
+and run it; set `EXECUTOR_E2E_DESKTOP_EXECUTABLE` to test a packaged app:
+
+```sh
+bun run apps:build && bun run telemetry:build && bun run web:build
+node apps/local/desktop/scripts/build.mjs
+bunx vitest run --config e2e/desktop-recovery.config.ts
+```
 
 ## T3 Code reference
 
@@ -96,8 +149,9 @@ from this workspace launcher. Windows and Linux have not been verified.
 
 Startup builds and copies the Motel collector bundle into `dist/motel`.
 The backend serves it with the bundled workerd and persists traces/logs under its data directory's
-`diagnostics/`. The Electron parent records startup, backend stderr, exits and
-renderer messages in `executor-desktop.jsonl`; stdout and private callback
+`diagnostics/`. The Electron parent records startup, exits and renderer messages in
+`executor-desktop.jsonl`. Each backend's last 256 KB of stderr is written there only
+when that run fails; stdout and private callback
 pipes remain protocol-only. See [telemetry](../../../notes/telemetry.md#frontend-lifetime-and-local-diagnostics)
 for retention, query URLs, and the JSONL files an agent can inspect.
 
