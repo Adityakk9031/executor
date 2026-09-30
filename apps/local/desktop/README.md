@@ -117,10 +117,9 @@ The backend uses the local server's default port, 4312, or an explicit `EXECUTOR
 It keeps the same MCP URL after a restart. Use another fixed port when running a
 second installation. Development and tests can explicitly request port 0.
 
-Artifacts are unsigned and have no update feed. The **Updates** menu states that
-clearly. The updater requires explicit download and restart confirmation once a
-signed build has a configured feed. macOS signing/notarization, Windows signing,
-and the public release feed remain release gates, not automatic build behavior.
+Windows and Linux builds, and signed macOS builds, include the channel feed in
+`app-update.yml`. Unsigned macOS builds have none, and their **Updates** menu
+points to the download page. See [desktop update channels](../../../RELEASING.md#desktop-update-channels).
 
 For now start the executable with explicitly supplied API/encryption keys in its
 environment. That works independently of the repository, but a complete Finder

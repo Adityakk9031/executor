@@ -86,7 +86,9 @@ Run the install command again to update. The v2 data directory stays the same
 when beta becomes stable. Uninstalling the package does not delete data or keys.
 
 The desktop app uses the same local server with a separate
-profile. Automatic desktop updates are not enabled; install a newer version
-over the existing application to update it.
+profile. It checks for updates in the background and asks before restarting to
+install one. Beta installs follow beta releases and move to stable when it is
+newer. On Linux, only the AppImage updates itself; install a newer `.deb` over
+the existing package.
 
 <ReleaseDesktopLink />

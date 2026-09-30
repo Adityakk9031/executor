@@ -57,7 +57,7 @@ export type Platform = (typeof platforms)[number];
 export const ReleaseVersion = Schema.String.check(Schema.isPattern(/^2\.\d+\.\d+(?:-beta\.\d+)?$/));
 
 const version = Schema.decodeUnknownSync(ReleaseVersion)(manifest.version);
-const channel = version.includes("-beta.") ? "beta" : "latest";
+const channel: ReleaseChannel = version.includes("-beta.") ? "beta" : "latest";
 const repository = "UsefulSoftwareCo/executor";
 const tag = `executor@${version}`;
 const nodeEngine = Schema.decodeUnknownSync(
@@ -84,6 +84,40 @@ export const release = {
     executableName: "executor-v2",
   },
 } as const;
+
+/** Release channels; beta installs also receive newer stable releases. */
+export type ReleaseChannel = "beta" | "latest";
+
+/**
+ * Executor 1 reads GitHub's release list in the same public repository, so v2
+ * never uses its feed file names. One published prerelease holds the current
+ * update metadata per channel, pointing at the versioned release assets.
+ */
+export const desktopUpdateFeed = {
+  tag: "executor-v2-desktop-updates",
+  url: `https://github.com/${repository}/releases/download/executor-v2-desktop-updates`,
+  channel: (channel: ReleaseChannel) => `executor-v2-${channel}`,
+} as const;
+
+/** electron-updater's metadata file name for one channel on one platform. */
+export const desktopUpdateFile = (target: Platform, channel: ReleaseChannel): string => {
+  const name = desktopUpdateFeed.channel(channel);
+  if (target.platform === "darwin") return `${name}-mac.yml`;
+  if (target.platform === "win32") return `${name}.yml`;
+  return target.arch === "x64" ? `${name}-linux.yml` : `${name}-linux-${target.arch}.yml`;
+};
+
+/** Order release versions; the pattern above is the only accepted shape. */
+export const compareReleaseVersions = (left: string, right: string): number => {
+  const parse = (value: string) => {
+    const [core = "", beta] = Schema.decodeUnknownSync(ReleaseVersion)(value).split("-beta.");
+    return [...core.split(".").map(Number), beta === undefined ? Infinity : Number(beta)];
+  };
+  const a = parse(left);
+  const b = parse(right);
+  const index = a.findIndex((part, position) => part !== b[position]);
+  return index === -1 ? 0 : Math.sign((a[index] ?? 0) - (b[index] ?? 0));
+};
 
 /** Immutable npm version for one native runtime, aliased by the launcher package. */
 export const platformVersion = (target: Platform): string =>

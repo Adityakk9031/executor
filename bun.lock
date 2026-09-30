@@ -32,6 +32,7 @@
         "typescript-5": "npm:typescript@5.9.3",
         "vitest": "5.0.1",
         "workerd": "1.20260901.1",
+        "yaml": "^2.8.2",
       },
     },
     "apps/cli": {

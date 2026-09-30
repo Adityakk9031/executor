@@ -24,7 +24,7 @@ import { OAuthCallbackPath } from "@executor-js/local-server/contracts";
 import { DesktopFailed, externalUrl } from "./contracts/desktop.ts";
 import { startBackend } from "./implementation/backend.ts";
 import { release } from "../../../../scripts/releases/config.ts";
-import { makeUpdateAction } from "./implementation/updates.ts";
+import { makeUpdater } from "./implementation/updates.ts";
 import { makeOpenBrowserAction } from "./implementation/browser.ts";
 import { startupUrl } from "./implementation/startup.ts";
 
@@ -238,7 +238,7 @@ const desktop = Effect.gen(function* () {
             for (const current of BrowserWindow.getAllWindows()) current.destroy();
           }),
         );
-        const checkForUpdates = yield* makeUpdateAction((install) => {
+        const checkForUpdates = yield* makeUpdater((install) => {
           Effect.runSync(Ref.set(update, Option.some(install)));
           stop();
         });

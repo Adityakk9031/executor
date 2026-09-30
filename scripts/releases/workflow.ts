@@ -2,7 +2,14 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Config, Effect, FileSystem } from "effect";
-import { desktopAsset, platformArchive, platforms, release } from "./config.ts";
+import {
+  desktopAsset,
+  desktopUpdateFeed,
+  desktopUpdateFile,
+  platformArchive,
+  platforms,
+  release,
+} from "./config.ts";
 
 NodeRuntime.runMain(
   Effect.gen(function* () {
@@ -30,6 +37,12 @@ NodeRuntime.runMain(
         archive: `${directory}/${platformArchive(target)}`,
         desktop: `${directory}/desktop-artifacts/${unpacked}`,
         installer: `${directory}/desktop-artifacts/${desktopAsset(target)}`,
+        update_info: `${directory}/desktop-artifacts/${desktopUpdateFile(target, release.channel)}`,
+        ...(target.platform === "darwin"
+          ? {
+              update_archive: `${directory}/desktop-artifacts/${desktopAsset(target).replace(/\.dmg$/, ".zip")}`,
+            }
+          : {}),
       };
     });
     const values = {
@@ -40,6 +53,7 @@ NodeRuntime.runMain(
       repository: release.repository,
       image: release.image,
       desktop_package: release.desktop.executableName,
+      desktop_update_feed: desktopUpdateFeed.tag,
       matrix: JSON.stringify({ include: matrix }),
       docker_matrix: JSON.stringify({
         include: platforms
