@@ -1208,10 +1208,40 @@ export const scenarios = {
       local: na("The shared OpenAPI and MCP error path is covered on self-host."),
     },
   },
-  providerErrors: {
+  providerErrorsGraphql: {
     fixtures: "actors",
     file: "provider-errors.spec.ts",
-    title: "Provider failures retain safe reasons and account recovery across protocols",
+    title: "Provider failures retain safe reasons and account recovery over GraphQL",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses controlled loopback providers through the shared runtime contract."),
+      local: na("Shared error views and SDK are exercised through hosted APIs."),
+    },
+  },
+  providerErrorsMcp: {
+    fixtures: "actors",
+    file: "provider-errors.spec.ts",
+    title: "Provider failures retain safe reasons and account recovery over MCP",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses controlled loopback providers through the shared runtime contract."),
+      local: na("Shared error views and SDK are exercised through hosted APIs."),
+    },
+  },
+  providerErrorsOpenapi: {
+    fixtures: "actors",
+    file: "provider-errors.spec.ts",
+    title: "Provider failures retain safe reasons and account recovery over OpenAPI",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses controlled loopback providers through the shared runtime contract."),
+      local: na("Shared error views and SDK are exercised through hosted APIs."),
+    },
+  },
+  providerErrorsCustom: {
+    fixtures: "actors",
+    file: "provider-errors.spec.ts",
+    title: "Provider failures retain safe reasons and account recovery from custom providers",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses controlled loopback providers through the shared runtime contract."),
