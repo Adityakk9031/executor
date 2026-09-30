@@ -724,6 +724,23 @@ To verify the installed CLI artifact through the same local scenarios, set
 with synthetic secrets. Pairing, dashboard loading and app deployment/call use
 real HTTP requests against the installed package.
 
+The first-launch key scenarios also run against an installed entry:
+
+```sh
+EXECUTOR_E2E_LOCAL_ENTRY=/path/to/node_modules/executor/bin.mjs \
+  bunx vitest run --config e2e/local-bootstrap.config.ts
+```
+
+The OS credential scenario uses the real store and removes only its own entry.
+The key file and denied-access scenarios never touch the real store. They start
+the CLI with a stand-in keyring module that reproduces the package's errors: an
+absent store, a cancelled or dismissed prompt, and a store that grants access.
+Only an absent store may fall back to `keys.json`. The key storage scenario
+covers `EXECUTOR_KEY_STORAGE`: `file` on a new or denied-pending directory,
+no-ops on matching directories, refusals on mismatched ones, and invalid values. On Linux outside a D-Bus
+session, set `EXECUTOR_E2E_CREDENTIAL_STORE=absent` to use the real missing
+Secret Service for the key file scenario instead; release CI runs both.
+
 The desktop artifact smoke uses the packaged executable, synthetic secrets and a
 fresh profile/data directory. It deploys a dependency-using app, calls it, closes
 the app, then calls the retained app after restart:

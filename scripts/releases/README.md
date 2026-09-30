@@ -16,12 +16,20 @@ against the same directory. `EXECUTOR_DATA_DIR` selects another directory and
 
 On first launch, Executor saves its API and encryption keys in the OS credential
 store: macOS Keychain, Windows Credential Manager, or Linux Secret Service.
-Linux requires a persistent Secret Service such as GNOME Keyring. There is no
-plaintext or in-memory fallback. A locked, unavailable, missing or invalid
-credential stops startup; existing installations never receive replacement keys.
+Linux uses a persistent Secret Service such as GNOME Keyring. If there is no
+store on a directory's first start, the keys are saved to `keys.json` in the
+data directory (mode `0600`) and the path is printed to stderr. If a store exists
+but access is denied or it is locked, startup stops without a key file and the
+next start asks again. Over SSH, unlock the store first, or set
+`EXECUTOR_KEY_STORAGE=file` before a directory's first start to use `keys.json`
+(`os` requires the store instead). A directory that already uses the OS store stops when it
+is locked or unavailable. A missing or
+invalid credential or key file stops startup; existing installations never
+receive replacement keys.
 
-Back up the data directory, including `installation.json`, and the matching OS
-credential (`com.usefulsoftware.executor.v2`, account ID from that file).
+Back up the data directory, including `installation.json` and any `keys.json`,
+and the matching OS credential (`com.usefulsoftware.executor.v2`, account ID
+from that file) when the directory uses one.
 Copying only the data directory to another machine is not enough to recover it.
 For a new headless install, supply both `EXECUTOR_API_KEY` (32+ characters) and
 `EXECUTOR_ENCRYPTION_KEY` (64 hexadecimal characters) through a secret manager.

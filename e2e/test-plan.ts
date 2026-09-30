@@ -470,6 +470,45 @@ export const scenarios = {
       "self-host": na("Local OS credential setup"),
     },
   },
+  localBootstrapKeyFile: {
+    file: "local-bootstrap.spec.ts",
+    title:
+      "local first launch without an OS credential store saves a private key file and never switches key storage",
+    targets: {
+      local: {
+        status: "not-run",
+        reason: "Runs against the installed release archive with local-bootstrap.config.ts.",
+      },
+      cloud: na("Local key file setup"),
+      "self-host": na("Local key file setup"),
+    },
+  },
+  localBootstrapDenied: {
+    file: "local-bootstrap.spec.ts",
+    title:
+      "local first launch with denied OS credential store access stops without a key file and asks again",
+    targets: {
+      local: {
+        status: "not-run",
+        reason: "Runs against the installed release archive with local-bootstrap.config.ts.",
+      },
+      cloud: na("Local OS credential setup"),
+      "self-host": na("Local OS credential setup"),
+    },
+  },
+  localBootstrapKeyStorage: {
+    file: "local-bootstrap.spec.ts",
+    title:
+      "local EXECUTOR_KEY_STORAGE chooses key storage only for a new directory and never switches it",
+    targets: {
+      local: {
+        status: "not-run",
+        reason: "Runs against the installed release archive with local-bootstrap.config.ts.",
+      },
+      cloud: na("Local key storage setup"),
+      "self-host": na("Local key storage setup"),
+    },
+  },
   memberControls: {
     fixtures: "actors",
     file: "member-controls.spec.ts",
