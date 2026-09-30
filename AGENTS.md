@@ -94,7 +94,38 @@ An earlier PR run on the same ref is cancelled; `main` runs finish so every merg
 has a baseline. The jobs live in `.github/workflows/checks.yml`,
 a `workflow_call` workflow, so another repository can call the same jobs.
 
-A PR run takes about seven minutes. Wait for it once; do not poll post-merge
+### Choosing a PR's E2E scenarios
+
+A pull request runs only the E2E scenarios it selects. Pushes to `main` run the
+full suite. The static checks (`check`, `apps-version`, `self-host-native`) always
+run. Put exactly one fenced `e2e` block in the PR description, listing spec files
+from `e2e/tests/`:
+
+````md
+```e2e
+groups.spec.ts
+invitation-roles.spec.ts
+```
+````
+
+Spec files the PR adds or changes are always included. Write `none` for a change
+no scenario exercises, such as documentation. Write `all` for cross-cutting changes:
+the e2e harness (`e2e/sdk`, `e2e/support`, `e2e/setup.ts`), the toolchain, lockfile or
+workflows, shared runtime, storage or auth, or anything whose callers you cannot
+enumerate. A description without the block runs the full suite. An unknown file name
+fails the `select` job. [`e2e/ci-selection.ts`](e2e/ci-selection.ts) turns the block
+into each job's scenario list; the run summary shows it.
+
+Choose from the actual callers of the changed code. Search `e2e/tests/` for the
+routes, tools and UI the change touches, and include every file that exercises them
+on any target. Too narrow a selection only defers the failure to `main`. The `select`
+job reads the live description, so after editing it, rerun the whole workflow
+(`gh run rerun <run-id>`), not only failed jobs.
+
+A failure on `main` is a regression or a flake that a PR selection missed. Fixing
+it takes priority over new work that touches the same area.
+
+A PR run takes at most about seven minutes. Wait for it once; do not poll post-merge
 suites before handing off. When a job fails in a scenario the change does not
 touch:
 
@@ -129,6 +160,9 @@ single-threaded PGlite workload. Static checks use 4 vCPUs.
 
 - `check` runs `bun run check`: the format check, `oxlint`, the typecheck, the
   no-tests-outside-`e2e/` check and the e2e boundary check.
+- `select` runs [`e2e/ci-selection.ts`](e2e/ci-selection.ts) and gives each e2e job
+  its `--test-name` pattern, or skips the job when none of its scenarios is selected.
+  Its job patterns hold the exclusions and splits below.
 - `e2e-local` and `e2e-self-host` run `bun run e2e:prepare`, then `e2e:local`
   under `xvfb-run` and `e2e:self-host` headlessly on macOS. The self-host run excludes the Claude
   Code MCP scenario, which needs a model API key that CI does not hold.
