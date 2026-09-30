@@ -94,8 +94,8 @@ from this workspace launcher. Windows and Linux have not been verified.
 
 ## Persistent diagnostics
 
-Startup builds and copies the standalone Motel collector into `dist/motel`.
-The backend owns it and persists traces/logs under its data directory's
+Startup builds and copies the Motel collector bundle into `dist/motel`.
+The backend serves it with the bundled workerd and persists traces/logs under its data directory's
 `diagnostics/`. The Electron parent records startup, backend stderr, exits and
 renderer messages in `executor-desktop.jsonl`; stdout and private callback
 pipes remain protocol-only. See [telemetry](../../../notes/telemetry.md#frontend-lifetime-and-local-diagnostics)

@@ -31,6 +31,7 @@
         "typescript": "7.0.2",
         "typescript-5": "npm:typescript@5.9.3",
         "vitest": "5.0.1",
+        "workerd": "1.20260901.1",
       },
     },
     "apps/cli": {
@@ -659,6 +660,7 @@
       "dependencies": {
         "@bufbuild/protobuf": "2.11.0",
         "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
+        "workerd": "1.20260901.1",
       },
       "devDependencies": {
         "@effect/platform-bun": "https://pkg.pr.new/Effect-TS/effect/@effect/platform-bun@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
