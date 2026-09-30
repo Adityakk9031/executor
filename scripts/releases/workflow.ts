@@ -23,7 +23,14 @@ NodeRuntime.runMain(
           new Error("Publish from main and select the channel recorded in apps/cli/package.json."),
         );
     }
-    const matrix = platforms.map((target) => {
+    // macOS runners cost 5-20x as much as Linux runners, so pull requests skip the darwin
+    // targets. Manual build and publish runs still build, sign and test them on macOS.
+    const event = yield* Config.String("GITHUB_EVENT_NAME");
+    const targets =
+      event === "pull_request"
+        ? platforms.filter((target) => target.platform !== "darwin")
+        : platforms;
+    const matrix = targets.map((target) => {
       const directory = `.local/releases/${release.version}-${target.platform}-${target.arch}`;
       const unpacked =
         target.platform === "darwin"

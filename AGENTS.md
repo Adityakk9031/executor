@@ -183,6 +183,9 @@ API/MCP outcomes, workflow correlation, browser failures, app traces and analyti
 Deployed tests run through `bun run e2e:deployed`; the runner owns provisioning
 and teardown. The release workflow builds and tests Docker images on release PRs
 and manual dispatch. Publication requires an explicit channel dispatch from main.
+Release PRs build and test the Linux and Windows targets only. The macOS targets run
+on manual dispatch, where they are built, signed, notarized and tested. macOS runners
+cost 5-20x as much as Linux runners, so keep them off pull requests.
 
 A failed e2e job uploads raw reports and server logs. Product database files,
 runtime dependencies and private `actors.json` sessions are excluded.
