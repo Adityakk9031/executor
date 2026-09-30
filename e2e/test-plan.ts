@@ -1016,6 +1016,25 @@ export const scenarios = {
       local: na("Local does not export product analytics or replay."),
     },
   },
+  supportDialog: {
+    fixtures: "actors",
+    file: "support-dialog.spec.ts",
+    title: "Cloud support dialog lists every channel across sidebar layouts and records its use",
+    targets: {
+      cloud: managedCloud,
+      "self-host": scheduled,
+      local: na("The local dashboard is covered by its own support scenario."),
+    },
+  },
+  localSupportDialog: {
+    file: "local-support-dialog.spec.ts",
+    title: "local dashboard keeps its resource links without the Cloud support dialog",
+    targets: {
+      local: scheduled,
+      "self-host": na("The hosted support scenario checks self-host."),
+      cloud: na("The hosted support scenario checks Cloud."),
+    },
+  },
   feedback: {
     fixtures: "actors",
     file: "feedback.spec.ts",
