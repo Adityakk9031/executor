@@ -174,7 +174,7 @@ scenarios on Linux instead of moving them to a Mac.
   catalog scenario and the slow and stalled tool listing scenarios on its own runner,
   in parallel with the functional jobs. This preserves the four concurrent writers,
   the catalog and listing latency bounds and the 60-second deadline without competing
-  with 15 independent product servers.
+  with the functional job's product servers.
 - `e2e-cloud` runs Cloud onboarding and delivered observability scenarios. It starts the local Cloud
   Worker, a throwaway Postgres container and the service emulators, so it needs
   Docker but no credentials.

@@ -100,8 +100,9 @@ last safe DNS, TLS, or HTTP failure. All origin probes start together. Fallback
 organization cleanup uses the worker bound and preserves release order within
 each scenario, including when another organization's cleanup fails.
 
-Files run in parallel with 16 workers by default. Use `--workers 1` through
-`--workers 32` to set the bound. A file's cases retain their declared sequence.
+Files run in parallel with one worker per two CPUs by default, up to 16. Each worker
+runs its own product server and browser. Use `--workers 1` through `--workers 32` to
+set the bound. A file's cases retain their declared sequence.
 Interactive recordings use one worker. Filters load only applicable files.
 Each unattended test has a 60-second timeout. Cleanup hooks retain a separate
 60-second timeout. Interactive inspection has no test timeout.
@@ -111,8 +112,8 @@ when operations are independent. Keep dependent actions ordered.
 The self-host load case creates 1,000 accounts through four concurrent API
 writers. The MCP catalog scale case deploys 29 apps with 7,000 tools and about
 46 MB of input schemas, plus three MCP apps with profiles whose server never answers, and bounds
-execute and search latency. CI gives both cases their own M4 runner, one after
-the other, in parallel with the functional suite. The PGlite workload depends on single-thread speed. Running both workloads on one machine can consume its CPU budget and
+execute and search latency. CI gives both cases their own 16-vCPU Linux runner, one
+after the other, in parallel with the functional suite. The PGlite workload depends on single-thread speed. Running both workloads on one machine can consume its CPU budget and
 invalidate the load timing. The normal self-host command still includes every
 applicable case. To reproduce the CI split, use separate machines:
 
