@@ -1283,6 +1283,28 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  oauthNestedTokenResponse: {
+    fixtures: "actors",
+    file: "oauth-provider-token-responses.spec.ts",
+    title:
+      "A declared nested OAuth token response reads Slack's user-only authed_user grant on sign-in and renewal",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer with controlled wire responses."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthJsonTokenRequests: {
+    fixtures: "actors",
+    file: "oauth-provider-token-responses.spec.ts",
+    title:
+      "A declared JSON token request format signs in and renews against a service that reads only JSON token requests",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer with controlled wire responses."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
   oauthEmptyTokenScope: {
     fixtures: "actors",
     file: "oauth-provider-token-responses.spec.ts",
@@ -2144,6 +2166,17 @@ export const scenarios = {
       local: na("Hosted modal and organization account reconciliation."),
     },
   },
+  oauthClientCredentialsRequestOptions: {
+    fixtures: "actors",
+    file: "oauth-client-credentials.spec.ts",
+    title:
+      "Client credentials sends JSON token requests with comma-separated scopes when the provider declares them, on connect and renewal",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback token service."),
+      local: na("Exercises shared OAuth through the hosted API."),
+    },
+  },
   oauthClientCredentials: {
     fixtures: "actors",
     file: "oauth-client-credentials.spec.ts",
@@ -2201,7 +2234,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "oauth-authorization-params.spec.ts",
     title:
-      "OAuth authorization parameters and URL queries reach sign-in without replacing protocol parameters",
+      "OAuth authorization parameters, URL queries and a declared scope separator reach sign-in without replacing protocol parameters",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback OAuth issuer."),

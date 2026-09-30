@@ -264,6 +264,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({tools: router
             grant: "client_credentials",
             scope: "reports:read",
             resource: `${issuer.origin}/resource`,
+            contentType: "application/x-www-form-urlencoded",
             hasCallback: false,
             authenticated: true,
           });
@@ -440,6 +441,104 @@ export default defineApp({accounts:{service}},async({accounts})=>({tools: router
             )).account,
           ).toEqual(firstDefault);
         }
+      }),
+    ),
+  );
+  it.effect(scenarios.oauthClientCredentialsRequestOptions.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors;
+        const issuer = yield* clientCredentialsIssuer;
+        // A service that reads only JSON token requests and comma-separated scopes.
+        yield* issuer.configure({ method: "client_secret_basic", format: "json", expiresIn: 20 });
+        const prefix = `/api/organizations/${actors.organization.id}`;
+        const connect = (options: string) =>
+          Effect.gen(function* () {
+            const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
+              name: `Machine request options ${randomUUID().slice(0, 8)}`,
+              files: [
+                {
+                  path: "index.ts",
+                  content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
+const service=defineProvider({name:"JSON reporting",auth:{machine:oauth2({grant:"client_credentials",tokenUrl:${JSON.stringify(issuer.origin + "/token")},scopes:["reports:read","reports:write"],tokenEndpointAuthMethod:"client_secret_basic"${options}})}});
+export default defineApp({accounts:{service}},async({accounts})=>({tools: router({
+  read:query({input:object({})},async({fetch})=>{const result=await fetch(${JSON.stringify(issuer.origin + "/resource")},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});return result.json();}),
+})}));`,
+                },
+                appsManifest,
+              ],
+            });
+            expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
+            const app = yield* body(Resource, deployed);
+            yield* Effect.addFinalizer(() =>
+              api.request(actors.owner, "DELETE", `${prefix}/apps/${app.id}`).pipe(Effect.orDie),
+            );
+            const profile = yield* createProfile(actors.owner, `${prefix}/apps/${app.id}`);
+            const connection = yield* body(
+              Resource,
+              yield* api.request(actors.owner, "POST", `${prefix}/apps/${app.id}/connections`, {
+                requirement: "service",
+                profile: profile.id,
+              }),
+            );
+            const started = yield* api.request(
+              actors.owner,
+              "POST",
+              `${prefix}/connections/${connection.id}/oauth/start`,
+              { method: "machine", label: "JSON reporting", client: machineClient },
+            );
+            return { app, profile, started };
+          });
+
+        // The default form request is refused by this service.
+        const requests = (yield* issuer.metrics).requests;
+        const form = yield* connect("");
+        expect(form.started.status, JSON.stringify(form.started.body)).toBe(422);
+        expect(form.started.body).toMatchObject({
+          _tag: "OAuthSetupFailed",
+          reason: "token_exchange",
+          cause: { stage: "clientCredentials", status: 400, providerError: "invalid_request" },
+        });
+        expect((yield* issuer.metrics).requests).toBe(requests + 1);
+        expect((yield* issuer.metrics).observed).toMatchObject({
+          contentType: "application/x-www-form-urlencoded",
+          scope: "reports:read reports:write",
+        });
+
+        const json = yield* connect(`,scopeSeparator:",",tokenRequestFormat:"json"`);
+        expect(json.started.status, JSON.stringify(json.started.body)).toBe(200);
+        const completed = yield* body(Completed, json.started);
+        yield* Effect.addFinalizer(() =>
+          api
+            .request(actors.owner, "DELETE", `${prefix}/accounts/${completed.account.id}`)
+            .pipe(Effect.orDie),
+        );
+        const sent = {
+          grant: "client_credentials",
+          scope: "reports:read,reports:write",
+          resource: null,
+          contentType: "application/json",
+          hasCallback: false,
+          authenticated: true,
+        };
+        expect((yield* issuer.metrics).observed).toEqual(sent);
+
+        // The token expires inside the host's refresh window, so the call renews with the same
+        // options the account connected with.
+        const before = (yield* issuer.metrics).generation;
+        const read = yield* api.request(
+          actors.owner,
+          "POST",
+          `${prefix}/apps/${json.app.id}/tools/call`,
+          { profile: json.profile.id, tool: "read", kind: "query", input: {} },
+        );
+        expect(read.status, JSON.stringify(read.body)).toBe(200);
+        const value = yield* body(Read, read);
+        expect(value.authenticated).toBe(true);
+        expect(value.generation).toBeGreaterThan(before);
+        expect((yield* issuer.metrics).observed).toEqual(sent);
       }),
     ),
   );

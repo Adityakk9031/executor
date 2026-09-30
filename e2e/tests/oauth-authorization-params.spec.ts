@@ -1,6 +1,6 @@
 /**
  * Declared authorization parameters and a declared URL's own query reach the sign-in URL;
- * protocol parameters stay host-owned.
+ * protocol parameters stay host-owned. A declared scope separator joins the requested scopes.
  */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schema } from "effect";
@@ -42,7 +42,7 @@ export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
               appsManifest,
             ],
           });
-        const start = (config: object, client?: object) =>
+        const start = (config: object, client?: object, scope = "read") =>
           Effect.gen(function* () {
             const deployed = yield* deploy(config);
             expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -72,7 +72,7 @@ export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
               expect(url.searchParams.getAll(key)).toEqual([value]);
             expect(url.searchParams.get("response_type")).toBe("code");
             expect(url.searchParams.get("redirect_uri")).toBe(signIn.redirectUri);
-            expect(url.searchParams.get("scope")).toBe("read");
+            expect(url.searchParams.getAll("scope")).toEqual([scope]);
             expect(url.searchParams.get("state")).toMatch(/.{16,}/);
             expect(url.searchParams.get("code_challenge")).toMatch(/.{32,}/);
             expect(url.searchParams.get("code_challenge_method")).toBe("S256");
@@ -140,6 +140,26 @@ export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
             `${prefix}/apps/${discovered.app}/profiles/${discovered.profile}`,
           )).body,
         ).toMatchObject({ accounts: { service: account.id } });
+
+        // Linear reads comma-separated scopes. The declared separator joins them on the sign-in
+        // request, which the service receives as sent; registration keeps RFC 7591's spaces.
+        const commaScopes = yield* start(
+          {
+            discover: `${issuer.origin}/mcp`,
+            scopes: ["read", "write"],
+            resource: null,
+            scopeSeparator: ",",
+            authorizationParams: extras,
+          },
+          undefined,
+          "read,write",
+        );
+        expect((yield* issuer.metrics).lastRegistration?.scope).toBe("read write");
+        const consent = yield* Effect.scoped(
+          HttpClient.withScope(http).get(commaScopes.url.href),
+        ).pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }));
+        expect(consent.status).toBe(302);
+        expect((yield* issuer.metrics).authorizationScope).toBe("read,write");
 
         // A declaration cannot replace a host-owned protocol parameter, in `authorizationParams`
         // or in a declared URL's query, and names each parameter once. Each rejected

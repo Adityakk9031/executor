@@ -6,6 +6,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { testCredential } from "../support/os-credential.ts";
 import { freePort } from "../support/ports.ts";
+import { localNpmRegistry } from "../support/npm-registry.ts";
 import { scenarios } from "../test-plan.ts";
 
 const Record = Schema.Struct({
@@ -101,6 +102,8 @@ const packagedCli = (options: {
     const processes = yield* ChildProcessSpawner.ChildProcessSpawner;
     const http = yield* HttpClient.HttpClient;
     const entry = path.resolve(yield* Config.String("EXECUTOR_E2E_LOCAL_ENTRY"));
+    // Startup deploys the bundled Executor app, which pins this checkout's apps release.
+    const registry = yield* localNpmRegistry;
     const environment = (
       directory: string,
       port: number,
@@ -115,6 +118,7 @@ const packagedCli = (options: {
       EXECUTOR_DATA_DIR: directory,
       EXECUTOR_PORT: String(port),
       EXECUTOR_ENVIRONMENT: "e2e",
+      EXECUTOR_NPM_REGISTRY: registry.url,
       ...extra,
     });
     const command = (directory: string, port: number, extra: Readonly<Record<string, string>>) =>
