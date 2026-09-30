@@ -155,8 +155,8 @@ The deployed suite remains available for manual dispatch with Neon or PlanetScal
 
 Blacksmith Linux runners run five check jobs. Local, self-host and Cloud E2E jobs use
 `blacksmith-16vcpu-ubuntu-2404`. The load job also uses 16 vCPUs: on 4 vCPUs the
-product server, PGlite and the test driver contend and the inventory case missed its
-60-second deadline. Static checks use 4 vCPUs.
+product server, PGlite and the test driver contend. Its inventory case has a 120-second
+test limit because its body takes 40-48s on CI. Static checks use 4 vCPUs.
 
 Do not run CI checks on macOS runners. They cost 5-20x as much per minute as Linux
 runners and were most of the CI bill, and no check needs macOS. Fix slow or flaky
@@ -173,8 +173,8 @@ scenarios on Linux instead of moving them to a Mac.
 - `e2e-self-host-scale` runs the 1,000-account workload and then the 7,000-tool MCP
   catalog scenario and the slow and stalled tool listing scenarios on its own runner,
   in parallel with the functional jobs. This preserves the four concurrent writers,
-  the catalog and listing latency bounds and the 60-second deadline without competing
-  with the functional job's product servers.
+  the catalog and listing latency bounds and the inventory case's 120-second limit without
+  competing with the functional job's product servers.
 - `e2e-cloud` runs Cloud onboarding and delivered observability scenarios. It starts the local Cloud
   Worker, a throwaway Postgres container and the service emulators, so it needs
   Docker but no credentials.
