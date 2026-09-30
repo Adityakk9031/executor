@@ -79,7 +79,34 @@ const declaredAuthorizationQuery = Schema.makeFilter(
   },
 );
 
+/** How the token endpoint reads requests. RFC 6749 uses a form; some services want JSON. */
+export const OAuthTokenRequestFormat = Schema.Literals(["form", "json"]);
+export type OAuthTokenRequestFormat = typeof OAuthTokenRequestFormat.Type;
+
+/**
+ * Where a service nests the grant in its token response, as a dot-separated member path. Slack
+ * returns a user token under `authed_user`.
+ */
+export const OAuthTokenResponse = Schema.Struct({
+  path: Schema.String.check(Schema.isPattern(/^[^.]+(\.[^.]+)*$/)),
+});
+export type OAuthTokenResponse = typeof OAuthTokenResponse.Type;
+
+/** Options for services that differ from RFC 6749 in how they read requests. */
+const tokenRequestOptions = {
+  /** Joins requested scopes; Linear wants `","`. Defaults to RFC 6749's space. */
+  scopeSeparator: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1))),
+  /** Encoding of token requests. Defaults to `"form"`; Atlassian, ClickUp and Notion need `"json"`. */
+  tokenRequestFormat: Schema.optionalKey(OAuthTokenRequestFormat),
+};
+
 const oauthOptions = {
+  ...tokenRequestOptions,
+  /**
+   * Read the grant from this nested member of the token response when the top-level response has
+   * no access token or no scope. Slack's user tokens use `{ path: "authed_user" }`.
+   */
+  tokenResponse: Schema.optionalKey(OAuthTokenResponse),
   grant: Schema.optionalKey(Schema.Literal("authorization_code")),
   /**
    * Service-defined authorization request parameters, such as Google's
@@ -125,6 +152,7 @@ export const OAuth2Config = Schema.Union([
     tokenUrl: Schema.optionalKey(Schema.Never),
     revocationUrl: Schema.optionalKey(Schema.Never),
     scopes: Schema.optionalKey(Schema.Array(Schema.String)),
+    ...tokenRequestOptions,
     tokenEndpointAuthMethod: OAuthSecretClientAuth,
     resource: Schema.optionalKey(Schema.NullOr(HttpUrl)),
   }),
@@ -133,6 +161,7 @@ export const OAuth2Config = Schema.Union([
     tokenUrl: HttpUrl,
     revocationUrl: Schema.optionalKey(HttpUrl),
     scopes: Schema.Array(Schema.String),
+    ...tokenRequestOptions,
     tokenEndpointAuthMethod: OAuthSecretClientAuth,
     resource: Schema.optionalKey(Schema.NullOr(HttpUrl)),
     authorizationUrl: Schema.optionalKey(Schema.Never),

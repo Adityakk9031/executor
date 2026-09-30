@@ -174,6 +174,34 @@ protocol parameters. Prefer `authorizationParams` for service settings. Declare
 each parameter in one place: a name in both the URL and `authorizationParams`,
 or a protocol parameter in the URL, fails the build.
 
+Some services read OAuth requests or answer them differently from the
+standard. Declare the difference from the service's docs; do not work around it
+in app code:
+
+- `scopeSeparator: ","` joins `scopes` with commas on the sign-in request, as
+  Linear requires. The default is a space.
+- `tokenRequestFormat: "json"` sends token requests (sign-in, renewal and
+  client credentials) as a JSON object, as Atlassian, ClickUp and Notion
+  require. The default is a form.
+- `tokenResponse: { path: "authed_user" }` reads the grant from a nested member
+  of the token response when the top level has no access token or scope.
+  Slack returns user tokens there. Comma-separated scopes in that member become
+  space-separated.
+
+```ts
+oauth2({
+  authorizationUrl: "https://slack.com/oauth/v2/authorize",
+  tokenUrl: "https://slack.com/api/oauth.v2.access",
+  scopes: [],
+  // Slack names user scopes in its own parameter.
+  authorizationParams: { user_scope: "search:read,channels:history" },
+  tokenResponse: { path: "authed_user" },
+});
+```
+
+A connected account keeps the settings it signed in with; reconnect it after
+changing them.
+
 When the service documents an RFC 7009 token revocation endpoint, also declare
 `revocationUrl`. Executor calls it when a user deletes the account, so the
 provider stops honoring the saved token. Revocation is best effort and never

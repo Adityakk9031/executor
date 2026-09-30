@@ -925,6 +925,10 @@ export const makeOAuth = (
         client: attempt.client,
         response: attempt.response,
         ...(attempt.resource === undefined ? {} : { resource: attempt.resource }),
+        ...(attempt.tokenRequestFormat === undefined
+          ? {}
+          : { tokenRequestFormat: attempt.tokenRequestFormat }),
+        ...(attempt.tokenResponse === undefined ? {} : { tokenResponse: attempt.tokenResponse }),
         ...idTokenIdentity(tokens),
         fields,
         ...(tokens.refresh_token === undefined ? {} : { refreshToken: tokens.refresh_token }),
