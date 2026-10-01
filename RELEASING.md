@@ -118,9 +118,12 @@ The workflow refuses a channel that does not match the committed version.
 
 The npm `latest` tag, Docker `latest`, and Executor 1 desktop updater stay
 unchanged. A draft public release blocks accidental repeat publication of the
-same version. After a partial failure, inspect registry availability and the
-existing draft before recovery. Never republish an accepted immutable npm
-version merely because its registry entry is still propagating.
+same version. After a partial failure, re-run the failed publish job. It resumes
+only its own draft, whose target is this source's unchanged public snapshot, and
+skips npm versions whose registry integrity matches the local archive. Any other
+existing release or npm version stops publication for inspection. Never
+republish an accepted immutable npm version merely because its registry entry is
+still propagating.
 
 Merge site install-link changes only after the referenced public assets exist.
 Verify the public npm install, GitHub assets, Docker manifest and rendered site.
@@ -143,7 +146,7 @@ publishing route.
 
 ## Release infrastructure
 
-`apps/hosted/cloud/alchemy.releases.ts` owns the seven required secrets in the existing `release`
+`apps/hosted/cloud/alchemy.releases.ts` owns the eight required secrets in the existing `release`
 environment. It is separate from the unapplied broad CI stack, so
 applying releases does not change production credentials, repository policy or
 Cloudflare deployment tokens. Missing credentials fail the apply.
@@ -157,8 +160,11 @@ The environment is created once by a repository administrator with a bare
 Secret providers require it to exist and never change its protection rules.
 The IaC token needs Environments read/write and Metadata read on
 `UsefulSoftwareCo/executor-next`. GitHub cannot restrict it to one environment.
-The public release token needs Contents write on `UsefulSoftwareCo/executor`.
-The release stack requires `NPM_TOKEN`, `PUBLIC_RELEASE_TOKEN`,
+Public releases use a GitHub App installed on `UsefulSoftwareCo/executor` with
+Contents read/write. Its installation tokens have their own rate limit, so a
+release cannot fail because a person's token is busy elsewhere.
+The release stack requires `NPM_TOKEN`, `PUBLIC_RELEASE_APP_CLIENT_ID`,
+`PUBLIC_RELEASE_APP_PRIVATE_KEY`,
 `EXECUTOR_MAC_SIGNING_KEY`, `EXECUTOR_MAC_SIGNING_CERTIFICATE`,
 `EXECUTOR_MAC_NOTARY_KEY`, `EXECUTOR_MAC_NOTARY_KEY_ID`, and
 `EXECUTOR_MAC_NOTARY_ISSUER`, plus GitHub and Cloudflare state credentials.
