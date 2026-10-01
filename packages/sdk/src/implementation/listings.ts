@@ -1,5 +1,5 @@
 /** Evaluated tool listings, reused across requests through the declaration store. */
-import { Clock, Deferred, Effect, Exit, Fiber, Option, Schema } from "effect";
+import { Clock, Deferred, Effect, Exit, Fiber, Option, Schema, type Tracer } from "effect";
 import {
   defaultToolListingPolicy,
   durableHeadStartMillis,
@@ -83,6 +83,23 @@ class Stopped {
 type Outcome = Listed | Failed | Unkept | Stopped;
 
 /**
+ * Record a moment of an evaluation on the listing span of the read that started it. A background
+ * evaluation's own spans can end after that request's telemetry is flushed, as in a Cloud MCP
+ * session, so these events are what shows that it was handed off and started.
+ */
+const listingEvent = (
+  span: Option.Option<Tracer.Span>,
+  name: string,
+  attributes: Record<string, unknown>,
+  at?: bigint,
+) =>
+  Option.isNone(span)
+    ? Effect.void
+    : Effect.map(at === undefined ? Clock.currentTimeNanos : Effect.succeed(at), (time) =>
+        span.value.event(name, time, attributes),
+      );
+
+/**
  * Keep each evaluated listing in the shared declaration store under the declaration key, so a
  * new deployment, profile revision, account selection or stored credential is another listing,
  * and serve anything this read did not evaluate itself only after the checks a live evaluation
@@ -121,6 +138,8 @@ export const makeListings = (options: {
     ) =>
       Effect.gen(function* () {
         const identity = { app: state.app.id, deployment: state.deployment.id };
+        // The read's own span, which ends with the request that waits for its evaluation.
+        const listingSpan = yield* Effect.option(Effect.currentSpan);
         const evaluated = resolve(state, options.resolveAccount, options.lifecycle).pipe(
           Effect.flatMap(evaluate),
         );
@@ -204,7 +223,13 @@ export const makeListings = (options: {
           });
         /** Evaluate once for every reader of this key, keeping the listing or its failure. */
         const run = (load: PendingLoad) =>
-          evaluated.pipe(
+          Clock.currentTimeMillis.pipe(
+            Effect.flatMap((at) =>
+              listingEvent(listingSpan, "executor.listing.evaluation.started", {
+                "executor.listing.queued_ms": at - load.started,
+              }),
+            ),
+            Effect.andThen(evaluated),
             Effect.map((listing): Outcome => new Listed(listing)),
             Effect.catch((error) =>
               Clock.currentTimeMillis.pipe(
@@ -236,13 +261,32 @@ export const makeListings = (options: {
             // Background work may start uninterruptible; its time bound must still stop it.
             Effect.interruptible,
           );
+        /**
+         * Offer an evaluation to the host's background work. The offer is recorded at the moment
+         * it is made, before the evaluation, which may start at once, records its own start.
+         */
+        const handoff = (reason: "miss" | "refresh", host: BackgroundWork, load: PendingLoad) =>
+          Effect.gen(function* () {
+            const offered = yield* Clock.currentTimeNanos;
+            const accepted = yield* host(run(load));
+            yield* listingEvent(
+              listingSpan,
+              "executor.listing.handoff",
+              {
+                "executor.listing.handoff.reason": reason,
+                "executor.listing.handoff.accepted": accepted,
+              },
+              offered,
+            );
+            return accepted;
+          });
         /** Start an evaluation nobody waits for, unless one is running or the host refuses. */
         const refresh = Effect.uninterruptible(
           Effect.gen(function* () {
             if (background === undefined || cache.pending(id) !== undefined) return;
             const load = pendingLoad(yield* Clock.currentTimeMillis);
             cache.begin(id, load);
-            if (yield* background(run(load))) return;
+            if (yield* handoff("refresh", background, load)) return;
             cache.end(id, load);
             yield* Deferred.succeed(load.done, new Stopped(0));
           }),
@@ -418,9 +462,11 @@ export const makeListings = (options: {
         const load = pendingLoad(now);
         cache.begin(id, load);
         yield* Effect.annotateCurrentSpan("executor.declarations.cache", "miss");
-        const detached =
-          background === undefined ? false : yield* Effect.uninterruptible(background(run(load)));
-        if (detached) return yield* orRecalled(join(load));
+        if (
+          background !== undefined &&
+          (yield* Effect.uninterruptible(handoff("miss", background, load)))
+        )
+          return yield* orRecalled(join(load));
         // Without background work the evaluation belongs to this reader and stops with it.
         load.waiters = 1;
         yield* run(load);
