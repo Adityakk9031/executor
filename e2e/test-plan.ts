@@ -2174,6 +2174,16 @@ export const scenarios = {
       local: scheduled,
     },
   },
+  oauthMetadataOverride: {
+    fixtures: "actors",
+    file: "oauth-metadata-override.spec.ts",
+    title: "OAuth metadata overrides validate ES256 and issuer while MCP challenges select scopes",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
   oauthDiscoveryFallback: {
     fixtures: "actors",
     file: "oauth-discovery-fallback.spec.ts",

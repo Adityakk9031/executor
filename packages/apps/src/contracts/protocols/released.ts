@@ -5,4 +5,13 @@ import { protocol3 } from "./3.ts";
 import { protocol4 } from "./4.ts";
 import { protocol5 } from "./5.ts";
 
-export const releasedProtocols = [protocol1, protocol2, protocol3, protocol4, protocol5] as const;
+import { protocol6 } from "./6.ts";
+
+export const releasedProtocols = [
+  protocol1,
+  protocol2,
+  protocol3,
+  protocol4,
+  protocol5,
+  protocol6,
+] as const;

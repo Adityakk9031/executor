@@ -145,7 +145,31 @@ sign-in page, not the token URL: Google signs in at `accounts.google.com` and
 issues tokens from `oauth2.googleapis.com`. List the scopes the app needs;
 discovery only fills them in when the service advertises scopes for the resource.
 
-Discovery requires the metadata's `issuer` to equal the URL it was fetched from.
+When the service publishes its metadata at a nonstandard location, keep `discover`
+pointing at the MCP resource or issuer and declare the exact document URL:
+
+```ts
+oauth2({
+  discover: "https://mcp.example.com",
+  authorizationServerMetadataUrl: "https://auth.example.com/oauth/.well-known/openid-configuration",
+  scopes: ["reports:read", "offline_access"],
+});
+```
+
+The host still checks the document's `issuer` against the issuer discovered from
+`discover`. It applies its network policy and never follows a redirect or falls
+back to another document when the explicit URL fails. Signing algorithms and
+JWKS come from the validated metadata; validation cannot be disabled.
+
+For MCP discovery, explicit `scopes` take precedence over the resource's Bearer
+challenge scope, which takes precedence over its protected-resource metadata
+`scopes_supported`. Authorization-server supported scopes are not requested
+wholesale. Keep `openid`, `profile` and `email` only when the service or app needs
+identity; an access-token-only app can declare its resource scopes explicitly.
+The host adds `offline_access` when advertised and `scopes` is omitted.
+
+Standard discovery requires the metadata's `issuer` to equal the issuer used to
+construct the well-known metadata URL.
 Multi-tenant endpoints that publish a template instead, such as Microsoft's
 `common` endpoint (`https://login.microsoftonline.com/{tenantid}/v2.0`), cannot
 pass that check: use a tenant-specific issuer URL, or declare the endpoints
