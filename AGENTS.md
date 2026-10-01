@@ -67,6 +67,13 @@ or the scenario instead.
 For application features, fixes, and behavior-preserving refactors, use the
 [executor-e2e skill](.agents/skills/executor-e2e/SKILL.md).
 
+Run only named scenarios that exercise the code you changed. Never run a full
+suite (`e2e:self-host`, `e2e:local`, `e2e:cloud` or `e2e:deployed` without
+`--test-name`); the PR's CI runs the full local suites, and post-merge Cloud
+tests run the deployed suite. When a change is cross-cutting, pick one or two
+scenarios per changed path and name them in the handoff. Investigate a failure
+CI reports instead of re-running suites to look for one.
+
 For authenticated testing and bug reproduction, use
 [test accounts](notes/test-accounts.md). The fixture command provisions
 synthetic users, organization roles and short-lived sessions for self-host,
