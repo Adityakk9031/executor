@@ -938,7 +938,7 @@ export const scenarios = {
     file: "app-framework-pin.spec.ts",
     title: "Cloud reports the framework pin data step from the Worker's cron",
     targets: {
-      cloud: scheduled,
+      cloud: managedCloud,
       "self-host": na("Self-host runs the same step at its startup in the hosted scenario."),
       local: na("Local runs the same step at its startup in the local scenario."),
     },
