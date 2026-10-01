@@ -88,6 +88,56 @@ const remember = (id: BuildId, build: Build) => {
   return shared;
 };
 
+// Separate from browser assets. No route serves this synthetic URL.
+const cacheKey = (origin: string, build: BuildId) =>
+  new URL(`/_executor/runtime-build-cache/${encodeURIComponent(build)}`, origin).href;
+const openCache = () => cached(() => caches.open("executor-private-runtime-builds-v1"));
+
+/**
+ * Keep one build decoded in this isolate and write it to the Cache API in `writes`, the caller's
+ * event-scoped background set. The Cache API is per data centre, so the write only helps later
+ * isolates in this colo; other colos still read R2 once. A failed write is logged and recorded on
+ * its span, never returned to the caller.
+ */
+export const cacheRuntimeBuild = (
+  writes: FiberSet.FiberSet,
+  origin: string,
+  build: BuildId,
+  bundle: Build,
+) =>
+  Effect.gen(function* () {
+    // Encode only the retained code/metadata schema. Credentials, query results,
+    // bindings, account identity and authorization are supplied per invocation.
+    yield* FiberSet.run(
+      writes,
+      Effect.gen(function* () {
+        // Recorded as failed until the put returns, so an interrupted write is not reported stored.
+        yield* Effect.annotateCurrentSpan("executor.build.cache_write", "failed");
+        const cache = yield* openCache();
+        const body = yield* Schema.encodeEffect(encodedBuild)(bundle);
+        yield* cached(() =>
+          cache.put(
+            cacheKey(origin, build),
+            new Response(body, {
+              headers: {
+                "content-type": "application/json",
+                "cache-control": "public, max-age=31536000",
+              },
+            }),
+          ),
+        );
+        yield* Effect.annotateCurrentSpan("executor.build.cache_write", "stored");
+      }).pipe(
+        Effect.catchTags({
+          BuildCacheFailed: () => Effect.logWarning("Runtime build cache write failed"),
+          SchemaError: () => Effect.logWarning("Runtime build cache encoding failed"),
+        }),
+        Effect.withSpan("runtime.cloud.build.cache_write"),
+      ),
+    );
+    return remember(build, bundle);
+  });
+
 /** Own writes in the event scope; return a loader that falls back to authoritative storage.
  * A build already decoded in this isolate needs neither the Cache API nor R2.
  */
@@ -107,16 +157,13 @@ export const cachedRuntimeBuilds = <R>(
           yield* Effect.annotateCurrentSpan("executor.build.cache", "memory");
           return memory;
         }
-        // Separate from browser assets. No route serves this synthetic URL.
-        const key = new URL(`/_executor/runtime-build-cache/${encodeURIComponent(build)}`, origin)
-          .href;
-        const cache = yield* cached(() => caches.open("executor-private-runtime-builds-v1")).pipe(
+        const cache = yield* openCache().pipe(
           Effect.catchTag("BuildCacheFailed", () => Effect.succeed(undefined)),
         );
         const hit =
           cache === undefined
             ? undefined
-            : yield* cached(() => cache.match(key)).pipe(
+            : yield* cached(() => cache.match(cacheKey(origin, build))).pipe(
                 Effect.flatMap((response) =>
                   response === undefined
                     ? Effect.succeed(undefined)
@@ -135,33 +182,7 @@ export const cachedRuntimeBuilds = <R>(
         );
         if (hit !== undefined) return remember(build, hit);
         const bundle = yield* load(build);
-        if (cache !== undefined) {
-          // Encode only the retained code/metadata schema. Credentials, query results,
-          // bindings, account identity and authorization are supplied per invocation.
-          yield* FiberSet.run(
-            writes,
-            Schema.encodeEffect(encodedBuild)(bundle).pipe(
-              Effect.flatMap((body) =>
-                cached(() =>
-                  cache.put(
-                    key,
-                    new Response(body, {
-                      headers: {
-                        "content-type": "application/json",
-                        "cache-control": "public, max-age=31536000",
-                      },
-                    }),
-                  ),
-                ),
-              ),
-              Effect.catchTags({
-                BuildCacheFailed: () => Effect.logWarning("Runtime build cache write failed"),
-                SchemaError: () => Effect.logWarning("Runtime build cache encoding failed"),
-              }),
-            ),
-          );
-        }
-        return remember(build, bundle);
+        return yield* cacheRuntimeBuild(writes, origin, build, bundle);
       }).pipe(
         Effect.tap(() => Effect.annotateCurrentSpan("executor.build.isolate_size", retained)),
         Effect.withSpan("runtime.cloud.build.cached"),

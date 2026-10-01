@@ -2683,7 +2683,7 @@ export const scenarios = {
   cloudBuildReuse: {
     fixtures: "actors",
     file: "cloud-build-reuse.spec.ts",
-    title: "Cold app Workers reuse a build already decoded in the isolate",
+    title: "Cold app Workers reuse a build the deploying isolate already decoded",
     targets: {
       cloud: managedCloud,
       "self-host": na("Self-host loads retained builds without the Cloud isolate cache."),

@@ -47,7 +47,7 @@ const jobs = {
   "cloud-workers": {
     target: "cloud",
     pattern:
-      "app Workers stay loaded across credential rotation|workflow runs reuse the app Worker|warm app calls load no build",
+      "app Workers stay loaded across credential rotation|workflow runs reuse the app Worker|warm app calls load no build|Cold app Workers reuse a build",
   },
 } as const satisfies Record<string, { target: typeof Target.Type; pattern: string }>;
 

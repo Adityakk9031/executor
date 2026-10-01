@@ -21,11 +21,11 @@ import {
 } from "apps/contracts";
 import { RuntimeContext } from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Context, Effect, Option, Schema } from "effect";
+import { Context, Effect, FiberSet, Option, Schema } from "effect";
 import { CurrentOrganization, CurrentUserId } from "@executor-js/hosted-server";
 import type { AppDataSupervisor } from "./app-data.ts";
 import { dataChanges } from "../implementation/data-changes.ts";
-import { cachedRuntimeBuilds } from "../implementation/runtime-build-cache.ts";
+import { cacheRuntimeBuild, cachedRuntimeBuilds } from "../implementation/runtime-build-cache.ts";
 import type { DurableObjectNamespace, Fetcher, WorkerLoader } from "@cloudflare/workers-types";
 import { CloudCompileResult } from "../contracts/builds.ts";
 import { AppCompiler } from "./compiler.ts";
@@ -157,6 +157,11 @@ export const cloudRuntime = Effect.fn(function* (
     const load = yield* cachedRuntimeBuilds(origin, (build) =>
       loadCloudBuild(build).pipe(Effect.provide(RuntimeContext.phantom)),
     );
+    // Deploys warm the build caches in the same event scope and bound as the reader's writes.
+    const warming = yield* FiberSet.make();
+    yield* Effect.addFinalizer(() =>
+      FiberSet.awaitEmpty(warming).pipe(Effect.timeoutOption("2 seconds"), Effect.asVoid),
+    );
     const runtime = yield* appRuntime({
       name: "runtime.cloud",
       loadBuild: (build) =>
@@ -200,15 +205,17 @@ export const cloudRuntime = Effect.fn(function* (
               Effect.mapError((cause) => failed("declaration", cause)),
               Effect.withSpan("runtime.cloud.requirements"),
             );
-            const assets = yield* retainCloudBuild(
-              build,
-              {
-                ...bundle,
-                database: requirements.database !== undefined,
-                protocol,
-              },
-              ui,
-            ).pipe(Effect.provide(RuntimeContext.phantom));
+            const retained = { ...bundle, database: requirements.database !== undefined, protocol };
+            const assets = yield* retainCloudBuild(build, retained, ui).pipe(
+              Effect.provide(RuntimeContext.phantom),
+            );
+            // Only after R2 holds the build: the first call can then skip the R2 read when it
+            // reaches this isolate or another isolate in this data centre. The Cache API is per
+            // data centre, so calls served from other colos still read R2 once.
+            yield* cacheRuntimeBuild(warming, origin, build, {
+              ...retained,
+              ...(assets === undefined ? {} : { ui: assets }),
+            });
             return { build, requirements, ...(assets === undefined ? {} : { ui: assets }) };
           }).pipe(
             Effect.tapError((error) =>
