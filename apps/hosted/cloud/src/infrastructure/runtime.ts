@@ -44,6 +44,28 @@ const failed = (stage: RuntimeBuildFailed["stage"], cause: unknown) =>
     ...(Schema.is(DatabaseFieldReserved)(cause) ? { declaration: cause } : {}),
   });
 /**
+ * How long a deploy waits for the compiler Worker to answer. A lost compiler isolate otherwise
+ * leaves the binding call open until the platform reports a lost connection, 100-230s later.
+ * Over September 2026, the slowest successful compiler requests took 16.5s in production and
+ * 34s on test stages (a cold default-app provision), and compiler memory failures surfaced within
+ * 37s, so they still report as such. The bound leaves the whole deploy room to answer within the
+ * 60s that MCP clients and the deployed scenarios commonly wait.
+ */
+const compilerDeadline = "50 seconds";
+const compilerDidNotAnswer = Effect.annotateCurrentSpan(
+  "build.compiler_deadline_exceeded",
+  true,
+).pipe(
+  Effect.andThen(
+    Effect.fail(
+      new RuntimeBuildFailed({
+        stage: "compile",
+        message: `The compiler did not answer within ${compilerDeadline}. No new deployment was activated; deploy again.`,
+      }),
+    ),
+  ),
+);
+/**
  * Attribute Worker Loader use to the caller. Cloudflare bills each unique loaded Worker per day,
  * and its own usage data cannot be split by user or organization.
  */
@@ -147,6 +169,10 @@ export const cloudRuntime = Effect.fn(function* (
           Effect.gen(function* () {
             const headers = Object.fromEntries(Object.entries(yield* traceHeaders));
             const result = yield* compiler.compile(files, headers).pipe(
+              Effect.timeoutOrElse({
+                duration: compilerDeadline,
+                orElse: () => compilerDidNotAnswer,
+              }),
               Effect.catchTag("RpcCallError", (error) => {
                 const cause = error.cause;
                 return Effect.fail(

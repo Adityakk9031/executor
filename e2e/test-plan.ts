@@ -1253,6 +1253,16 @@ export const scenarios = {
       local: na("This scenario exercises the Cloud compiler dependency resolver."),
     },
   },
+  cloudCompilerDeadline: {
+    fixtures: "actors",
+    file: "cloud-compiler.spec.ts",
+    title: "Cloud deploys fail promptly when the compiler does not answer",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("This scenario exercises the Cloud compiler Worker binding."),
+      local: na("This scenario exercises the Cloud compiler Worker binding."),
+    },
+  },
   cloudCompilerMemory: {
     fixtures: "actors",
     file: "cloud-compiler.spec.ts",
