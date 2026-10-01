@@ -94,7 +94,7 @@ export const selfHostExecutorServices = <E, R>(
       );
       yield* Deferred.succeed(ready, executor);
       // The schema is current and nothing serves or builds yet; the caller holds the data lock.
-      yield* runStartupDataSteps({ executor, repositories }, "private_hosted");
+      yield* runStartupDataSteps({ executor, repositories, blobs }, "private_hosted");
       yield* Effect.forkScoped(
         recoverAppRepositories({ database: storage, sources, blobs }).pipe(
           Effect.catch(() => Effect.logWarning("App repository recovery failed")),

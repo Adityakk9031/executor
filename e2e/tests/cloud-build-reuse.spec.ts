@@ -34,8 +34,11 @@ layer(HostedLive, { excludeTestServices: true })("Cloud build reuse", (it) => {
           return yield* Effect.die("Deploy request evidence missing");
         const warmed = yield* telemetry.query(deployRequest.traceId).pipe(
           Effect.flatMap((result) => {
+            // The record is always written; the framework only when the isolate did not hold it.
             const write = result.data.find(
-              ({ span }) => span.operationName === "runtime.cloud.build.cache_write",
+              ({ span }) =>
+                span.operationName === "runtime.cloud.build.cache_write" &&
+                span.tags["executor.build.cache_part"] === "record",
             );
             return write === undefined
               ? Effect.fail(new Error("The deploy's build cache write has not been delivered"))
@@ -45,6 +48,12 @@ layer(HostedLive, { excludeTestServices: true })("Cloud build reuse", (it) => {
         );
         yield* evidence.json("deploy.json", warmed.result);
         expect(warmed.write.span.tags["executor.build.cache_write"]).toBe("stored");
+        for (const { span } of warmed.result.data)
+          if (span.operationName === "runtime.cloud.build.cache_write")
+            expect(
+              span.tags["executor.build.cache_write"],
+              span.tags["executor.build.cache_part"],
+            ).toBe("stored");
         const app = yield* body(App, deployed);
         const profile = yield* createProfile(actors.owner, `${prefix}/apps/${app.id}`);
         const accounts: string[] = [];
@@ -120,6 +129,7 @@ layer(HostedLive, { excludeTestServices: true })("Cloud build reuse", (it) => {
             expect(loads, "One cold Worker start loads its build once").toHaveLength(1);
             return {
               source: loads[0]?.span.tags["executor.build.cache"],
+              framework: loads[0]?.span.tags["executor.build.framework_cache"],
               blobReads: trace.data.filter(({ span }) => span.operationName === "storage.blob.get")
                 .length,
             };
@@ -127,6 +137,8 @@ layer(HostedLive, { excludeTestServices: true })("Cloud build reuse", (it) => {
 
         const first = yield* coldIndex(work, "work");
         expect(first.source, "The deploying isolate kept the new build decoded").toBe("memory");
+        // The framework is stored apart from the record; the deploy kept it decoded as well.
+        expect(first.framework, "The deploying isolate kept the framework decoded").toBe("memory");
         expect(first.blobReads, "A freshly deployed build is not read from R2").toBe(0);
         const second = yield* coldIndex(personal, "personal");
         expect(second.source, "The isolate reuses the build it already decoded").toBe("memory");

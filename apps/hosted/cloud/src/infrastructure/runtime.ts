@@ -9,7 +9,7 @@ import {
   RuntimeAppsDependencyMissing,
   runtimeAdapter,
 } from "@executor-js/sdk/core";
-import { appRuntime, remoteAppRunner } from "@executor-js/sdk/workerd";
+import { appRuntime, assembleWorkerBundle, remoteAppRunner } from "@executor-js/sdk/workerd";
 import {
   DatabaseFieldReserved,
   HostRequirementsError,
@@ -27,7 +27,8 @@ import { CloudCompileResult } from "../contracts/builds.ts";
 import { AppCompiler } from "./compiler.ts";
 import { AppData } from "./app-data-worker.ts";
 import {
-  loadCloudBuild,
+  loadCloudBuildRecord,
+  loadCloudFramework,
   retainCloudBuild,
   cloudBuildAsset,
 } from "../implementation/build-storage.ts";
@@ -98,9 +99,11 @@ export const cloudRuntime = Effect.fn(function* (origin: string) {
       invoke: (invocation, capabilities) => appData.invoke(invocation, capabilities),
       declare: (bundle, headers) => appData.declare(bundle, headers),
     });
-    const load = yield* cachedRuntimeBuilds(origin, (build) =>
-      loadCloudBuild(build).pipe(Effect.provide(RuntimeContext.phantom)),
-    );
+    const load = yield* cachedRuntimeBuilds(origin, {
+      record: (build) => loadCloudBuildRecord(build).pipe(Effect.provide(RuntimeContext.phantom)),
+      framework: (identity) =>
+        loadCloudFramework(identity).pipe(Effect.provide(RuntimeContext.phantom)),
+    });
     // Deploys warm the build caches in the same event scope and bound as the reader's writes.
     const warming = yield* FiberSet.make();
     yield* Effect.addFinalizer(() =>
@@ -108,10 +111,7 @@ export const cloudRuntime = Effect.fn(function* (origin: string) {
     );
     const runtime = yield* appRuntime({
       name: "runtime.cloud",
-      loadBuild: (build) =>
-        load(build).pipe(
-          Effect.map(({ mainModule, modules, protocol }) => ({ mainModule, modules, protocol })),
-        ),
+      loadBuild: load,
       invoke: (invocation, capabilities) => withActor(runner.invoke(invocation, capabilities)),
       build: ({ files }) =>
         withActor(
@@ -135,31 +135,33 @@ export const cloudRuntime = Effect.fn(function* (origin: string) {
               Effect.withSpan("runtime.cloud.compiler.request"),
             );
             if (!result.ok) return yield* Effect.fail(result.error);
-            const { bundle, ui, protocol } = result.value;
+            const { bundle, framework, ui, protocol } = result.value;
             const build = BuildId.make(`bld_${crypto.randomUUID()}`);
-            const requirements = yield* runner.declare({ ...bundle, protocol }, headers).pipe(
-              Effect.flatMap(Schema.decodeUnknownEffect(HostResponse)),
-              Effect.flatMap((envelope) =>
-                envelope.ok
-                  ? Schema.decodeUnknownEffect(DeclaredRequirements)(envelope.value)
-                  : Schema.decodeUnknownEffect(HostRequirementsError)(envelope.error).pipe(
-                      Effect.flatMap(Effect.fail),
-                    ),
-              ),
-              Effect.mapError((cause) => failed("declaration", cause)),
-              Effect.withSpan("runtime.cloud.requirements"),
-            );
-            const retained = { ...bundle, database: requirements.database !== undefined, protocol };
-            const assets = yield* retainCloudBuild(build, retained, ui).pipe(
-              Effect.provide(RuntimeContext.phantom),
-            );
-            // Only after R2 holds the build: the first call can then skip the R2 read when it
+            const requirements = yield* runner
+              .declare({ ...assembleWorkerBundle(bundle, framework), protocol }, headers)
+              .pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(HostResponse)),
+                Effect.flatMap((envelope) =>
+                  envelope.ok
+                    ? Schema.decodeUnknownEffect(DeclaredRequirements)(envelope.value)
+                    : Schema.decodeUnknownEffect(HostRequirementsError)(envelope.error).pipe(
+                        Effect.flatMap(Effect.fail),
+                      ),
+                ),
+                Effect.mapError((cause) => failed("declaration", cause)),
+                Effect.withSpan("runtime.cloud.requirements"),
+              );
+            const stored = yield* retainCloudBuild(
+              build,
+              { ...bundle, database: requirements.database !== undefined, protocol },
+              framework,
+              ui,
+            ).pipe(Effect.provide(RuntimeContext.phantom));
+            // Only after R2 holds the build: the first call can then skip the R2 reads when it
             // reaches this isolate or another isolate in this data centre. The Cache API is per
             // data centre, so calls served from other colos still read R2 once.
-            yield* cacheRuntimeBuild(warming, origin, build, {
-              ...retained,
-              ...(assets === undefined ? {} : { ui: assets }),
-            });
+            yield* cacheRuntimeBuild(warming, origin, build, stored);
+            const assets = stored.record.ui;
             return { build, requirements, ...(assets === undefined ? {} : { ui: assets }) };
           }).pipe(
             Effect.tapError((error) =>

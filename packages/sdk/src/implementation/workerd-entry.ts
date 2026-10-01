@@ -40,6 +40,7 @@ import {
   type AppWorkerResidency,
 } from "./app-worker-residency.ts";
 import { compileWorkerApp } from "../workerd-build.ts";
+import { assembleWorkerBundle } from "./worker-build-storage.ts";
 import {
   CompileWorkerApp,
   CompileWorkerResult,
@@ -262,9 +263,9 @@ class AppApi extends RpcTarget {
           request.files,
           this.#env.NPM_REGISTRY === "" ? {} : { registry: this.#env.NPM_REGISTRY },
         );
-        const { bundle, ui } = compiled;
+        const { bundle, framework, ui } = compiled;
         const requirements = yield* runner(this.#env, this.#context)
-          .declare({ ...bundle, protocol: compiled.protocol }, {})
+          .declare({ ...assembleWorkerBundle(bundle, framework), protocol: compiled.protocol }, {})
           .pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(HostResponse)),
             Effect.flatMap((envelope) =>
@@ -280,6 +281,7 @@ class AppApi extends RpcTarget {
           ok: true as const,
           value: {
             bundle,
+            framework,
             protocol: compiled.protocol,
             requirements: json(yield* Schema.encodeEffect(DeclaredRequirements)(requirements)),
             ...(ui === undefined ? {} : { ui }),

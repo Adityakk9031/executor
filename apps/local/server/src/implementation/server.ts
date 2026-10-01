@@ -139,7 +139,7 @@ export const localApi = (
       }).pipe(startupPhase("sdk"));
       yield* Deferred.succeed(ready, executor);
       // Before background work, the Executor app's regeneration and serving; the data lock is held.
-      yield* runStartupDataSteps({ executor, repositories }, "private_local").pipe(
+      yield* runStartupDataSteps({ executor, repositories, blobs }, "private_local").pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
         startupPhase("data-steps"),
       );

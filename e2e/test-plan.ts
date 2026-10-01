@@ -2815,6 +2815,65 @@ export const scenarios = {
       local: na("Local keeps evaluated results in its single server process."),
     },
   },
+  buildFrameworkColdLoad: {
+    fixtures: "actors",
+    file: "build-framework-storage.spec.ts",
+    title: "A cold app load links its small build record with the stored framework",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na(
+        "Local retains builds through the same SDK storage; its deploys and cold loads run in the local Worker scenarios.",
+      ),
+    },
+  },
+  buildFrameworkShared: {
+    fixtures: "actors",
+    file: "build-framework-storage.spec.ts",
+    title: "Apps on the same apps release store its framework once",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na(
+        "Local retains builds through the same SDK storage; its deploys and cold loads run in the local Worker scenarios.",
+      ),
+    },
+  },
+  buildFrameworkVersions: {
+    fixtures: "actors",
+    file: "build-framework-storage.spec.ts",
+    title: "Builds on two apps releases each link their own stored framework",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na(
+        "Local retains builds through the same SDK storage; its deploys and cold loads run in the local Worker scenarios.",
+      ),
+    },
+  },
+  buildFrameworkMigration: {
+    fixtures: "actors",
+    serverEnvironment: { EXECUTOR_DATA_STEPS: "report" },
+    file: "build-framework-migration.spec.ts",
+    title: "Builds stored with an inlined framework are split by a data step at startup",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "Cloud runs the same step from its Worker's cron; the local Worker never reaches it because the earlier framework pin step keeps retrying there without Cloudflare Artifacts.",
+      ),
+      local: na("Local runs the same step at its own startup; see the local scenario."),
+    },
+  },
+  localBuildFrameworkMigration: {
+    serverEnvironment: { EXECUTOR_DATA_STEPS: "report" },
+    file: "build-framework-migration.spec.ts",
+    title: "Builds stored with an inlined framework are split by a data step at local startup",
+    targets: {
+      local: scheduled,
+      "self-host": na("Self-host runs the same step at its startup in the hosted scenario."),
+      cloud: na("Cloud runs the same step from its Worker's cron; see the hosted scenario."),
+    },
+  },
   cloudBuildReuse: {
     fixtures: "actors",
     file: "cloud-build-reuse.spec.ts",

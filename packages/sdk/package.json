@@ -13,6 +13,7 @@
     "./skill-source": "./src/skill-source.ts",
     "./workerd": "./src/workerd.ts",
     "./workerd/build": "./src/workerd-build.ts",
+    "./workerd/migration": "./src/workerd-migration.ts",
     "./scheduling": "./src/scheduling.ts",
     "./testing": "./src/testing.ts",
     "./node/workerd": "./src/node-workerd.ts"
