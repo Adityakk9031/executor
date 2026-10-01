@@ -1923,7 +1923,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "root-entry-loading.spec.ts",
     title:
-      "Signed-in root restores Apps before organization lookup without reloading on canonical navigation",
+      "Signed-in root restores Apps at its canonical address without a browser organization lookup or reload",
     targets: cloudOnboarding,
   },
   localQueryState: {

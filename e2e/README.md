@@ -96,9 +96,11 @@ credentials nor fixture endpoints are installed in the Worker.
 The test plan declares `appOrigin: true` for scenarios that use private app URLs.
 Deployed preparation verifies those HTTPS origins before the scenario deadline;
 an origin that misses the infrastructure deadline produces a native setup failure
-for its scenario. Independent scenarios still run. The preparation report retains
-the number of ready origins, both phase timings, and each origin's probe count and
-last safe DNS, TLS, or HTTP failure. All origin probes start together. Fallback
+for its scenario. An organization whose actors are not provisioned within their
+60-second deadline does the same. Independent scenarios still run. The preparation
+report retains each unavailable organization and its failure, the number of ready
+origins, both phase timings, and each origin's probe count and last safe DNS, TLS,
+or HTTP failure. All origin probes start together. Fallback
 organization cleanup uses the worker bound and preserves release order within
 each scenario, including when another organization's cleanup fails.
 
