@@ -77,10 +77,15 @@ export const organizationDefaults = (
           const approved = sourceFilesEqual(installedSource.files, source.files)
             ? installedSource.id
             : null;
+          // Concurrent installers all reach this write; the unique app name gave them one app.
+          // The first record wins, so a later one cannot replace what member setup recorded since.
           yield* sql`update "organization" set metadata = jsonb_set(
             coalesce(metadata::jsonb, '{}'::jsonb), '{executorDefaults}',
             jsonb_build_object('installed', true, 'app', ${installed.id}::text, 'deployment', ${approved}::text)
-          )::text where id = ${organization}`.pipe(Effect.mapError(() => new StorageError()));
+          )::text where id = ${organization}
+            and not coalesce((metadata::jsonb -> 'executorDefaults' ->> 'installed')::boolean, false)`.pipe(
+            Effect.mapError(() => new StorageError()),
+          );
         }
         if (user === undefined) return;
         // The stored ID follows renames; deletion never recreates an initialized app.

@@ -2910,6 +2910,27 @@ export const scenarios = {
       local: na("Local management routes have no organization."),
     },
   },
+  teamInstallationFromRequest: {
+    fixtures: "actors",
+    file: "team-installation.spec.ts",
+    title:
+      "A new Cloud team's Executor app is installed by its request while the workflow stands by",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host installs teams from its own provisioning worker."),
+      local: na("Local uses its configured instance and has no teams."),
+    },
+  },
+  teamInstallationConcurrent: {
+    fixtures: "actors",
+    file: "team-installation.spec.ts",
+    title: "Request and workflow attempts at one team leave one Executor app and one profile each",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host runs each provisioning job once, on its single worker."),
+      local: na("Local uses its configured instance and has no teams."),
+    },
+  },
   executorInstallationLoading: {
     fixtures: "actors",
     file: "executor-key-account.spec.ts",
