@@ -43,17 +43,24 @@ export interface AppProtocol {
   readonly workflow: (execution: WorkflowExecution) => WorkflowExecution;
 }
 
-/** Protocol 6 is the host's current protocol, so its messages need no conversion. */
-const protocol6: AppProtocol = {
-  version: 6,
+/** Protocol 7 is the host's current protocol, so its messages need no conversion. */
+const protocol7: AppProtocol = {
+  version: 7,
   workerEntry: appBridge,
-  nodeEntry: nodeAppEntry(6),
+  nodeEntry: nodeAppEntry(7),
   invocation: (input) => JSON.stringify(input),
   request: (command) => command,
   refuse: () => undefined,
   response: (_command, body) => Effect.succeed(body),
   workflow: (execution) => execution,
 };
+
+/**
+ * Protocol 6 is protocol 7 without credential hosts or field exposure. Its providers never declare
+ * hosts, so the host sends them real values unless an account was connected with hosts, and every
+ * message and reply is unchanged.
+ */
+const protocol6: AppProtocol = { ...protocol7, version: 6, nodeEntry: nodeAppEntry(6) };
 
 /** Protocol 5 has the same commands; its OAuth declarations lack a metadata URL override. */
 const protocol5: AppProtocol = { ...protocol6, version: 5, nodeEntry: nodeAppEntry(5) };
@@ -128,9 +135,15 @@ const legacyProtocol = (version: LegacyVersion): AppProtocol => {
 };
 
 const protocols: ReadonlyMap<number, AppProtocol> = new Map(
-  [legacyProtocol(1), legacyProtocol(2), legacyProtocol(3), protocol4, protocol5, protocol6].map(
-    (protocol) => [protocol.version, protocol],
-  ),
+  [
+    legacyProtocol(1),
+    legacyProtocol(2),
+    legacyProtocol(3),
+    protocol4,
+    protocol5,
+    protocol6,
+    protocol7,
+  ].map((protocol) => [protocol.version, protocol]),
 );
 
 /** Protocols this host builds and runs. */

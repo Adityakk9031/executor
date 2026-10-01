@@ -48,7 +48,7 @@ export const appUi = (
   >,
 ) => {
   const native = runtime;
-  const db = storage.orm("4.0.4");
+  const db = storage.orm("4.0.5");
   const current = (id: AppId) =>
     executor.apps
       .get({ app: id, owner: OwnerId.make("local") })

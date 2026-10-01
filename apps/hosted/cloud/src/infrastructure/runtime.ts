@@ -1,9 +1,6 @@
-/** Cloud's app runtime: the shared runner in the API Worker, with R2 and the Cache API as build store. */
-import { CacheCommand } from "@executor-js/app-cache/contracts";
-import { discardsEvaluated } from "@executor-js/app-cache/changes";
+/** Cloud's app runtime: the shared runner in the AppData Worker, with R2 and the Cache API as build store. */
 import { traceHeaders } from "@executor-js/telemetry";
 import {
-  AppCacheChanges,
   BuildId,
   RuntimeBuildFailed,
   BuildMemoryExceeded,
@@ -12,7 +9,7 @@ import {
   RuntimeAppsDependencyMissing,
   runtimeAdapter,
 } from "@executor-js/sdk/core";
-import { appRuntime, makeAppRunner } from "@executor-js/sdk/workerd";
+import { appRuntime, remoteAppRunner } from "@executor-js/sdk/workerd";
 import {
   DatabaseFieldReserved,
   HostRequirementsError,
@@ -23,13 +20,12 @@ import { RuntimeContext } from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { Context, Effect, FiberSet, Option, Schema } from "effect";
 import { CurrentOrganization, CurrentUserId } from "@executor-js/hosted-server";
-import type { AppDataSupervisor } from "./app-data.ts";
 import { dataChanges } from "../implementation/data-changes.ts";
 import { cacheRuntimeBuild, cachedRuntimeBuilds } from "../implementation/runtime-build-cache.ts";
-import type { DurableObjectNamespace, Fetcher, WorkerLoader } from "@cloudflare/workers-types";
+import type { DurableObjectNamespace } from "@cloudflare/workers-types";
 import { CloudCompileResult } from "../contracts/builds.ts";
 import { AppCompiler } from "./compiler.ts";
-import { AppOutbound } from "./app-outbound.ts";
+import { AppData } from "./app-data-worker.ts";
 import {
   loadCloudBuild,
   retainCloudBuild,
@@ -83,20 +79,6 @@ const withActor = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       }),
     );
   });
-const NativeFetcher = Schema.declare(
-  (value): value is Fetcher =>
-    typeof value === "object" &&
-    value !== null &&
-    "fetch" in value &&
-    typeof value.fetch === "function",
-);
-const NativeLoader = Schema.declare(
-  (value): value is Pick<WorkerLoader, "get"> =>
-    typeof value === "object" &&
-    value !== null &&
-    "get" in value &&
-    typeof value.get === "function",
-);
 const NativeNamespace = Schema.declare(
   (value): value is Pick<DurableObjectNamespace, "getByName"> =>
     typeof value === "object" &&
@@ -106,53 +88,15 @@ const NativeNamespace = Schema.declare(
 );
 
 /** Native Alchemy bindings are resolved once; actual work belongs to the current invocation. */
-export const cloudRuntime = Effect.fn(function* (
-  databases: Cloudflare.DurableObject<AppDataSupervisor>,
-  origin: string,
-) {
-  yield* Cloudflare.WorkerLoader("AppLoader");
+export const cloudRuntime = Effect.fn(function* (origin: string) {
   const compiler = yield* Cloudflare.Workers.bindWorker(AppCompiler);
-  const network = yield* AppOutbound;
-  const worker = yield* Cloudflare.Worker;
-  yield* worker.bind`${network}`({
-    bindings: [{ type: "service", name: "AppOutbound", service: network.workerName }],
-  });
+  const appData = yield* Cloudflare.Workers.bindWorker(AppData);
   const environment = yield* Cloudflare.WorkerEnvironment;
   return Effect.gen(function* () {
-    // This runtime is memoized in whichever scope first uses it; an MCP execution scopes each
-    // operation. A successful call's cache refreshes belong to the Worker or Durable Object
-    // invocation, as self-host's waitUntil and local's runtime-owned refreshes do, so they never
-    // hold an operation, its database client or its result open.
-    const { waitUntil } = yield* Effect.promise(() => import("cloudflare:workers"));
-    const runner = makeAppRunner({
-      loader: yield* Schema.decodeUnknownEffect(NativeLoader)(environment.AppLoader).pipe(
-        Effect.orDie,
-      ),
-      // Always the private service, which enforces public routing. The strictly-public
-      // compatibility flag would bypass it.
-      outbound: yield* Schema.decodeUnknownEffect(NativeFetcher)(environment.AppOutbound).pipe(
-        Effect.orDie,
-      ),
-      data: (app) => {
-        const target = databases.getByName(app);
-        return {
-          invoke: (input, load, elicit, controls) =>
-            target
-              .invoke(input, load, elicit, controls)
-              .pipe(Effect.provide(RuntimeContext.phantom)),
-          cancel: (id) => target.cancel(id).pipe(Effect.provide(RuntimeContext.phantom)),
-          cache: (namespace, command) =>
-            Effect.gen(function* () {
-              const parsed = yield* Schema.decodeUnknownEffect(CacheCommand)(command);
-              yield* Effect.annotateCurrentSpan("cache.operation", parsed.operation);
-              const reply = yield* target.cache(namespace, parsed);
-              // Cache commands can arrive after the invocation, from a background refresh.
-              if (discardsEvaluated(parsed)) yield* (yield* AppCacheChanges).changed(app);
-              return reply;
-            }).pipe(Effect.provide(RuntimeContext.phantom), Effect.withSpan("runtime.cloud.cache")),
-        };
-      },
-      waitUntil,
+    // App Workers run in AppData, whose own entrypoint can be their outbound network.
+    const runner = remoteAppRunner({
+      invoke: (invocation, capabilities) => appData.invoke(invocation, capabilities),
+      declare: (bundle, headers) => appData.declare(bundle, headers),
     });
     const load = yield* cachedRuntimeBuilds(origin, (build) =>
       loadCloudBuild(build).pipe(Effect.provide(RuntimeContext.phantom)),

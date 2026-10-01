@@ -86,7 +86,7 @@ export const cloudExecutor = Effect.fn(function* (
     Config.map(Option.getOrUndefined),
   );
   const connection = yield* cloudDatabaseConnection;
-  const makeRuntime = yield* cloudRuntime(databases, origin);
+  const makeRuntime = yield* cloudRuntime(origin);
   const workflows = yield* cloudWorkflows;
   const blobs = yield* cloudBlobs;
   const assets = yield* makeExecutionMemo(

@@ -1427,6 +1427,69 @@ export const scenarios = {
       local: na("Local workflow runs are covered by the local app Worker reuse scenario."),
     },
   },
+  credentialHostsRefused: {
+    fixtures: "actors",
+    file: "credential-hosts.spec.ts",
+    title:
+      "secret fields reach app code as handles that neither undeclared hosts nor other apps can use",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local runs apps through the same workerd runner and outbound as self-host."),
+    },
+  },
+  credentialHostsRefusedData: {
+    fixtures: "actors",
+    file: "credential-hosts.spec.ts",
+    title: "a data facet's secret fields are handles that undeclared hosts cannot use",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local runs apps through the same workerd runner and outbound as self-host."),
+    },
+  },
+  credentialHostsForm: {
+    fixtures: "actors",
+    file: "credential-hosts.spec.ts",
+    title: "the connect form says where credentials can go and shows plain fields",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("The hosted and local dashboards share the credential form."),
+    },
+  },
+  credentialHostsGranted: {
+    fixtures: "actors",
+    file: "credential-hosts.spec.ts",
+    title:
+      "an account sends its secrets only to the hosts it was connected for, in every app that selects it",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a loopback service; Cloud app Workers reach only public addresses."),
+      local: na("Local runs apps through the same workerd runner and outbound as self-host."),
+    },
+  },
+  credentialHostsProduct: {
+    fixtures: "actors",
+    file: "credential-hosts.spec.ts",
+    title: "a sealed API key reaches the product's own API through the app's outbound network",
+    targets: {
+      "self-host": scheduled,
+      cloud: { status: "scheduled", runtime: "attached" },
+      local: na("Local runs apps through the same workerd runner and outbound as self-host."),
+    },
+  },
+  credentialHostsSubstituted: {
+    fixtures: "actors",
+    file: "credential-hosts.spec.ts",
+    title:
+      "the outbound network substitutes secret fields for declared hosts and hides echoed values",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a loopback service; Cloud app Workers reach only public addresses."),
+      local: na("Local runs apps through the same workerd runner and outbound as self-host."),
+    },
+  },
   appWorkerSharedContexts: {
     fixtures: "actors",
     file: "app-worker-reuse.spec.ts",

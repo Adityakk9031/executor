@@ -16,3 +16,14 @@ export {
   type AppCapabilities,
 } from "./implementation/app-runner.ts";
 export { appRuntime, buildLoadSpan, type AppRuntimeHost } from "./implementation/app-runtime.ts";
+export {
+  remoteAppRunner,
+  serveAppRunner,
+  type RemoteAppRunner,
+  type RemoteCapabilities,
+} from "./implementation/remote-app-runner.ts";
+export {
+  credentialFetch,
+  credentialKey,
+  type CredentialOutbound,
+} from "./implementation/credential-handles.ts";

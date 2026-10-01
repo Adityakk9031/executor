@@ -46,6 +46,44 @@ const listProjects = query(
 export default defineApp(requirements, { tools: router({ listProjects }) });
 ```
 
+## Limit where credentials go
+
+Declare `hosts` so app code never holds the secret values. Each unmarked string
+field then reaches the app as an opaque handle. Executor's network replaces a
+handle with the real value only on requests to a declared host, in the URL,
+headers, Basic credentials, and JSON, form or text bodies up to 1 MiB. A request
+that sends a handle anywhere else fails with status 421. Values the service
+echoes back reach the app as handles.
+
+```ts
+import { defineProvider, object, plain, raw, secrets, string } from "apps";
+
+const example = defineProvider({
+  name: "Example",
+  hosts: ["api.example.com", "*.example.com"],
+  auth: {
+    apiKey: secrets({
+      label: "API key",
+      fields: object({
+        region: plain(string()), // not secret; the app reads it and the form shows it
+        token: string(), // secret: the app reads a handle
+        signingKey: raw(string()), // secret the app must read, such as a signing key
+      }),
+    }),
+  },
+});
+```
+
+A host is an exact name, `host:port`, or `*.` plus a domain for one level of
+subdomain. Pass handles to headers and clients as ordinary strings. Do not
+decode, hash or sign them; mark such a field `raw()`, and the connect form
+warns that the app can read it. Multipart and streamed bodies are sent
+unchanged. A provider without `hosts` gives app code real values unless the
+account was connected with hosts. An account keeps the hosts it was connected
+with: after you add a host, existing accounts reach it only once they are
+connected again. Changing `plain()` or `raw()` changes the provider, so
+existing accounts must be connected again.
+
 ## Check an account
 
 Give a provider a `health` function so Executor can tell whether a saved account
