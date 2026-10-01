@@ -693,6 +693,16 @@ export const scenarios = {
       local: na("Billing is cloud only."),
     },
   },
+  memberLimit: {
+    fixtures: "actors",
+    file: "member-limit.spec.ts",
+    title: "A full Free plan refuses invitations and offers an upgrade",
+    targets: {
+      "self-host": na("Billing is cloud only."),
+      cloud: scheduled,
+      local: na("Billing is cloud only."),
+    },
+  },
   emptyStateBilling: {
     fixtures: "actors",
     file: "empty-state-billing.spec.ts",

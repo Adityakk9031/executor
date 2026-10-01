@@ -60,9 +60,11 @@ const request = <A>(
                   ? "This organization URL is already in use. Choose another."
                   : result.error.code === "INVITATION_NOT_FOUND"
                     ? "This invitation has already been used, was revoked, or has expired. Ask an administrator for a new invitation."
-                    : result.error.status === 403
-                      ? "You do not have permission to do that."
-                      : "Unable to update the organization. Check the details and try again.",
+                    : result.error.code === "ORGANIZATION_MEMBERSHIP_LIMIT_REACHED"
+                      ? "This organization has reached its plan's member limit. An owner or admin can upgrade the plan to add members."
+                      : result.error.status === 403
+                        ? "You do not have permission to do that."
+                        : "Unable to update the organization. Check the details and try again.",
             }),
           ),
     ),

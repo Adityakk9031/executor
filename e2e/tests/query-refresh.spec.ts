@@ -9,6 +9,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { Evidence } from "../support/evidence.ts";
 import { holdQuery, refreshVisiblePage } from "../support/query-transition.ts";
+import { freeSeat } from "../support/seats.ts";
 import { scenarios } from "../test-plan.ts";
 import { appsManifest } from "../support/apps-release.ts";
 
@@ -19,6 +20,7 @@ layer(HostedLive, { excludeTestServices: true })("Dashboard refresh", (it) => {
       Effect.gen(function* () {
         const actors = yield* Actors;
         const browser = yield* Browser;
+        yield* freeSeat;
         yield* browser.login(actors.owner);
         yield* browser.use("Open organization settings", (page) =>
           page.goto(`/org/${actors.organization.slug}/organization`),
