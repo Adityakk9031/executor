@@ -2536,12 +2536,34 @@ export const scenarios = {
       local: na("The API document and catalog installation are hosted product surfaces."),
     },
   },
+  appUiApiDocument: {
+    fixtures: "actors",
+    managementProfiles: ["owner"],
+    file: "app-ui.spec.ts",
+    title: "the API document and Executor app configuration keep browser-only app routes private",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted Better Auth and organization routes."),
+    },
+  },
+  appUiMcpSearch: {
+    fixtures: "actors",
+    managementProfiles: ["owner"],
+    file: "app-ui.spec.ts",
+    title: "MCP search lists the app URL tool without browser-only operations",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted Better Auth and organization routes."),
+    },
+  },
   appUiDiscovery: {
     fixtures: "actors",
     managementProfiles: ["owner"],
     file: "app-ui.spec.ts",
     appOrigin: true,
-    title: "MCP discovers private app URLs and preserves browser-only API boundaries",
+    title: "MCP discovers private app URLs only in the granted organization",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -3232,10 +3254,31 @@ export const scenarios = {
       local: na("This scenario uses hosted profiles, API keys and MCP."),
     },
   },
+  workflowStarts: {
+    fixtures: "actors",
+    file: "workflows.spec.ts",
+    title:
+      "app workflow starts enforce permissions, input and idempotency keys in isolated app code",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted app and account management routes."),
+    },
+  },
+  workflowsInUse: {
+    fixtures: "actors",
+    file: "workflows.spec.ts",
+    title: "running app workflows keep their account and app from deletion",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted app and account management routes."),
+    },
+  },
   workflows: {
     fixtures: "actors",
     file: "workflows.spec.ts",
-    title: "app workflows pin deployments and accounts, retry steps, and enforce permissions",
+    title: "app workflows pin deployments and accounts and retry steps",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -3255,7 +3298,37 @@ export const scenarios = {
   workflowFailures: {
     fixtures: "actors",
     file: "workflows.spec.ts",
-    title: "app workflows enforce approval, failure, timeout rollback and termination",
+    title: "app workflow runs report approval and execution failure reasons",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted app and account management routes."),
+    },
+  },
+  workflowFailureDetails: {
+    fixtures: "actors",
+    file: "workflows.spec.ts",
+    title: "errored app workflow runs name the failing step and redact account credentials",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted app and account management routes."),
+    },
+  },
+  workflowStepTimeout: {
+    fixtures: "actors",
+    file: "workflows.spec.ts",
+    title: "app workflow step timeouts roll back the step's writes",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("This scenario uses hosted app and account management routes."),
+    },
+  },
+  workflowTermination: {
+    fixtures: "actors",
+    file: "workflows.spec.ts",
+    title: "terminating an app workflow requires permission and stops later steps",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
