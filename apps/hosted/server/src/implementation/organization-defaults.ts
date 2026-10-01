@@ -149,7 +149,7 @@ export const organizationDefaults = (
                 .pipe(Effect.catchTag("AccountNotFound", () => Effect.succeed(undefined)));
         };
         const existingProfile = yield* storage
-          .orm("4.0.3")
+          .orm("4.0.4")
           .findFirst("profiles", {
             where: (b) =>
               b.and(
@@ -178,7 +178,7 @@ export const organizationDefaults = (
           return;
         // Build/network work finished above. Only account creation or selection repair needs the lock.
         yield* storage
-          .orm("4.0.3")
+          .orm("4.0.4")
           .transaction(
             Effect.gen(function* () {
               // Only metadata changes, so take the non-key lock. It still serializes member

@@ -2,7 +2,12 @@
 import { fumadb } from "fumadb-effect";
 import { Effect } from "effect";
 import { schema, type CustomMigrationFn } from "fumadb-effect/schema";
-import { storageSchema, version402Tables, version4Tables } from "./storage-schema.ts";
+import {
+  storageSchema,
+  version402Tables,
+  version403Tables,
+  version4Tables,
+} from "./storage-schema.ts";
 
 /** Indexes that are part of the current storage contract, including fresh databases. */
 export const storageIndexes = [
@@ -50,6 +55,19 @@ export const storageSchemas = [
     },
   }),
   // Additive: a new account checks table that the running server never reads.
+  schema({
+    version: "4.0.3",
+    tables: version403Tables,
+    relations: {
+      accounts: ({ one }) => ({
+        providerDefinition: one("providers", ["provider", "id"]).foreignKey(),
+      }),
+      apps: ({ one }) => ({
+        deployment: one("deployments", ["activeDeployment", "id"], ["code", "code"]).foreignKey(),
+      }),
+    },
+  }),
+  // Additive: a nullable account description; the running server neither reads nor writes it.
   storageSchema,
 ] as const;
 

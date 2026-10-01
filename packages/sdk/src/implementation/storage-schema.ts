@@ -254,10 +254,22 @@ const accountChecks = table("executor_account_checks", {
   infoCheckedAt: column("info_checked_at", Schema.NullOr(Schema.Date)).default(null),
 }).unique("executor_account_checks_account_app", ["account", "app"]);
 
+/** Tables of the 4.0.3 layout. */
+export const version403Tables = { ...version402Tables, accountChecks };
+
+/**
+ * Version 4.0.4 adds an account description: free text agents read with the account's label to
+ * choose between accounts. Existing accounts have none.
+ */
+const describedAccounts = table("executor_accounts", {
+  ...accounts.columns,
+  description: column("description", Schema.NullOr(Schema.String)).default(null),
+});
+
 /** Current ORM layout. Profiles own account selections; apps declare requirements. */
 export const storageSchema = schema({
-  version: "4.0.3",
-  tables: { ...version402Tables, accountChecks },
+  version: "4.0.4",
+  tables: { ...version403Tables, accounts: describedAccounts },
   relations: {
     accounts: ({ one }) => ({
       providerDefinition: one("providers", ["provider", "id"]).foreignKey(),

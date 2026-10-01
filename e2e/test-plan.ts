@@ -2002,6 +2002,33 @@ export const scenarios = {
       local: na("The hosted and local dashboards share the credential form and check contract."),
     },
   },
+  accountDescriptions: {
+    fixtures: "actors",
+    file: "account-descriptions.spec.ts",
+    title:
+      "An account description is set when naming a new account, shown in the account list, edited and cleared",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na(
+        "The local dashboard shares the naming and edit forms; its API and MCP have their own scenario.",
+      ),
+    },
+  },
+  localAccountDescriptions: {
+    file: "local-account-descriptions.spec.ts",
+    title:
+      "An account description set through the account API is returned with the account, shown to agents with its tools, kept on rename and removed with null",
+    targets: {
+      local: scheduled,
+      "self-host": na(
+        "The local account API and MCP backend; hosted descriptions have their own scenario.",
+      ),
+      cloud: na(
+        "The local account API and MCP backend; hosted descriptions have their own scenario.",
+      ),
+    },
+  },
   localPastedCredentialsNamedAfterSaving: {
     file: "local-account-naming.spec.ts",
     title:

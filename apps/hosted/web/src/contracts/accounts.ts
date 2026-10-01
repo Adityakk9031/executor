@@ -10,6 +10,7 @@ import { Data, Effect, Option } from "effect";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { acknowledge, upsert, invalidate } from "@executor-js/ui/contracts/mutations";
 import type { AccountToName } from "@executor-js/ui/dashboard/name-account";
+import type { AccountMetadataUpdate } from "@executor-js/ui/dashboard/account-description";
 import { HostedClient } from "./api.ts";
 import { inventoryAtom } from "./organization.ts";
 import { connectionAtom, toolsAtom } from "./apps.ts";
@@ -28,11 +29,9 @@ export const accountAtom = (key: {
   readonly organization: OrganizationReference;
   readonly account: AccountId;
 }) => accountQuery(new AccountKey(key));
-const renameAccount = Atom.family((key: AccountKey) =>
-  HostedClient.runtime.fn((label: string, get) =>
-    Effect.flatMap(HostedClient, (client) =>
-      client.accounts.rename({ params: key, payload: { label } }),
-    ).pipe(
+const updateAccount = Atom.family((key: AccountKey) =>
+  HostedClient.runtime.fn((payload: AccountMetadataUpdate, get) =>
+    Effect.flatMap(HostedClient, (client) => client.accounts.update({ params: key, payload })).pipe(
       Effect.tap((saved) => Effect.sync(() => acknowledgeAccount(get, key.organization, saved))),
     ),
   ),
@@ -69,11 +68,11 @@ export const checkAccountAtom = (key: {
 export const accountToNameAtom = Atom.make<
   (AccountToName & { readonly organization: OrganizationReference }) | undefined
 >(undefined).pipe(Atom.keepAlive);
-/** A different account cannot supersede this account's rename request. */
-export const renameAccountAtom = (key: {
+/** A different account cannot supersede this account's name or description update. */
+export const updateAccountAtom = (key: {
   organization: OrganizationReference;
   account: AccountId;
-}) => renameAccount(new AccountKey(key));
+}) => updateAccount(new AccountKey(key));
 /** Resolves once the dialog's connection is loaded, so it opens without a skeleton. */
 export const reconnectAccountAtom = HostedClient.runtime.fn(
   (key: { readonly organization: OrganizationReference; readonly account: AccountId }, get) =>

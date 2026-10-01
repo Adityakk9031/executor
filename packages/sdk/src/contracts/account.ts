@@ -17,6 +17,11 @@ export const Account = Schema.Struct({
   provider: ProviderId,
   method: AuthMethodName,
   label: Schema.String,
+  /**
+   * Free text for agents choosing between accounts, such as "reads only; use the sandbox account
+   * for writes". Agents read it with the label. Null when the account has none.
+   */
+  description: Schema.NullOr(Schema.String),
   owner: OwnerId,
   createdAt: Schema.Date,
 });
@@ -115,14 +120,18 @@ export const AccountInputs = {
     method: AuthMethodName,
     /** Without a label, the account is named when created and can be renamed once connected. */
     label: Schema.optional(Schema.String),
+    /** Agent-visible notes about the account; omit for none. */
+    description: Schema.optional(Schema.NullOr(Schema.String)),
     fields: AccountFieldsInput,
   }),
   get: Schema.Struct({ account: AccountId, owner: Schema.optional(OwnerId) }),
   list: Schema.Struct({ provider: Schema.optional(ProviderId), owner: Schema.optional(OwnerId) }),
+  /** Change only the supplied fields. A null description removes it. */
   update: Schema.Struct({
     account: AccountId,
     owner: Schema.optional(OwnerId),
-    label: Schema.String,
+    label: Schema.optional(Schema.String),
+    description: Schema.optional(Schema.NullOr(Schema.String)),
   }),
   replaceCredentials: Schema.Struct({
     account: AccountId,
@@ -180,19 +189,22 @@ export const AccountsGroup = HttpApiGroup.make("accounts")
       ],
     }).annotate(
       OpenApi.Description,
-      "Save an account using its provider reference and named secrets method. Fields must match the provider schema. Returns metadata only. For user-supplied credentials, use the product browser connection link so secrets never pass through the agent.",
+      "Save an account using its provider reference and named secrets method. Fields must match the provider schema. An optional description tells agents what the account is for. Returns metadata only. For user-supplied credentials, use the product browser connection link so secrets never pass through the agent.",
     ),
   )
   .add(
     HttpApiEndpoint.patch("update", "/v1/accounts/:account", {
       params: accountParams,
       query: ownerQuery,
-      payload: Schema.Struct({ label: AccountInputs.update.fields.label }),
+      payload: Schema.Struct({
+        label: AccountInputs.update.fields.label,
+        description: AccountInputs.update.fields.description,
+      }),
       success: Account,
       error: [StorageError, AccountNotFound],
     }).annotate(
       OpenApi.Description,
-      "Rename a saved account. Its ID, credentials and profile selections stay the same.",
+      "Rename a saved account or change its description. Only supplied fields change; a null description removes it. Agents read the label and description to choose between accounts. Its ID, credentials and profile selections stay the same.",
     ),
   )
   .add(
