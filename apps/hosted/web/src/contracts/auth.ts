@@ -1,4 +1,4 @@
-import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
+import { revalidated } from "@executor-js/ui/contracts/refresh";
 import { signInCallback } from "./navigation.ts";
 import { BrowserSession } from "@executor-js/hosted-server/browser/contracts";
 import { clearLastOrganization } from "../implementation/last-organization.ts";
@@ -120,7 +120,7 @@ const sessionQuery = Atom.readable(
     refresh(entrySession);
     refresh(liveSessionQuery);
   },
-).pipe(refreshOnFocus);
+).pipe(revalidated);
 /** The server-verified session, revalidated by the browser; APIs enforce authorization. */
 export const sessionAtom = acknowledgedQuery(sessionQuery);
 /** Server rendering starts from the session it verified for this request. */

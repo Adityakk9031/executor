@@ -2370,6 +2370,18 @@ export const scenarios = {
       local: na("This journey checks hosted query refresh after organization identity resolution."),
     },
   },
+  retainedReturn: {
+    fixtures: "actors",
+    file: "query-refresh.spec.ts",
+    title: "Returning to the apps list shows its apps at once and refreshes them in the background",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na(
+        "This journey checks hosted query retention after organization identity resolution.",
+      ),
+    },
+  },
   membersRefresh: {
     fixtures: "actors",
     file: "query-refresh.spec.ts",

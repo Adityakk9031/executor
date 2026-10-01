@@ -1,5 +1,5 @@
 import { hydrated } from "@executor-js/ui/contracts/http";
-import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
+import { revalidated } from "@executor-js/ui/contracts/refresh";
 import { pollingQuery } from "@executor-js/ui/contracts/polling";
 import { observeBrowserUsage } from "./product-analytics.ts";
 import { protectedQuery } from "./protected-query.ts";
@@ -132,7 +132,7 @@ const initialOrganizationsQuery = Atom.readable(
     refresh(entryOrganizationsAtom);
     refresh(organizationsQuery);
   },
-).pipe(refreshOnFocus);
+).pipe(revalidated);
 /** Confirmed writes and source waiting state are shared by every route consumer. */
 export const organizationsAtom = acknowledgedQuery(initialOrganizationsQuery);
 
@@ -173,7 +173,7 @@ export const accessAtom = Atom.family((organization: OrganizationReference) =>
         success: OrganizationAccess,
         error: OrganizationForbidden,
       }),
-      refreshOnFocus,
+      revalidated,
       currentQuery,
     ),
 );
@@ -187,7 +187,7 @@ export const organizationPresentation = Atom.family((reference: OrganizationRefe
 /** Persisted app/account inventory for the current organization. */
 export const inventoryAtom = Atom.family((organization: OrganizationReference) =>
   HostedClient.query("organization", "inventory", hydrated({ params: { organization } })).pipe(
-    refreshOnFocus,
+    revalidated,
     pollingQuery,
     protectedQuery,
   ),
@@ -218,7 +218,7 @@ const OrganizationMembers = Schema.Struct({
 export const membersAtom = Atom.family((organizationId: OrganizationId) =>
   BrowserAtoms.atom((get) => {
     const organization = get(organizationPresentationAtom(organizationId));
-    return Effect.gen(function* () {
+    const allMembers = Effect.gen(function* () {
       const first = yield* request("members", (options) =>
         organizationOperations(options).members(organizationId, 0),
       );
@@ -230,15 +230,24 @@ export const membersAtom = Atom.family((organizationId: OrganizationId) =>
         if (next.members.length === 0) break;
         members.push(...next.members);
       }
-      // Presentation only selects which query to make; the server rechecks the
-      // current membership before returning any invitation credentials.
-      const invitations =
-        organization?.role === "owner" || organization?.role === "admin"
-          ? yield* request("invitations", (options) =>
-              organizationOperations(options).invitations(organizationId),
-            )
-          : [];
-      return yield* Schema.decodeUnknownEffect(OrganizationMembers)({ members, invitations }).pipe(
+      return members;
+    });
+    // Presentation only selects which query to make; the server rechecks the
+    // current membership before returning any invitation credentials.
+    const invitations =
+      organization?.role === "owner" || organization?.role === "admin"
+        ? request("invitations", (options) =>
+            organizationOperations(options).invitations(organizationId),
+          )
+        : Effect.succeed([]);
+    return Effect.gen(function* () {
+      const [members, pending] = yield* Effect.all([allMembers, invitations], {
+        concurrency: "unbounded",
+      });
+      return yield* Schema.decodeUnknownEffect(OrganizationMembers)({
+        members,
+        invitations: pending,
+      }).pipe(
         Effect.mapError(
           () => new OrganizationFailed({ message: "Unable to load members. Try again." }),
         ),
@@ -250,7 +259,7 @@ export const membersAtom = Atom.family((organizationId: OrganizationId) =>
       success: OrganizationMembers,
       error: OrganizationFailed,
     }),
-    refreshOnFocus,
+    revalidated,
     acknowledgedQuery,
   ),
 );

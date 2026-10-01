@@ -1,5 +1,5 @@
 import { hydrated } from "@executor-js/ui/contracts/http";
-import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
+import { revalidated } from "@executor-js/ui/contracts/refresh";
 import { refreshProfiles } from "./profiles.ts";
 import { acknowledgeResourceAccount, resourceDirectoryAtom } from "./resource-access.ts";
 import { protectedQuery } from "./protected-query.ts";
@@ -20,7 +20,7 @@ class AccountKey extends Data.Class<{
 }> {}
 const accountQuery = Atom.family((key: AccountKey) =>
   HostedClient.query("accounts", "get", hydrated({ params: key })).pipe(
-    refreshOnFocus,
+    revalidated,
     protectedQuery,
   ),
 );
