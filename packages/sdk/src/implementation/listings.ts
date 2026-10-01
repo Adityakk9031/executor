@@ -313,14 +313,19 @@ export const makeListings = (options: {
             return listed.listing;
           });
 
-        const entry = yield* cache.get(id);
-        const kept =
-          entry?.kind === "value" &&
-          (entry.value instanceof Listed || entry.value instanceof Failed)
-            ? { at: entry.at, value: entry.value }
-            : undefined;
-        if (kept?.value instanceof Listed && servable(kept.at))
-          return yield* serve(kept.at, kept.value, "memory");
+        const keptListing = cache
+          .get(id)
+          .pipe(
+            Effect.map((entry) =>
+              entry?.kind === "value" &&
+              (entry.value instanceof Listed || entry.value instanceof Failed)
+                ? { at: entry.at, value: entry.value }
+                : undefined,
+            ),
+          );
+        const early = yield* keptListing;
+        if (early?.value instanceof Listed && servable(early.at))
+          return yield* serve(early.at, early.value, "memory");
         // Another isolate's listing, unless an invalidation seen here replaced it. It is kept
         // here too when it fits. A remembered failure here does not hide it.
         const recalling = yield* Effect.forkChild(
@@ -350,18 +355,18 @@ export const makeListings = (options: {
             ),
           ),
         );
-        const early = yield* Fiber.join(recalling).pipe(
+        const recalled = yield* Fiber.join(recalling).pipe(
           Effect.timeoutOption(durableHeadStartMillis),
         );
-        if (Option.isSome(early) && early.value !== undefined)
-          return yield* serve(early.value.at, early.value.listed, "durable");
+        if (Option.isSome(recalled) && recalled.value !== undefined)
+          return yield* serve(recalled.value.at, recalled.value.listed, "durable");
         /**
          * A slow durable read, often a Durable Object waking up, would delay every miss: wait for
          * an evaluation beside it and answer with whichever settles first. A listing the read
          * finds still wins.
          */
         const orRecalled = <E, R>(evaluation: Effect.Effect<ToolListing, E, R>) =>
-          Option.isSome(early)
+          Option.isSome(recalled)
             ? evaluation
             : Effect.raceFirst(
                 evaluation,
@@ -371,6 +376,13 @@ export const makeListings = (options: {
                   ),
                 ),
               );
+        // The durable read yielded, and an evaluation may have ended meanwhile. One that ends
+        // keeps its listing or failure before it leaves `pending`, so reading what runs before
+        // what is kept never misses both.
+        const before = cache.pending(id);
+        const kept = yield* keptListing;
+        if (kept?.value instanceof Listed && servable(kept.at))
+          return yield* serve(kept.at, kept.value, "memory");
         // A remembered failure spares a reader with a wait bound, such as MCP discovery, from
         // waiting on the evaluation again. A reader prepared to wait, such as the dashboard,
         // joins or starts a live evaluation instead, so a recovered upstream shows at once.
@@ -384,7 +396,13 @@ export const makeListings = (options: {
           yield* refresh;
           return yield* Effect.fail(kept.value.error);
         }
+        // Read again so that checking and registering below happen without yielding.
         const running = cache.pending(id);
+        if (running === undefined && before !== undefined) {
+          // It ended after the read above: the outcome it left is there already.
+          yield* Effect.annotateCurrentSpan("executor.declarations.cache", "joined");
+          return yield* join(before);
+        }
         if (running !== undefined) {
           const elapsed = now - running.started;
           const bound = read.reportRunningAfterMillis;
