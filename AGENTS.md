@@ -98,8 +98,8 @@ a `workflow_call` workflow, so another repository can call the same jobs.
 
 A pull request runs only the E2E scenarios it selects. Pushes to `main` run the
 full suite. The static checks (`check`, `apps-version`, `self-host-native`) always
-run. Put exactly one fenced `e2e` block in the PR description, listing spec files
-from `e2e/tests/`:
+run, except in a skipped stack layer. Put exactly one fenced `e2e` block in the PR
+description, listing spec files from `e2e/tests/`:
 
 ````md
 ```e2e
@@ -115,6 +115,16 @@ workflows, shared runtime, storage or auth, or anything whose callers you cannot
 enumerate. A description without the block runs the full suite. An unknown file name
 fails the `select` job. [`e2e/ci-selection.ts`](e2e/ci-selection.ts) turns the block
 into each job's scenario list; the run summary shows it.
+
+In a stack, write `skip` in each lower layer's block, such as a code PR under its
+tests PR. Every job in that run skips, the static checks included. The top layer
+checks the combined change: its static checks run against the whole tree,
+`apps-version` compares it with `main`, and its `e2e` block must select the
+scenarios for every layer's changes. `skip` fails the `select` job unless another
+open PR targets the layer's branch, so a lone PR or the top layer cannot skip.
+After changing a lower layer, rebase the layers above it so the top runs again.
+Merge the stack only when the top layer passes, bottom first, without pausing between
+layers: each merge deploys production.
 
 Choose from the actual callers of the changed code. Search `e2e/tests/` for the
 routes, tools and UI the change touches, and include every file that exercises them
