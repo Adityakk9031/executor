@@ -63,6 +63,7 @@ export { accountRouter } from "./implementation/account-router.ts";
 export {
   router,
   dynamicRouter,
+  withApprovals,
   type RouterDeclaration,
   type RouterChild,
   type RouterOptions,
@@ -194,6 +195,7 @@ export {
   query,
   mutation,
   withApproval,
+  toolAnnotations,
   type Operation,
   type OperationOptions,
 } from "./implementation/operations.ts";

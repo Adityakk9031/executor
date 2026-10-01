@@ -1786,6 +1786,16 @@ export const scenarios = {
       local: na("Exercises the shared import and OAuth implementation through hosted APIs."),
     },
   },
+  importApprovals: {
+    fixtures: "actors",
+    file: "import-approvals.spec.ts",
+    title: "Imported destructive tools wait for approval through rules in the app's source",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloud egress refuses loopback MCP hosts, so no Cloud scenario imports one."),
+      local: na("Exercises the hosted import, API key and MCP resume APIs."),
+    },
+  },
   mcpUrlDefaults: {
     fixtures: "actors",
     file: "mcp-url-defaults.spec.ts",
