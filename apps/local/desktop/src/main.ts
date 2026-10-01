@@ -1,6 +1,6 @@
 /** Electron composition root. No Electron or Node capability is exposed to the renderer. */
 import { resolve } from "node:path";
-import { app, BrowserWindow, dialog, Menu, session, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeTheme, session, shell } from "electron";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { rotatingJsonLogger } from "@executor-js/telemetry/files";
 import { startProcessMetrics } from "@executor-js/telemetry/process";
@@ -57,6 +57,9 @@ else
 /** Renderer crashes reload the window this many times per window before the app gives up. */
 const rendererReloads = 3;
 const rendererReloadWindowMillis = 60_000;
+
+/** The dashboard's `--background` token for the system appearance, painted before content loads. */
+const windowBackground = () => (nativeTheme.shouldUseDarkColors ? "#0a0a0a" : "#ffffff");
 
 /** What the window shows. A pairing link is one-use, so it is cleared once loaded. */
 type View =
@@ -162,7 +165,6 @@ const desktop = Effect.gen(function* () {
           minWidth: 760,
           minHeight: 540,
           title: "Executor",
-          backgroundColor: "#111111",
           show: false,
           webPreferences: {
             backgroundThrottling: false,
@@ -314,6 +316,14 @@ const desktop = Effect.gen(function* () {
           }
         };
 
+        const followAppearance = () => {
+          if (window !== undefined && !window.isDestroyed())
+            window.setBackgroundColor(windowBackground());
+        };
+        nativeTheme.on("updated", followAppearance);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => nativeTheme.removeListener("updated", followAppearance)),
+        );
         const createWindow = () => {
           if (window !== undefined && !window.isDestroyed()) {
             showView();
@@ -321,7 +331,10 @@ const desktop = Effect.gen(function* () {
             window.focus();
             return;
           }
-          const current = new BrowserWindow(windowOptions);
+          const current = new BrowserWindow({
+            ...windowOptions,
+            backgroundColor: windowBackground(),
+          });
           window = current;
           if (process.argv.includes("--devtools"))
             current.webContents.openDevTools({ mode: "detach" });
