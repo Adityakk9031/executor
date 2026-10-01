@@ -164,7 +164,6 @@
     "@electric-sql/pglite@0.5.8": "patches/@electric-sql%2Fpglite@0.5.8.patch"
   },
   "trustedDependencies": [
-    "bun",
     "dugite",
     "electron",
     "electron-winstaller",
