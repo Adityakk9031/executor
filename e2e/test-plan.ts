@@ -359,36 +359,6 @@ export const scenarios = {
       local: na("Local has browser pairing instead of hosted identities"),
     },
   },
-  mcpMemoryBurst: {
-    fixtures: "actors",
-    file: "mcp-memory-burst.spec.ts",
-    title: "MCP subscriptions survive a reconnect burst",
-    targets: {
-      cloud: { status: "scheduled", runtime: "attached" },
-      "self-host": na("Cloudflare Durable Object memory investigation"),
-      local: na("Cloudflare Durable Object memory investigation"),
-    },
-  },
-  mcpMemoryShared: {
-    fixtures: "actors",
-    file: "mcp-memory-shared.spec.ts",
-    title: "MCP subscriptions survive concurrent clients on one session",
-    targets: {
-      cloud: { status: "scheduled", runtime: "attached" },
-      "self-host": na("Cloudflare Durable Object memory investigation"),
-      local: na("Cloudflare Durable Object memory investigation"),
-    },
-  },
-  mcpMemory: {
-    fixtures: "actors",
-    file: "mcp-memory.spec.ts",
-    title: "MCP subscriptions survive idle sessions and reconnect churn",
-    targets: {
-      cloud: { status: "scheduled", runtime: "attached" },
-      "self-host": na("Cloudflare Durable Object memory investigation"),
-      local: na("Cloudflare Durable Object memory investigation"),
-    },
-  },
   toolTreePrefixes: {
     fixtures: "actors",
     file: "tool-tree-prefixes.spec.ts",

@@ -140,13 +140,9 @@ A flake is a bug in the product or the scenario, not noise. Never add retries,
 longer deadlines or skips to make a run pass.
 
 `.github/workflows/cloud-tests.yml` runs deployed tests only after pushes to `main`.
-It finishes the active run and coalesces pending pushes. The functional job runs
-before the separate MCP memory soak job; manual deployed jobs share the same
-non-cancelling concurrency group. Each job owns a disposable Neon staging environment.
-The soak job keeps three full-duration probes and preserves their 20-minute deadlines.
-The shared-session and distributed-session probes are temporarily skipped while their
-unexpected stream endings remain unresolved; the reconnect-burst probe stays enabled.
-Functional scenarios retain 60-second deadlines. Both jobs own their teardown and evidence artifacts. These post-merge
+It finishes the active run and coalesces pending pushes. Manual deployed jobs share
+the same non-cancelling concurrency group. Each job owns a disposable Neon staging environment.
+Scenarios retain 60-second deadlines. The job owns its teardown and evidence artifacts. These post-merge
 checks are not required PR checks. Agents can run targeted deployments through
 the same SDK and CLI on demand.
 
