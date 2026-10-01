@@ -23,6 +23,7 @@ import {
 import {
   openConnection,
   readConnection,
+  requireOpen,
   finishConnection,
   lockConnection,
 } from "./connection-state.ts";
@@ -636,7 +637,7 @@ export const makeOAuth = (
           Effect.gen(function* () {
             const current = yield* lockConnection(tx, input, crypto);
             if (current.state.status === "completed") return current.state.account;
-            yield* openConnection(tx, input);
+            const claimed = yield* requireOpen(input, current);
             const stored =
               existing === undefined
                 ? undefined
@@ -672,7 +673,7 @@ export const makeOAuth = (
               }),
             );
             if (lifecycle) yield* lifecycle.connectionCompleting(input.connection);
-            yield* finishConnection(tx, input, saved);
+            yield* finishConnection(tx, claimed, saved);
             yield* saveClient(tx);
             return saved;
           }),
@@ -713,8 +714,7 @@ export const makeOAuth = (
       const expiresAt = new Date(Math.min(now + 10 * 60_000, pending.expiresAt.getTime()));
       yield* transaction(db, (tx) =>
         Effect.gen(function* () {
-          yield* lockConnection(tx, input, crypto);
-          yield* openConnection(tx, input);
+          yield* requireOpen(input, yield* lockConnection(tx, input, crypto));
           yield* query(() =>
             tx.create("oauthAttempts", { id, encrypted, expiresAt, status: "pending" }),
           );
@@ -738,7 +738,7 @@ export const makeOAuth = (
       const saved = yield* readConnection(db, input);
       if (saved.state.status === "completed")
         return { status: "completed" as const, account: saved.state.account };
-      const connection = yield* openConnection(db, input);
+      const connection = yield* requireOpen(input, saved);
       const existing =
         connection.reconnectAccount === null
           ? undefined
@@ -949,8 +949,7 @@ export const makeOAuth = (
       const ready = `ready_${yield* nextId}`;
       return yield* transaction(db, (tx) =>
         Effect.gen(function* () {
-          yield* lockConnection(tx, input, crypto);
-          const current = yield* openConnection(tx, input);
+          const current = yield* requireOpen(input, yield* lockConnection(tx, input, crypto));
           // A newer sign-in started while the token exchange was running.
           if (current.oauthAttempt !== id) return yield* failed("sign_in_replaced");
           // Read again after the remote exchange: deletion must win, and a concurrent rename must survive.
@@ -999,7 +998,7 @@ export const makeOAuth = (
             }),
           );
           if (lifecycle) yield* lifecycle.connectionCompleting(input.connection);
-          yield* finishConnection(tx, input, saved);
+          yield* finishConnection(tx, current, saved);
           if (savedClient !== undefined)
             yield* query(() =>
               tx.upsert("oauthClients", {

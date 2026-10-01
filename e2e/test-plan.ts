@@ -734,6 +734,8 @@ export const scenarios = {
   },
   sdkQueryBudgets: {
     fixtures: "actors",
+    // Statement budgets compare reads against the provisioned personal account, so setup waits for it.
+    managementProfiles: ["owner"],
     file: "sdk-query-budgets.spec.ts",
     title: "SDK batches invocation accounts and finished workflow history",
     targets: {
