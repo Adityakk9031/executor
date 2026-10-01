@@ -534,6 +534,19 @@ export const scenarios = {
       "self-host": na("Desktop data reset"),
     },
   },
+  localBootstrapRotation: {
+    file: "local-bootstrap.spec.ts",
+    title:
+      "local rotate-key replaces the saved API key where it is kept and retains the encryption key",
+    targets: {
+      local: {
+        status: "not-run",
+        reason: "Runs against the installed release archive with local-bootstrap.config.ts.",
+      },
+      cloud: na("Local key storage"),
+      "self-host": na("Local key storage"),
+    },
+  },
   memberControls: {
     fixtures: "actors",
     file: "member-controls.spec.ts",

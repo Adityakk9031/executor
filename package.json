@@ -124,6 +124,7 @@
     "dugite": "3.2.3",
     "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
     "esbuild": "0.28.2",
+    "fflate": "0.8.3",
     "miniflare": "4.20260730.0",
     "oxfmt": "^0.68.0",
     "oxlint": "^1.83.0",

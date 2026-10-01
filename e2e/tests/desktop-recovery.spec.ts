@@ -232,6 +232,7 @@ it.live(scenarios.desktopReset.title, () =>
 
       expect(yield* menuLabels(electron, "Help")).toEqual([
         "Show diagnostics folder",
+        "Export diagnostics…",
         "",
         "Reset Executor data…",
       ]);

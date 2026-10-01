@@ -35,6 +35,10 @@ import {
   recoveryUrl,
 } from "./implementation/recovery.ts";
 import { makeResetAction } from "./implementation/reset.ts";
+import { makePortAction, readSettings, type PortSource } from "./implementation/settings.ts";
+import { makeExportDiagnosticsAction } from "./implementation/diagnostics.ts";
+import { makeRotateKeyAction, rotateAfterStop } from "./implementation/rotation.ts";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 
 const root = app.isPackaged
   ? resolve(process.resourcesPath, "runtime")
@@ -78,6 +82,29 @@ const desktop = Effect.gen(function* () {
   const backups = path.join(path.dirname(directory), "backups");
   yield* fs.makeDirectory(directory, { recursive: true });
   const file = yield* rotatingJsonLogger(diagnostics, "executor-desktop");
+  const environmentPort = yield* Config.String("EXECUTOR_PORT").pipe(Config.option);
+  const source: PortSource = Option.isSome(environmentPort)
+    ? { kind: "environment", port: environmentPort.value }
+    : Option.match(
+        yield* readSettings(directory).pipe(
+          Effect.mapError(() => new DesktopFailed({ stage: "configuration" })),
+        ),
+        {
+          onNone: () => ({ kind: "default" }),
+          onSome: (settings) => ({ kind: "setting", port: settings.port }),
+        },
+      );
+  const backendEntry = {
+    executable: app.isPackaged
+      ? path.join(root, "node", process.platform === "win32" ? "node.exe" : "node")
+      : process.execPath,
+    entry: path.join(
+      root,
+      app.isPackaged ? "desktop-server.mjs" : "apps/local/desktop/src/server.ts",
+    ),
+    cwd: root,
+    directory,
+  };
   return yield* Effect.gen(function* () {
     yield* startProcessMetrics("executor-desktop");
     const run = yield* FiberSet.makeRuntime();
@@ -89,8 +116,15 @@ const desktop = Effect.gen(function* () {
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => process.removeListener("uncaughtExceptionMonitor", onException)),
     );
-    // An update installs after every window and the local server have shut down.
-    const update = yield* Ref.make(Option.none<() => void>());
+    // Updates, restarts and key rotation run after every window and the local server have shut
+    // down. Each yields the final synchronous step that ends this process.
+    const afterStop = yield* Ref.make(
+      Option.none<Effect.Effect<() => void, never, ChildProcessSpawner.ChildProcessSpawner>>(),
+    );
+    const relaunch = () => {
+      app.relaunch();
+      app.exit(0);
+    };
     const stop = () => {
       Effect.runSync(Deferred.succeed(quit, undefined));
     };
@@ -190,15 +224,8 @@ const desktop = Effect.gen(function* () {
         const supervisor = yield* makeSupervisor({
           start: (token) =>
             startBackend({
-              executable: app.isPackaged
-                ? path.join(root, "node", process.platform === "win32" ? "node.exe" : "node")
-                : process.execPath,
-              entry: path.join(
-                root,
-                app.isPackaged ? "desktop-server.mjs" : "apps/local/desktop/src/server.ts",
-              ),
-              cwd: root,
-              directory,
+              ...backendEntry,
+              port: source.kind === "setting" ? source.port : undefined,
               collectorBundle: app.isPackaged
                 ? path.join(root, "packages/telemetry/dist/motel")
                 : path.join(__dirname, "motel"),
@@ -370,11 +397,32 @@ const desktop = Effect.gen(function* () {
             for (const current of BrowserWindow.getAllWindows()) current.destroy();
           }),
         );
-        const checkForUpdates = yield* makeUpdater((install) => {
-          Effect.runSync(Ref.set(update, Option.some(install)));
+        const after = (
+          step: Effect.Effect<() => void, never, ChildProcessSpawner.ChildProcessSpawner>,
+        ) => {
+          Effect.runSync(Ref.set(afterStop, Option.some(step)));
           stop();
-        });
+        };
+        const checkForUpdates = yield* makeUpdater((install) => after(Effect.succeed(install)));
         const openBrowser = yield* makeOpenBrowserAction(browserSession, origin);
+        const changePort = yield* makePortAction({
+          directory,
+          current: () => {
+            const current = origin();
+            return current === undefined ? undefined : Number(new URL(current).port);
+          },
+          source,
+          parent: () => window,
+          restart: () => after(Effect.succeed(relaunch)),
+        });
+        const rotateKey = yield* makeRotateKeyAction(() =>
+          after(rotateAfterStop(backendEntry).pipe(Effect.as(relaunch))),
+        );
+        const exportDiagnostics = yield* makeExportDiagnosticsAction({
+          directory,
+          origin,
+          source,
+        });
         Menu.setApplicationMenu(
           Menu.buildFromTemplate([
             ...(process.platform === "darwin" ? [{ role: "appMenu" as const }] : []),
@@ -382,6 +430,9 @@ const desktop = Effect.gen(function* () {
               label: "File",
               submenu: [
                 { label: "Open in browser", click: () => run(openBrowser) },
+                { type: "separator" },
+                { label: "Server port…", click: () => run(changePort) },
+                { label: "Rotate local API key…", click: () => run(rotateKey) },
                 { type: "separator" },
                 { role: process.platform === "darwin" ? "close" : "quit" },
               ],
@@ -401,6 +452,7 @@ const desktop = Effect.gen(function* () {
               role: "help",
               submenu: [
                 { label: "Show diagnostics folder", click: () => void shell.openPath(diagnostics) },
+                { label: "Export diagnostics…", click: () => run(exportDiagnostics) },
                 { type: "separator" },
                 { label: "Reset Executor data…", click: () => run(reset) },
               ],
@@ -413,7 +465,7 @@ const desktop = Effect.gen(function* () {
       }),
       Deferred.await(quit),
     );
-    return yield* Ref.get(update);
+    return yield* Ref.get(afterStop);
   }).pipe(
     Effect.tapCause((cause) => Effect.logError("Desktop stopped", cause)),
     // Said before the scope closes, while the diagnostics location is known.
@@ -433,25 +485,29 @@ const desktop = Effect.gen(function* () {
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else
-  void Effect.runPromiseExit(Effect.scoped(desktop).pipe(Effect.provide(NodeServices.layer))).then(
-    (result) => {
-      if (Exit.isFailure(result)) {
-        const error = Cause.findErrorOption(result.cause);
-        const stage =
-          Option.isSome(error) && Schema.is(DesktopFailed)(error.value)
-            ? error.value.stage
-            : "configuration";
-        console.error(`Executor desktop failed at ${stage}.`);
-        // Server failures show the recovery page and a renderer crash loop has its own box.
-        if (stage !== "renderer")
-          dialog.showErrorBox(
-            "Executor could not continue",
-            app.isPackaged
-              ? "The Executor window stopped. Restart Executor Preview."
-              : "The Executor window stopped. Restart with bun run desktop:dev.",
-          );
-      }
-      if (Exit.isSuccess(result) && Option.isSome(result.value)) result.value.value();
-      else app.exit(Exit.isFailure(result) ? 1 : 0);
-    },
-  );
+  void Effect.runPromiseExit(
+    Effect.scoped(desktop).pipe(
+      // The step runs after the desktop scope closed, so the backend no longer holds its directory.
+      Effect.flatMap(Effect.transposeOption),
+      Effect.provide(NodeServices.layer),
+    ),
+  ).then((result) => {
+    if (Exit.isFailure(result)) {
+      const error = Cause.findErrorOption(result.cause);
+      const stage =
+        Option.isSome(error) && Schema.is(DesktopFailed)(error.value)
+          ? error.value.stage
+          : "configuration";
+      console.error(`Executor desktop failed at ${stage}.`);
+      // Server failures show the recovery page and a renderer crash loop has its own box.
+      if (stage !== "renderer")
+        dialog.showErrorBox(
+          "Executor could not continue",
+          app.isPackaged
+            ? "The Executor window stopped. Restart Executor Preview."
+            : "The Executor window stopped. Restart with bun run desktop:dev.",
+        );
+    }
+    if (Exit.isSuccess(result) && Option.isSome(result.value)) result.value.value();
+    else app.exit(Exit.isFailure(result) ? 1 : 0);
+  });
