@@ -14,6 +14,7 @@ import {
 } from "../contracts/test-stage-lifetime.ts";
 import { withStageAdmin } from "./test-stage-inventory.ts";
 import { discoverTestStages } from "./test-stage-discovery.ts";
+import { awaitStageRollout } from "./test-stage-rollout.ts";
 
 const slug = Argument.String("slug").pipe(Argument.withSchema(TestStageSlug));
 const owner = Flag.String("owner").pipe(Flag.withSchema(Schema.NonEmptyString), Flag.optional);
@@ -202,8 +203,14 @@ const operation = (name: "deploy" | "plan") =>
               ),
             );
           }).pipe(Effect.timeout(testStageDeployMilliseconds));
-          if (name === "deploy")
-            yield* Console.log(`Ready: https://${input.slug}.executor.engineering`);
+          if (name === "deploy") {
+            const domain = yield* Config.String("TEST_STAGE_DOMAIN").pipe(
+              Config.withDefault("executor.engineering"),
+            );
+            const origin = `https://${input.slug}.${domain}`;
+            yield* awaitStageRollout(origin);
+            yield* Console.log(`Ready: ${origin}`);
+          }
         }),
       ),
   );
