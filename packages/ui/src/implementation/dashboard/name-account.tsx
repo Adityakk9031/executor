@@ -5,7 +5,7 @@ import { providerDisplayUrl, type FailureProps } from "../../contracts/dashboard
 import { Button } from "../components/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/dialog.tsx";
 import { Input } from "../components/input.tsx";
-import { Skeleton } from "../components/skeleton.tsx";
+import { Spinner } from "../components/spinner.tsx";
 import {
   AccountDescriptionField,
   accountDescriptionValue,
@@ -149,10 +149,13 @@ export function NameAccountForm<E>({
       <label className="flex flex-col gap-2 text-[13px] font-medium">
         Account name
         {resolving ? (
-          <Skeleton
-            className="h-9 w-full max-[740px]:h-11"
-            aria-label="Reading the account's name"
-          />
+          <div
+            role="status"
+            className="flex h-9 w-full items-center gap-2 rounded-md border border-input px-3 text-sm text-muted-foreground shadow-xs max-[740px]:h-11 dark:bg-input/30"
+          >
+            <Spinner className="size-3.5 shrink-0" aria-hidden />
+            <span className="truncate">Looking up account name…</span>
+          </div>
         ) : (
           <Input
             autoFocus
