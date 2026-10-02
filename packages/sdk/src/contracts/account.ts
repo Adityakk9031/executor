@@ -74,6 +74,15 @@ export const AccountHealth = Schema.Struct({
 });
 export type AccountHealth = typeof AccountHealth.Type;
 
+/** The app's current check found the account's credentials rejected; outdated checks make no claim. */
+export const credentialsRejected = (health: AccountHealth, app: AppId) =>
+  health.apps.some(
+    (entry) =>
+      entry.app === app &&
+      entry.check?.current === true &&
+      entry.check.status === "credentials_rejected",
+  );
+
 /** A check of credentials before they are saved; nothing is recorded. */
 export const CredentialCheck = Schema.Struct({
   status: AccountCheckStatus,

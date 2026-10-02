@@ -17,8 +17,9 @@ const appSchema = Schema.Struct({
     }),
   }),
 });
-const source = `import {defineApp,defineProvider,secrets,query,object,string, router} from "apps";
-const service=defineProvider({name:"Launch fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
+const source = `import {defineApp,defineProvider,secrets,query,object,string, router, ProviderError} from "apps";
+const service=defineProvider({name:"Launch fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})},
+  async health({account}){if(account.fields.token==="rejected-launch-token")throw new ProviderError({reason:"unauthorized",status:401});}});
 export const who=query({input:object({})},async ctx=>ctx.accounts.service.id);
 export default defineApp({accounts:{service}},{tools: router({ who })});`;
 const files = (code: string) => [
@@ -59,7 +60,7 @@ layer(TestLive, { excludeTestServices: true })("Local app launch", (it) => {
         yield* Effect.addFinalizer(() =>
           Effect.forEach(owned, (path) => send("DELETE", path)).pipe(Effect.orDie),
         );
-        const create = (label: string) =>
+        const create = (label: string, token = "synthetic-launch-token") =>
           Effect.gen(function* () {
             const account = yield* body(
               Resource,
@@ -68,7 +69,7 @@ layer(TestLive, { excludeTestServices: true })("Local app launch", (it) => {
                 provider: app.requirements.accounts.service.provider,
                 method: "key",
                 label,
-                fields: { token: "synthetic-launch-token" },
+                fields: { token },
               }),
             );
             owned.push(`/v1/accounts/${account.id}`);
@@ -180,6 +181,41 @@ layer(TestLive, { excludeTestServices: true })("Local app launch", (it) => {
         expect(launched.searchParams.get("folder")).toBe("unread");
         expect(launched.hash).toBe("#message");
         yield* browser.checkpoint("Local authored app has explicit account context");
+        const removed = yield* create("Removed");
+        yield* send("DELETE", `/v1/accounts/${removed.account}`);
+        owned.splice(owned.indexOf(`/v1/accounts/${removed.account}`), 1);
+        const rejected = yield* create("Rejected", "rejected-launch-token");
+        yield* send("POST", `/v1/accounts/${rejected.account}/health`, { apps: [app.id] });
+        yield* browser.use("Blocked profiles appear in the chooser", (page) =>
+          page.goto(new URL("/inbox", ui).href),
+        );
+        const choice = (name: string) =>
+          browser.use(`Read ${name} choice`, (page) =>
+            page
+              .getByRole("group", { name, exact: true })
+              .waitFor()
+              .then(() => page.getByRole("group", { name, exact: true }).innerText()),
+          );
+        expect(yield* choice("Removed")).toContain(
+          "Launch fixture account was removed or is no longer shared",
+        );
+        expect(yield* choice("Rejected")).toContain("Rejected: sign-in rejected at last check");
+        expect(
+          yield* browser.use("Blocked profiles cannot open, ready ones can", (page) =>
+            page
+              .getByRole("link")
+              .filter({ hasText: /^(Personal|Work|Removed|Rejected)/ })
+              .allInnerTexts(),
+          ),
+        ).toEqual(["Personal", "Work"]);
+        const review = yield* browser.use("Read the rejected profile's account link", (page) =>
+          page
+            .getByRole("group", { name: "Rejected", exact: true })
+            .getByRole("link", { name: "Review accounts", exact: true })
+            .getAttribute("href"),
+        );
+        expect(review).toContain(`profile=${rejected.profile}`);
+        yield* browser.checkpoint("Blocked profiles explain why they cannot open");
         const plain = yield* body(
           Schema.Struct({ app: Resource }),
           yield* send("POST", "/v1/apps/deploy", {

@@ -4,10 +4,12 @@ import {
   Deployment,
   DeploymentId,
   AccountRequired,
+  credentialsRejected,
   OAuthReconnectRequired,
   OwnerId,
   type AppId,
   type ExecutorDatabase,
+  type SelectedAccounts,
   type Executor,
   type Runtime,
 } from "@executor-js/sdk/core";
@@ -219,8 +221,19 @@ export const appUi = (
             Object.hasOwn(item.accounts, slot),
           ),
       );
+      // A lone profile opens directly only when its accounts exist and none was rejected.
+      const usable = (accounts: SelectedAccounts) =>
+        Effect.forEach(
+          Object.values(accounts).flatMap((value) => (typeof value === "string" ? [value] : value)),
+          (account) =>
+            executor.accounts.health({ account }).pipe(
+              Effect.map((health) => !credentialsRejected(health, app.id)),
+              Effect.catchTag("AccountNotFound", () => Effect.succeed(false)),
+              Effect.mapError(() => failed()),
+            ),
+        ).pipe(Effect.map((results) => results.every(Boolean)));
       const only = candidates[0];
-      if (candidates.length === 1 && only !== undefined) {
+      if (candidates.length === 1 && only !== undefined && (yield* usable(only.accounts))) {
         url.searchParams.set("profile", only.id);
         return HttpServerResponse.redirect(url.href, { status: 302, headers: privateHeaders });
       }

@@ -12,10 +12,12 @@ import {
   AccountSelectionInvalid,
   OAuthReconnectRequired,
   AppNotFound,
+  credentialsRejected,
   DeploymentId,
   DeploymentNotFound,
   type App,
   type DeploymentMetadata,
+  type SelectedAccounts,
 } from "@executor-js/sdk/core";
 import {
   AppSignInCallback,
@@ -526,8 +528,21 @@ export const hostedAppUi = <R = never>(
             Effect.mapError(unavailable),
           ),
       );
+      // A lone profile opens directly only when none of its accounts was rejected.
+      const usable = (accounts: SelectedAccounts) =>
+        Effect.forEach(
+          Object.values(accounts).flatMap((value) => (typeof value === "string" ? [value] : value)),
+          (account) =>
+            executor.accounts.health({ owner: current.access.owner, account }).pipe(
+              Effect.map((health) => !credentialsRejected(health, current.app.id)),
+              Effect.catchTag("AccountNotFound", () => Effect.succeed(false)),
+              Effect.provideService(CurrentOrganization, current.access),
+              Effect.provideService(CurrentUserId, current.access.userId),
+              Effect.mapError(unavailable),
+            ),
+        ).pipe(Effect.map((results) => results.every(Boolean)));
       const only = candidates[0];
-      if (candidates.length === 1 && only !== undefined) {
+      if (candidates.length === 1 && only !== undefined && (yield* usable(only.accounts))) {
         url.searchParams.set("profile", only.id);
         return HttpServerResponse.redirect(url.href, { status: 302, headers: appPrivateHeaders });
       }
