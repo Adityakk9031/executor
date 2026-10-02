@@ -88,7 +88,7 @@ const safe = <A>(
 export const makeWorkflowRuns = (
   storage: ExecutorDatabase,
   runtime: Runtime,
-  resolveAccount: ReturnType<typeof makeOAuth>["resolve"],
+  resolveAccount: ReturnType<typeof makeOAuth>["resolveSelected"],
   credentials: Credentials,
   crypto: Crypto.Crypto,
   declarations: Declarations,

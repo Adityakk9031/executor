@@ -11,6 +11,7 @@ import {
   telemetryBindings,
 } from "./infrastructure/telemetry.ts";
 import { AppCompiler } from "./infrastructure/compiler.ts";
+import { workerBuild } from "./infrastructure/worker-build.ts";
 
 const FrameworkAssets = Schema.declare(
   (value): value is { readonly fetch: (request: Request) => Promise<Response> } =>
@@ -27,6 +28,7 @@ export default AppCompiler.make(
       main: import.meta.url,
       ...(yield* cloudObservability),
       workersDev: false,
+      build: workerBuild("compiler"),
       compatibility: { date: "2026-09-08", flags: ["nodejs_compat"] },
       env: yield* telemetryBindings,
       ...(Option.isSome(framework) ? { assets: { directory: framework.value } } : {}),
