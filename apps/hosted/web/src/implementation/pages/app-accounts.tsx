@@ -15,10 +15,9 @@ import type {
 } from "@executor-js/sdk";
 import {
   AppAccounts as SharedAccounts,
-  AccountBindingMenu,
+  RemoveAccountBinding,
   useUnusedAccountPrompt,
 } from "@executor-js/ui/dashboard/app-accounts";
-import { DropdownMenuItem } from "@executor-js/ui/components/dropdown-menu";
 import type { AccountSummary } from "@executor-js/ui/contracts/dashboard";
 import { Button } from "@executor-js/ui/components/button";
 import { ConnectionDialogHeader, ConnectionModal } from "./connection-dialog.tsx";
@@ -32,7 +31,6 @@ import type { HostedError } from "../../contracts/errors.ts";
 import { accountSelectionAtom, profileMutations } from "../../contracts/profiles.ts";
 import { accountUsageAtom, disconnectAccountAtom } from "../../contracts/accounts.ts";
 import { AtomRegistry } from "effect/unstable/reactivity";
-import { HostedAccountDialog } from "./account-actions.tsx";
 
 /** A new profile starts with every multiple-account slot bound to no accounts. */
 function emptySelection(app: App): SelectedAccounts {
@@ -115,22 +113,9 @@ export function AppAccounts({
     readonly slot: string;
     readonly requirement: AccountRequirement;
     readonly method: string;
-    /** Set when replacing this account's credentials rather than adding an account. */
-    readonly account?: AccountSummary | undefined;
   }>();
-  const [renaming, setRenaming] = useState<AccountSummary["id"]>();
   const [connecting, setConnecting] = useState(false);
   const pending = chooser.pending || connecting;
-  // Reconnecting through the app shows the hosts this app's declaration grants.
-  const reconnect = (slot: string, account: AccountSummary) => {
-    const requirement = app.requirements.accounts[slot];
-    if (requirement !== undefined)
-      setConnection({ slot, requirement, method: account.method, account });
-  };
-  const boundSlot = (account: AccountSummary["id"]) =>
-    Object.entries(profile?.accounts ?? {}).find(([, selected]) =>
-      typeof selected === "string" ? selected === account : selected.includes(account),
-    )?.[0];
   return (
     <>
       <SharedAccounts
@@ -143,12 +128,10 @@ export function AppAccounts({
             ? { pending, choose: (slot, value) => void chooser.choose(slot, value) }
             : undefined
         }
-        removeAccountAction={(slot, account, label) => {
-          if (!canUse || profile === undefined) return null;
-          const saved = accounts.find((item) => item.id === account);
-          const requirement = app.requirements.accounts[slot];
-          return (
-            <AccountBindingMenu
+        removeAccountAction={(slot, account, label) =>
+          canUse &&
+          profile !== undefined && (
+            <RemoveAccountBinding
               profile={profile}
               slot={slot}
               account={account}
@@ -156,41 +139,9 @@ export function AppAccounts({
               update={profileMutations({ organization, app: app.id, profile: profile.id }).update}
               Failure={HostedFailure}
               onRemoved={(removed) => void unused.check(removed)}
-            >
-              {saved && (
-                <>
-                  <DropdownMenuItem onSelect={() => setRenaming(saved.id)}>Rename</DropdownMenuItem>
-                  {editable && requirement !== undefined && (
-                    <DropdownMenuItem disabled={pending} onSelect={() => reconnect(slot, saved)}>
-                      {requirement.definition.auth[saved.method]?.type === "oauth2"
-                        ? "Reconnect"
-                        : "Update credentials"}
-                    </DropdownMenuItem>
-                  )}
-                </>
-              )}
-            </AccountBindingMenu>
-          );
-        }}
-        {...(editable
-          ? {
-              reconnectAction: (account: AccountSummary) => {
-                const slot = boundSlot(account.id);
-                return (
-                  slot !== undefined && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={pending}
-                      onClick={() => reconnect(slot, account)}
-                    >
-                      Reconnect
-                    </Button>
-                  )
-                );
-              },
-            }
-          : {})}
+            />
+          )
+        }
         {...(editable
           ? {
               accountActions: (slot: string, requirement: AccountRequirement) => (
@@ -221,15 +172,11 @@ export function AppAccounts({
             redirectUri={redirectUri}
             profile={profile?.id}
             onSelected={onSelected}
-            account={connection.account}
             onPendingChange={setConnecting}
             onSaved={() => setConnection(undefined)}
           />
         )}
       </ConnectionModal>
-      {renaming && (
-        <HostedAccountDialog id={renaming} dialog="edit" onClose={() => setRenaming(undefined)} />
-      )}
     </>
   );
 }
@@ -300,12 +247,10 @@ function AppConnectionDialogContent({
   redirectUri,
   profile,
   onSelected,
-  account,
   onPendingChange,
   onSaved,
 }: {
   readonly app: App;
-  readonly account?: AccountSummary | undefined;
   readonly selection: SelectedAccounts;
   readonly slot: string;
   readonly requirement: AccountRequirement;
@@ -329,18 +274,11 @@ function AppConnectionDialogContent({
     <>
       <ConnectionDialogHeader
         provider={form.provider}
-        action={account ? "Reconnect" : "Connect"}
-        notice={
-          account
-            ? `Apps using ${account.label} will use the new credentials.`
-            : currentAccount
-              ? `Replaces ${currentAccount.label} in this profile.`
-              : undefined
-        }
+        action="Connect"
+        notice={currentAccount ? `Replaces ${currentAccount.label} in this profile.` : undefined}
       />
       <AppConnectionFields
         app={app.id}
-        account={account}
         accounts={selection}
         profile={profile}
         onSelected={onSelected}
@@ -365,10 +303,7 @@ function AppConnectionFields({
   profile,
   onSelected,
   checks,
-  account,
 }: {
-  /** Set when replacing this account's credentials rather than adding an account. */
-  readonly account?: AccountSummary | undefined;
   readonly accounts: SelectedAccounts;
   readonly profile?: ProfileId | undefined;
   readonly onSelected: (id: ProfileId) => void;
@@ -389,7 +324,6 @@ function AppConnectionFields({
       provider: form.provider.id,
       accounts,
       profile,
-      account: account?.id,
     }),
   );
   useAtomMount(atoms.request);
@@ -405,7 +339,6 @@ function AppConnectionFields({
     >
       provider={form.provider}
       app={checks ? app : undefined}
-      {...(account ? { account } : {})}
       redirectUri={form.redirectUri}
       initialMethod={form.method}
       submit={(input) =>
@@ -435,7 +368,6 @@ function AppConnectionFields({
             connection: value.connection,
             profile: value.profile,
             redirectUri: value.redirectUri,
-            ...(account ? { reconnect: true } : {}),
             manualClient: value.manualClient,
           },
           value.authorizationUrl,

@@ -1128,11 +1128,74 @@ export const scenarios = {
   feedback: {
     fixtures: "actors",
     file: "feedback.spec.ts",
-    title: "Cloud feedback enforces its API contract and reaches the local ingestion service",
+    title: "Hosted feedback enforces its API contract and reaches the local ingestion service",
     targets: {
       cloud: managedCloud,
-      "self-host": na("PostHog feedback belongs to Cloud."),
-      local: na("PostHog feedback belongs to Cloud."),
+      "self-host": scheduled,
+      local: na("Local feedback has no organization; the local analytics scenario covers it."),
+    },
+  },
+  selfHostAnalytics: {
+    fixtures: "actors",
+    file: "instance-analytics.spec.ts",
+    title:
+      "self-host analytics pseudonymize people, report a private domain and send no names or IDs",
+    managementProfiles: ["owner"],
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloud sends request-owned analytics; the Cloud product analytics scenario."),
+      local: na("Local has no people; the local analytics scenario covers its install ID."),
+    },
+  },
+  selfHostAnalyticsOptOut: {
+    fixtures: "actors",
+    file: "instance-analytics.spec.ts",
+    title: "self-host with DO_NOT_TRACK sends nothing and reports feedback as disabled",
+    managementProfiles: ["owner"],
+    serverEnvironment: { DO_NOT_TRACK: "1" },
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Operators of self-run installations opt out; Cloud has no such setting."),
+      local: na("The local opt-out scenario covers local."),
+    },
+  },
+  selfHostAnalyticsRootDomain: {
+    file: "instance-analytics.spec.ts",
+    title: "self-host analytics report the registrable domain of a public origin",
+    serverEnvironment: { BETTER_AUTH_URL: "https://executor.platform.acme.co.uk" },
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Only self-host reports a root domain."),
+      local: na("Only self-host reports a root domain."),
+    },
+  },
+  selfHostAnalyticsTunnelDomain: {
+    file: "instance-analytics.spec.ts",
+    title: "self-host analytics report a tunnel origin as private",
+    serverEnvironment: { BETTER_AUTH_URL: "https://agent-box-7f3a.ngrok-free.app" },
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Only self-host reports a root domain."),
+      local: na("Only self-host reports a root domain."),
+    },
+  },
+  localAnalytics: {
+    file: "instance-analytics.spec.ts",
+    title: "local analytics use the install ID, accept feedback and send no names or inputs",
+    targets: {
+      local: scheduled,
+      "self-host": na("The self-host analytics scenario covers hosted identity."),
+      cloud: na("Cloud sends request-owned analytics; the Cloud product analytics scenario."),
+    },
+  },
+  localAnalyticsOptOut: {
+    file: "instance-analytics.spec.ts",
+    title: "local with EXECUTOR_DISABLE_ANALYTICS sends nothing and reports feedback as disabled",
+    serverEnvironment: { EXECUTOR_DISABLE_ANALYTICS: "1" },
+    targets: {
+      local: scheduled,
+      "self-host": na("The self-host opt-out scenario covers self-host."),
+      cloud: na("Operators of self-run installations opt out; Cloud has no such setting."),
     },
   },
   groupFormErrors: {

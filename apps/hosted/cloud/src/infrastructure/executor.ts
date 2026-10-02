@@ -16,6 +16,7 @@ import {
   OrganizationRemovals,
   OrganizationRemovalUnavailable,
   OrganizationTombstones,
+  withExecutorAnalytics,
 } from "@executor-js/hosted-server";
 import { GroupDatabase, GroupsUnavailable } from "@executor-js/hosted-server/groups";
 import { postgresExecutor } from "@executor-js/hosted-server/database";
@@ -40,7 +41,6 @@ import { cachedBuildAssets } from "../implementation/asset-cache.ts";
 import { AppDomainDatabase } from "../implementation/app-domain-records.ts";
 import { UiFailed } from "apps/ui/contracts";
 import { cachedDeploymentSources } from "../implementation/deployment-source-cache.ts";
-import { withExecutorAnalytics } from "../implementation/product-analytics.ts";
 import { cloudAppSources } from "./source.ts";
 import { isolateDeclarations } from "./isolate-memory.ts";
 import type { ArtifactsTokens } from "@executor-js/app-source/cloudflare";

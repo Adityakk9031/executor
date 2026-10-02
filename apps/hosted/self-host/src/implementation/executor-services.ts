@@ -25,6 +25,7 @@ import {
   OrganizationDefaults,
   organizationDefaults,
   lazyHostedApiDocument,
+  withExecutorAnalytics,
 } from "@executor-js/hosted-server";
 import { postgresExecutor } from "@executor-js/hosted-server/database";
 import { HostedAppRuntime } from "@executor-js/hosted-server/app-ui/contracts";
@@ -129,7 +130,7 @@ export const selfHostExecutorServices = <E, R>(
         Layer.succeed(
           AppManagementHost,
           Effect.succeed({
-            executor,
+            executor: withExecutorAnalytics(executor),
             sources,
             repositories,
             registry,
@@ -138,7 +139,8 @@ export const selfHostExecutorServices = <E, R>(
             access: yield* hostedAppCapabilities,
           }),
         ),
-        Layer.succeed(HostedExecutor, Effect.succeed(executor)),
+        // Records only inside requests that carry this instance's analytics sink.
+        Layer.succeed(HostedExecutor, Effect.succeed(withExecutorAnalytics(executor))),
         Layer.succeed(OrganizationDefaults, initialize),
         Layer.succeed(HostedAppRuntime, toEffectRuntime(runtime, blobs)),
       );

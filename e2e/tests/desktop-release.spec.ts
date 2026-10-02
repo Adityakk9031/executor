@@ -50,6 +50,8 @@ it.live("packaged desktop starts without the workspace and retains apps after re
         ),
         PATH: runtimePath,
         HOME: process.env.HOME ?? "",
+        // Release scenarios never send product analytics, even from a build with a baked key.
+        DO_NOT_TRACK: "1",
         EXECUTOR_API_KEY: apiKey,
         EXECUTOR_ENCRYPTION_KEY: encryptionKey,
         EXECUTOR_PORT: String(port),
@@ -432,6 +434,8 @@ it.live("packaged desktop uses its saved port and exports redacted diagnostics",
         ),
         PATH: runtimePath,
         HOME: process.env.HOME ?? "",
+        // Release scenarios never send product analytics, even from a build with a baked key.
+        DO_NOT_TRACK: "1",
         EXECUTOR_API_KEY: apiKey,
         EXECUTOR_ENCRYPTION_KEY: encryptionKey,
         EXECUTOR_DESKTOP_DATA_DIR: data,

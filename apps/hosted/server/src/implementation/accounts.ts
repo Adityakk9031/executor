@@ -165,7 +165,6 @@ export const connectAccount = (
     readonly requirement: string;
     readonly profile: import("@executor-js/sdk/core").ProfileId;
     readonly destination?: typeof ConnectionDestination.Type | undefined;
-    readonly account?: AccountId | undefined;
   },
 ) =>
   Effect.gen(function* () {
@@ -173,18 +172,7 @@ export const connectAccount = (
     yield* executor.apps.get({ owner, app: input.app });
     yield* executionManagerOwner(executor, input.app, input.profile);
     yield* requireAppAccess(input.app, "use");
-    // A reconnect keeps the account where it is shared; a new account goes where the caller asks.
-    const access =
-      input.account === undefined
-        ? undefined
-        : yield* requireAccountAccess(input.account, "manage");
-    const destination =
-      access === undefined
-        ? (input.destination ?? ({ kind: "personal" } as const))
-        : access.ownership.kind === "personal"
-          ? ({ kind: "personal" } as const)
-          : access.ownership;
-    yield* checkDestination(destination);
+    yield* checkDestination(input.destination ?? { kind: "personal" });
     return yield* executor.accountConnections
       .create({
         owner,
@@ -193,9 +181,12 @@ export const connectAccount = (
           requirement: input.requirement,
           profile: input.profile,
         },
-        ...(input.account === undefined ? {} : { account: input.account }),
       })
-      .pipe(Effect.flatMap((connection) => recordConnection(connection, destination)));
+      .pipe(
+        Effect.flatMap((connection) =>
+          recordConnection(connection, input.destination ?? { kind: "personal" }),
+        ),
+      );
   });
 /** Connection metadata never grants access to another organization's request or app. */
 export const getConnection = (

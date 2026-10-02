@@ -47,6 +47,7 @@ export function AccountsPage({ highlight }: { readonly highlight?: AccountId | u
             <HostedAccountActions
               account={account}
               access={entry?.access}
+              oauth={entry?.provider.definition.auth[account.method]?.type === "oauth2"}
               open={(kind) => setDialog({ account: account.id, kind })}
             />
           );

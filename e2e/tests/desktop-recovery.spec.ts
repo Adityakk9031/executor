@@ -74,6 +74,8 @@ const desktopHome = (keys: "supplied" | "file" | "unreachable-store" = "supplied
     );
     const common = {
       ...display,
+      // Release scenarios never send product analytics, even from a build with a baked key.
+      DO_NOT_TRACK: "1",
       PATH: runtimePath,
       EXECUTOR_PORT: String(port),
       EXECUTOR_DESKTOP_DATA_DIR: data,
