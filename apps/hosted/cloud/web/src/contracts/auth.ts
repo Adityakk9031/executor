@@ -8,7 +8,7 @@ import { authRequest } from "@executor-js/hosted-web/contracts/auth";
 import { Effect, Schema } from "effect";
 import { Atom } from "effect/unstable/reactivity";
 import { acknowledge, acknowledgedQuery, invalidate } from "@executor-js/ui/contracts/mutations";
-import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
+import { revalidated } from "@executor-js/ui/contracts/refresh";
 import { AccountFailed } from "@executor-js/hosted-web/contracts/account";
 import { keepFragment, signInCallback } from "@executor-js/hosted-web/contracts/navigation";
 import { startSsoSignIn } from "./sso.ts";
@@ -74,7 +74,7 @@ const passkeysQuery = BrowserAtoms.atom(
     Effect.mapError(() => new AccountFailed({ message: "Unable to load your passkeys." })),
     Effect.withSpan("ui.auth.passkeys"),
   ),
-).pipe(refreshOnFocus);
+).pipe(revalidated);
 /** The signed-in user's passkeys, for the account security page. */
 export const passkeysAtom = acknowledgedQuery(passkeysQuery);
 /** Register with the server's configured origin and relying-party identity. */

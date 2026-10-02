@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { acknowledge, acknowledgedQuery } from "@executor-js/ui/contracts/mutations";
-import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
+import { revalidated } from "@executor-js/ui/contracts/refresh";
 import { observeBrowserUsage } from "./product-analytics.ts";
 import { accountOperations, authCallOptions, sessionAtom, type AuthCallOptions } from "./auth.ts";
 import { BrowserAtoms } from "./telemetry.ts";
@@ -103,7 +103,7 @@ const sessionsQuery = BrowserAtoms.atom((get) => {
     })),
     Effect.withSpan("ui.account.sessions"),
   );
-}).pipe(refreshOnFocus);
+}).pipe(revalidated);
 export const sessionsAtom = acknowledgedQuery(sessionsQuery);
 
 /** Sign one other device out; its row leaves the list once the server confirms. */
