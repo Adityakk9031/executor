@@ -4,6 +4,8 @@ import { Schema } from "effect";
 import { StorageError, CredentialsError } from "./shared.ts";
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
 import { AccountInfo } from "apps/contracts";
+import type { UiAccountProblem } from "apps/ui/contracts";
+import type { App, SelectedAccounts } from "./apps.ts";
 import { AccountId, AppId, JsonObject, OwnerId, ProviderId } from "./shared.ts";
 import { AuthMethodInvalid, AuthMethodName, Provider, ProviderNotFound } from "./provider.ts";
 
@@ -82,6 +84,35 @@ export const credentialsRejected = (health: AccountHealth, app: AppId) =>
       entry.check?.current === true &&
       entry.check.status === "credentials_rejected",
   );
+
+/**
+ * Problems with a profile's selected accounts, from stored state. `found` holds the selected
+ * accounts the caller may use; any other selected account was removed or is no longer shared.
+ */
+export const profileAccountProblems = (
+  app: App,
+  selection: SelectedAccounts,
+  found: ReadonlyMap<string, { readonly account: Account; readonly health: AccountHealth }>,
+): UiAccountProblem[] =>
+  Object.entries(app.requirements.accounts).flatMap(([slot, requirement]): UiAccountProblem[] => {
+    const provider = requirement.definition.name;
+    const selected = selection[slot];
+    if (selected === undefined) return [{ provider, reason: "missing" }];
+    if ((requirement.cardinality === "one") !== (typeof selected === "string"))
+      return [{ provider, reason: "incompatible" }];
+    return (typeof selected === "string" ? [selected] : selected).flatMap(
+      (id): UiAccountProblem[] => {
+        const entry = found.get(id);
+        if (entry === undefined) return [{ provider, reason: "removed" }];
+        if (entry.account.provider !== requirement.provider)
+          return [{ provider, reason: "incompatible" }];
+        const check = entry.health.apps.find((item) => item.app === app.id)?.check;
+        return check === undefined || check === null || !check.current || check.status === "healthy"
+          ? []
+          : [{ provider, account: entry.account.label, reason: check.status }];
+      },
+    );
+  });
 
 /** A check of credentials before they are saved; nothing is recorded. */
 export const CredentialCheck = Schema.Struct({

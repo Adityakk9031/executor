@@ -19,7 +19,8 @@ const appSchema = Schema.Struct({
 });
 const source = `import {defineApp,defineProvider,secrets,query,object,string, router, ProviderError} from "apps";
 const service=defineProvider({name:"Launch fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})},
-  async health({account}){if(account.fields.token==="rejected-launch-token")throw new ProviderError({reason:"unauthorized",status:401});}});
+  async health({account}){if(account.fields.token==="rejected-launch-token")throw new ProviderError({reason:"unauthorized",status:401});
+    if(account.fields.token==="down-launch-token")throw new ProviderError({reason:"unavailable",status:503});}});
 export const who=query({input:object({})},async ctx=>ctx.accounts.service.id);
 export default defineApp({accounts:{service}},{tools: router({ who })});`;
 const files = (code: string) => [
@@ -48,11 +49,12 @@ layer(TestLive, { excludeTestServices: true })("Local app launch", (it) => {
         const headers = { authorization: `Bearer ${Redacted.value(target.apiKey)}` };
         const send = (method: "POST" | "GET" | "DELETE", path: string, data?: unknown) =>
           session.send(method, path, data, headers);
+        const appName = `Launch ${randomUUID().slice(0, 8)}`;
         const { app } = yield* body(
           appSchema,
           yield* send("POST", "/v1/apps/deploy", {
             owner: "local",
-            name: `Launch ${randomUUID().slice(0, 8)}`,
+            name: appName,
             files: files(source),
           }),
         );
@@ -216,6 +218,50 @@ layer(TestLive, { excludeTestServices: true })("Local app launch", (it) => {
         );
         expect(review).toContain(`profile=${rejected.profile}`);
         yield* browser.checkpoint("Blocked profiles explain why they cannot open");
+        const blocked = (profile: string) =>
+          Effect.gen(function* () {
+            yield* browser.use("Open a blocked profile's app page", (page) =>
+              page.goto(new URL(`/inbox?profile=${profile}`, ui).href),
+            );
+            yield* browser.use("A full page replaces the app", (page) =>
+              page.getByRole("heading", { name: `${appName} can't open`, exact: true }).waitFor(),
+            );
+            return yield* browser.use("Read the blocked page", (page) =>
+              Promise.all([
+                page.locator("main").innerText(),
+                page.getByRole("link", { name: "Fix accounts", exact: true }).getAttribute("href"),
+                page.locator("#identity").count(),
+              ]),
+            );
+          });
+        const [removedPage, removedFix, removedApp] = yield* blocked(removed.profile);
+        expect(removedPage).toContain("Launch fixture account was removed or is no longer shared");
+        expect(removedFix).toContain(`profile=${removed.profile}`);
+        expect(removedApp).toBe(0);
+        const [rejectedPage] = yield* blocked(rejected.profile);
+        expect(rejectedPage).toContain("Rejected (Launch fixture): sign-in rejected at last check");
+        const advisory = yield* create("Advisory", "down-launch-token");
+        yield* send("POST", `/v1/accounts/${advisory.account}/health`, { apps: [app.id] });
+        yield* browser.use("Open the advisory profile's app page", (page) =>
+          page.goto(new URL(`/inbox?profile=${advisory.profile}`, ui).href),
+        );
+        yield* browser.use("Advisory app data still loads", (page) =>
+          page.locator("#identity").filter({ hasText: advisory.account }).waitFor(),
+        );
+        expect(
+          yield* browser.use("Read the advisory card", (page) =>
+            page.getByRole("status", { name: "Account warning" }).innerText(),
+          ),
+        ).toContain("Advisory (Launch fixture): service unavailable at last check");
+        yield* browser.use("Dismiss the advisory card", (page) =>
+          page.getByRole("button", { name: "Dismiss", exact: true }).click(),
+        );
+        expect(
+          yield* browser.use("Advisory card is gone", (page) =>
+            page.getByRole("status", { name: "Account warning" }).count(),
+          ),
+        ).toBe(0);
+        yield* browser.checkpoint("App pages explain account problems when they open");
         const plain = yield* body(
           Schema.Struct({ app: Resource }),
           yield* send("POST", "/v1/apps/deploy", {
