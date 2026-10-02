@@ -55,5 +55,6 @@
     "*.tsbuildinfo",
     "**/.generated/",
     "**/routeTree.gen.ts",
+    "**/browser-scripts.gen.ts",
   ],
 }
