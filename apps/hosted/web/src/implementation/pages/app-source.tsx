@@ -193,6 +193,11 @@ export function AppSource({
         get.refresh(toolsAtom({ organization, app: saved.id }));
       }}
       view={view}
+      live={
+        app.activeDeployment === null
+          ? undefined
+          : sourceAtom({ organization, app: app.id, deployment: app.activeDeployment })
+      }
     />
   );
 }

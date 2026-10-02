@@ -128,7 +128,7 @@ export default defineApp({accounts:{}}, {tools: router({
           page.goto(`/org/${actors.organization.slug}/apps/${original.id}?view=source`),
         );
         yield* browser.use("Deploy the large build from the dashboard", (page) =>
-          page.getByRole("button", { name: "Deploy", exact: true }).click(),
+          page.getByRole("button", { name: "Deploy latest", exact: true }).click(),
         );
         yield* browser.use("Show the compiler memory failure and recovery", (page) =>
           page
