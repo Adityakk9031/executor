@@ -200,6 +200,8 @@ export default Api.make(
     // here, so a failure is only logged.
     const installTeam = (job: string) =>
       provisionTeamNow(job).pipe(
+        // The installation saves default profiles; their setup starts at once, not on a later wake.
+        Effect.provide(schedules.layer),
         Effect.timeoutOption("15 seconds"),
         Effect.withSpan("job.provisioning.install"),
         Effect.catch(() => Effect.logWarning("Team installation left to its workflow", { job })),
