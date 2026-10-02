@@ -109,6 +109,14 @@ layer(HostedLive, { excludeTestServices: true })("Member controls", (it) => {
               { service: [account.id] },
             )).status,
           ).toBe(200);
+          // Selecting a shared account does not let a member replace its credentials.
+          expect(
+            (yield* api.request(actors.member, "POST", `${prefix}/apps/${app.id}/connections`, {
+              requirement: "service",
+              profile: memberProfile.id,
+              account: account.id,
+            })).status,
+          ).toBe(403);
           const viewer = yield* body(
             Schema.Struct({ userId: Schema.String }),
             yield* api.request(actors.member, "GET", "/api/viewer"),
@@ -364,19 +372,6 @@ layer(HostedLive, { excludeTestServices: true })("Member controls", (it) => {
                 .click()
                 .then(() => page.getByRole("dialog").waitFor({ state: "hidden" })),
             );
-            expect(
-              yield* browser.use("Update credentials is disabled", (page) =>
-                page
-                  .getByRole("button", { name: `Manage ${name}`, exact: true })
-                  .click()
-                  .then(() =>
-                    page
-                      .getByRole("menuitem", { name: "Update credentials", exact: true })
-                      .getAttribute("aria-disabled"),
-                  ),
-              ),
-            ).toBe("true");
-            yield* browser.use("Close the account menu", (page) => page.keyboard.press("Escape"));
             yield* openAccountAction("Edit details");
             expect(
               yield* browser.use("Save is disabled", (page) =>

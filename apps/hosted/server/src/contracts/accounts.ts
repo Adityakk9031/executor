@@ -184,6 +184,8 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
         requirement: Schema.NonEmptyString,
         profile: ProfileId,
         destination: Schema.optional(ConnectionDestination),
+        /** Replace this account's credentials instead of adding an account. */
+        account: Schema.optional(AccountId),
       }),
       success: BrowserAccountConnection,
       error: [...connectionErrors, AccountSelectionInvalid],
