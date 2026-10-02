@@ -2629,7 +2629,7 @@ export const scenarios = {
   apiKeysLoading: {
     fixtures: "actors",
     file: "settings-loading.spec.ts",
-    title: "API keys loading keeps its page identity while tokens load",
+    title: "Account tokens loading keeps its page identity while tokens load",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -3262,6 +3262,17 @@ export const scenarios = {
         "The controlled upstream is loopback-only; hosted request authorization is shared.",
       ),
       local: na("Local uses its instance credential."),
+    },
+  },
+  accountSettings: {
+    fixtures: "actors",
+    file: "account-settings.spec.ts",
+    title:
+      "Account settings rename the signed-in user, list and revoke their sessions, and change the self-host password",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local pairs a device instead of signing a user in."),
     },
   },
   namedApiKeys: {

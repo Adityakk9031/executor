@@ -165,6 +165,17 @@ export const signOutAtom = BrowserAtoms.fn(() =>
   ),
 );
 
+/** Personal account operations; every one of them acts on the signed-in user only. */
+export const accountOperations = (options: AuthCallOptions) => ({
+  rename: (name: string) => authClient.updateUser({ name }, options),
+  current: () => authClient.getSession({}, options),
+  sessions: () => authClient.listSessions({}, options),
+  revokeSession: (token: string) => authClient.revokeSession({ token }, options),
+  revokeOtherSessions: () => authClient.revokeOtherSessions({}, options),
+  changePassword: (input: { readonly currentPassword: string; readonly newPassword: string }) =>
+    authClient.changePassword({ ...input, revokeOtherSessions: false }, options),
+});
+
 /** Only explicit organization operations are available to dashboard contracts. */
 export const organizationOperations = (options: AuthCallOptions) => ({
   list: () => authClient.organization.list({}, options),
