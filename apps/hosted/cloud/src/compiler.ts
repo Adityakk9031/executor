@@ -5,6 +5,7 @@ import { CloudCompileResult } from "./contracts/builds.ts";
 import { withRemoteSpan } from "@executor-js/telemetry";
 import { Config, Effect, Option, Predicate, Schema } from "effect";
 import { compileCloudApp } from "./implementation/app-build.ts";
+import { makeBuildAdmission } from "./implementation/build-admission.ts";
 import {
   cloudObservability,
   cloudTelemetry,
@@ -69,6 +70,10 @@ export default AppCompiler.make(
             ),
           ),
     );
+    // Two builds still overlap one's npm downloads with the other's bundling, and a build
+    // stalled on the registry leaves the other slot free. A slot is reclaimed after the API's
+    // own compiler deadline, when no caller still waits for that build.
+    const admitted = makeBuildAdmission(2, "50 seconds");
     const host = {
       ...(registry === undefined ? {} : { registry }),
       ...(Option.isSome(version) ? { apps: { version: version.value, files } } : {}),
@@ -77,7 +82,7 @@ export default AppCompiler.make(
       compile: (files, headers) =>
         Schema.decodeUnknownEffect(SourceFiles)(files).pipe(
           Effect.mapError(() => new RuntimeBuildFailed({ stage: "source" })),
-          Effect.flatMap((files) => compileCloudApp(files, host)),
+          Effect.flatMap((files) => admitted(compileCloudApp(files, host))),
           Effect.map((value) => ({ ok: true as const, value })),
           Effect.catchTags({
             RuntimeBuildFailed: (error) => Effect.succeed({ ok: false as const, error }),

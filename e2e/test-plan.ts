@@ -1361,6 +1361,16 @@ export const scenarios = {
       local: na("This scenario exercises the Cloud compiler dependency resolver."),
     },
   },
+  cloudCompilerConcurrency: {
+    fixtures: "actors",
+    file: "cloud-compiler.spec.ts",
+    title: "Concurrent Cloud deploys that install npm packages all compile",
+    targets: {
+      cloud: { status: "scheduled", runtime: "attached" },
+      "self-host": na("This scenario requires Cloudflare's compiler Worker memory limit."),
+      local: na("This scenario requires Cloudflare's compiler Worker memory limit."),
+    },
+  },
   cloudCompilerDeadline: {
     fixtures: "actors",
     file: "cloud-compiler.spec.ts",
