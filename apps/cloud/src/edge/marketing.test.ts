@@ -255,7 +255,7 @@ describe("parseV2Edge", () => {
 });
 
 describe("v2EdgeResponse", () => {
-  const SIGN_UP_URL = "https://v2.executor.sh/login?mode=signup";
+  const SIGN_UP_URL = "https://app.executor.sh/login?mode=signup";
   const STATE_PREFIX = "x2.";
 
   /** The edge's settings with `service` as v2's Worker. */

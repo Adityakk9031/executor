@@ -100,7 +100,7 @@ describe("production v2 edge settings", () => {
 
 describe("the executor.sh front Worker's settings", () => {
   it("runs the front entry on a zone route for every executor.sh path", () => {
-    expect(edgeConfig.main).toMatch(/src\/edge\/front\.ts$/);
+    expect(edgeConfig.main).toMatch(/src[/\\]edge[/\\]front\.ts$/);
     expect(edgeConfig.routes).toEqual([{ pattern: "executor.sh/*", zone_name: "executor.sh" }]);
   });
 
