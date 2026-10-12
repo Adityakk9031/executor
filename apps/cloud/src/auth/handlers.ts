@@ -42,7 +42,8 @@ import {
   type AuthorizeOrganizationOptions,
 } from "./organization";
 import { mcpSessionStub } from "@executor-js/cloudflare/mcp/session-stub";
-import { liveV2ImportSource, v2ImportEligible, v2ImportUrl } from "./v2-import";
+import { liveV2ImportSource, v2ImportAnswer } from "./v2-import";
+import { liveV2MovedSource } from "./v2-moved";
 
 const COOKIE_OPTIONS = {
   path: "/",
@@ -443,14 +444,13 @@ export const CloudSessionAuthHandlers = HttpApiBuilder.group(
       .handle("v2Import", () =>
         Effect.gen(function* () {
           const session = yield* requireSelectedOrganization;
-          const url = v2ImportUrl(env);
-          if (url === null) return { url: null };
-          const eligible = yield* v2ImportEligible(
-            yield* liveV2ImportSource,
-            session.accountId,
-            session.organizationId,
-          );
-          return { url: eligible ? url.href : null };
+          return yield* v2ImportAnswer({
+            env,
+            importSource: liveV2ImportSource,
+            movedSource: liveV2MovedSource,
+            userId: session.accountId,
+            organizationId: session.organizationId,
+          });
         }),
       )
       .handle("createOrganization", ({ payload }) =>

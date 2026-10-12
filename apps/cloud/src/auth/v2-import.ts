@@ -15,21 +15,27 @@ import { Effect } from "effect";
 
 import { parseV2Edge, type V2EdgeEnv } from "../edge/marketing";
 import { AutumnService, type AutumnSubscription } from "../extensions/billing/service";
+import { v2Moved, type V2Moved, type V2MovedSource } from "./v2-moved";
 import { WorkOSClient } from "./workos";
 
 /** v2's import page, on v2's app host. */
 const V2_IMPORT_PATH = "/v1-import";
 
 /**
- * The absolute URL of v2's import page, or `null` where v1 does not hand
- * requests to v2 (local dev without the v2 settings, test workers, or broken
- * settings). v2's app host is the origin of its sign-up page, the same host
- * the edge sends v2 dashboard links to.
+ * v2's app host, or `null` where v1 does not hand requests to v2 (local dev
+ * without the v2 settings, test workers, or broken settings). It is the origin
+ * of v2's sign-up page, the same host the edge sends v2 dashboard links to.
  */
-export const v2ImportUrl = (env: V2EdgeEnv): URL | null => {
+export const v2AppOrigin = (env: V2EdgeEnv): URL | null => {
   const edge = parseV2Edge(env);
   if (edge === null || typeof edge === "string") return null;
-  return new URL(V2_IMPORT_PATH, edge.signUpUrl.origin);
+  return new URL(edge.signUpUrl.origin);
+};
+
+/** The absolute URL of v2's import page, or `null` where v1 has no v2 host. */
+export const v2ImportUrl = (env: V2EdgeEnv): URL | null => {
+  const origin = v2AppOrigin(env);
+  return origin === null ? null : new URL(V2_IMPORT_PATH, origin);
 };
 
 /** v1's plans that cost nothing, as v2's import counts them (v2's
@@ -103,3 +109,36 @@ export const liveV2ImportSource = Effect.gen(function* () {
         .pipe(Effect.map((customer) => customer?.subscriptions ?? [])),
   } satisfies V2ImportSource;
 });
+
+/** What the dashboard shows for the selected org: the import link, or where
+ *  the org now lives in v2. At most one is set. */
+export interface V2ImportAnswer {
+  readonly url: string | null;
+  readonly moved: V2Moved | null;
+}
+
+/**
+ * The `GET /api/auth/v2-import` answer. Without a v2 host there is nothing to
+ * link to. An org that has already moved is not offered the import again, so
+ * its eligibility is never read. Never fails.
+ */
+export const v2ImportAnswer = <RImport, RMoved>(input: {
+  readonly env: V2EdgeEnv;
+  readonly importSource: Effect.Effect<V2ImportSource, never, RImport>;
+  readonly movedSource: Effect.Effect<V2MovedSource, never, RMoved>;
+  readonly userId: string;
+  readonly organizationId: string;
+}): Effect.Effect<V2ImportAnswer, never, RImport | RMoved> =>
+  Effect.gen(function* () {
+    const v2Origin = v2AppOrigin(input.env);
+    const importUrl = v2ImportUrl(input.env);
+    if (v2Origin === null || importUrl === null) return { url: null, moved: null };
+    const moved = yield* v2Moved(yield* input.movedSource, input.organizationId, v2Origin);
+    if (moved !== null) return { url: null, moved };
+    const eligible = yield* v2ImportEligible(
+      yield* input.importSource,
+      input.userId,
+      input.organizationId,
+    );
+    return { url: eligible ? importUrl.href : null, moved: null };
+  });

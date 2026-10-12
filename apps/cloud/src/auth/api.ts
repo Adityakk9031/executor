@@ -37,8 +37,19 @@ const AuthOrganizationsResponse = Schema.Struct({
 // Executor v2's workspace import for the selected org: its page URL when v2
 // would let the signed-in user import the org, otherwise null. Nothing else
 // about the membership or billing reads behind it is returned.
+//
+// `moved` is set instead when the org has already been imported (v2 records
+// the move on the WorkOS organization): where it lives in v2 and when it
+// moved. It drives a notice only; the org keeps working in v1.
+const V2MovedResponse = Schema.Struct({
+  v2Url: Schema.String,
+  v2Slug: Schema.String,
+  movedAt: Schema.String,
+});
+
 const V2ImportResponse = Schema.Struct({
   url: Schema.NullOr(Schema.String),
+  moved: Schema.NullOr(V2MovedResponse),
 });
 
 const CreateOrganizationBody = Schema.Struct({
