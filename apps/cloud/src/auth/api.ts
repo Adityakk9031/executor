@@ -34,6 +34,13 @@ const AuthOrganizationsResponse = Schema.Struct({
   activeOrganizationId: Schema.NullOr(Schema.String),
 });
 
+// Executor v2's workspace import for the selected org: its page URL when v2
+// would let the signed-in user import the org, otherwise null. Nothing else
+// about the membership or billing reads behind it is returned.
+const V2ImportResponse = Schema.Struct({
+  url: Schema.NullOr(Schema.String),
+});
+
 const CreateOrganizationBody = Schema.Struct({
   name: Schema.String,
 });
@@ -229,6 +236,12 @@ export class CloudAuthApi extends HttpApiGroup.make("cloudAuth")
     HttpApiEndpoint.get("organizations", "/auth/organizations", {
       success: AuthOrganizationsResponse,
       error: [WorkOSError, UserStoreError, MemberDirectoryError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("v2Import", "/auth/v2-import", {
+      success: V2ImportResponse,
+      error: NoOrganization,
     }),
   )
   .add(

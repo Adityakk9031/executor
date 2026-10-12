@@ -189,6 +189,7 @@ export interface AnalyticsEvents {
   org_invitation_accepted: { success: boolean };
   setup_mcp_completed: {};
   setup_mcp_skipped: {};
+  v2_import_opened: {};
 
   // ── Cloud: billing & support ─────────────────────────────────────────────
   billing_plan_selected: {
