@@ -16,6 +16,7 @@ import { Browser, Target } from "../src/services";
 import { revisit, settle, visit } from "../src/surfaces/browser";
 import type { Identity, Target as TargetShape } from "../src/target";
 import { WORKOS_EMULATOR_PORT } from "../targets/cloud";
+import { verifyAdmin } from "./support/admin-mfa";
 import { cookieOf } from "./support/session";
 
 const V2_IMPORT_API = "/api/auth/v2-import";
@@ -84,6 +85,22 @@ const markMoved = (organizationId: string) =>
     executor_v2_moved_at: MOVED_AT,
   });
 
+/** Rename the identity's active org through the product's own settings route. */
+const renameOrg = (target: TargetShape, identity: Identity, name: string): Effect.Effect<void> =>
+  Effect.promise(async () => {
+    const response = await fetch(new URL("/api/account/name", target.baseUrl), {
+      method: "PATCH",
+      headers: {
+        ...identity.headers,
+        origin: new URL(target.baseUrl).origin,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ name }),
+    });
+    if (!response.ok) throw new Error(`/api/account/name failed (${response.status})`);
+    await response.body?.cancel();
+  });
+
 const noticeOf = (page: Page) => page.getByRole("dialog");
 
 /** Open the dashboard and wait for the v2 answer it renders the notice from. */
@@ -132,7 +149,7 @@ scenario(
         expect(pair).toContain(`v2 · ${V2_SLUG}`);
         expect(await notice.getByText("Changes made here won't sync to v2.").count()).toBe(1);
 
-        const open = notice.getByRole("link", { name: `Open ${org.name} in v2` });
+        const open = notice.getByRole("link", { name: "Open in v2", exact: true });
         expect(await open.getAttribute("href"), "the button opens the org in v2").toBe(
           answer.moved!.v2Url,
         );
@@ -253,6 +270,51 @@ scenario(
       await step("See the import link and no notice", async () => {
         await page.getByRole("link", { name: "Move to Executor v2" }).waitFor();
         expect(await noticeOf(page).count()).toBe(0);
+      });
+    });
+  }),
+);
+
+scenario(
+  "v2 moved · a long organization name stays inside the notice",
+  { timeout: 180_000 },
+  Effect.gen(function* () {
+    const target = yield* Target;
+    const browser = yield* Browser;
+    const identity = yield* target.newIdentity();
+    const longName = "Synthetic Extraordinarily Long Organization Name For Layout Checks";
+    // Renaming is an organization setting, which needs a verified admin session; the browser
+    // below uses the plain session.
+    yield* renameOrg(target, yield* verifyAdmin(target.baseUrl, identity), longName);
+    const org = yield* orgOf(target, identity);
+    expect(org.name, "the rename reached the dashboard's org").toBe(longName);
+    yield* markMoved(org.id);
+
+    yield* browser.session(identity, async ({ page, step }) => {
+      await step("Open the moved org's dashboard", async () => {
+        await openDashboard(page, org.slug);
+        await noticeOf(page)
+          .getByRole("heading", { name: `${longName} now lives in Executor v2` })
+          .waitFor();
+      });
+
+      await step("See the pair and both buttons inside the notice", async () => {
+        const notice = noticeOf(page);
+        const box = await notice.boundingBox();
+        if (box === null) throw new Error("the notice has no layout box");
+        const right = box.x + box.width;
+        for (const [label, part] of [
+          ["the v1 → v2 pair", notice.getByTestId("v2-moved-pair")],
+          ["Keep using v1", notice.getByRole("button", { name: "Keep using v1" })],
+          ["Open in v2", notice.getByRole("link", { name: "Open in v2", exact: true })],
+        ] as const) {
+          const partBox = await part.boundingBox();
+          if (partBox === null) throw new Error(`${label} has no layout box`);
+          expect(partBox.x, `${label} starts inside the notice`).toBeGreaterThanOrEqual(box.x);
+          expect(partBox.x + partBox.width, `${label} ends inside the notice`).toBeLessThanOrEqual(
+            right,
+          );
+        }
       });
     });
   }),
