@@ -1,0 +1,30 @@
+diff --git a/dist/dist-AJUH5YLR.js b/dist/dist-AJUH5YLR.js
+index 0590e15752d2536b7d8e63f378c92ac7910a91be..de28354560fa4ef00122ef4407b667d9f84a16c6 100644
+--- a/dist/dist-AJUH5YLR.js
++++ b/dist/dist-AJUH5YLR.js
+@@ -234,6 +234,17 @@ function autumnApiRoutes(ctx) {
+     const customer = ensureCustomer(as(), id, data);
+     return c.json(serializeCustomer(as(), customer, { expand: parseExpand(body.expand) }));
+   });
++  app.post("/v1/customers.get", async (c) => {
++    const body = await c.req.json().catch(() => ({}));
++    const id = String(body.customer_id ?? body.customerId ?? "");
++    if (!id) return c.json({ message: "customer_id is required", code: "invalid_request" }, 400);
++    const store2 = as();
++    const customer = store2.customers.findOneBy("customer_id", id);
++    if (!customer) {
++      return c.json({ message: `Customer ${id} not found`, code: "customer_not_found" }, 404);
++    }
++    return c.json(serializeCustomer(store2, customer, { expand: parseExpand(body.expand) }));
++  });
+   app.post("/v1/customers.list", async (c) => {
+     const store2 = as();
+     const customers = store2.customers.all().map((customer) => serializeCustomer(store2, customer));
+@@ -1318,6 +1329,7 @@ var manifest = {
+           path: "/v1/customers.get_or_create",
+           status: "hand-authored"
+         },
++        { operationId: "customers.get", method: "POST", path: "/v1/customers.get", status: "hand-authored" },
+         { operationId: "customers.list", method: "POST", path: "/v1/customers.list", status: "hand-authored" },
+         { operationId: "customers.update", method: "POST", path: "/v1/customers.update", status: "hand-authored" },
+         { operationId: "balances.track", method: "POST", path: "/v1/balances.track", status: "hand-authored" },
