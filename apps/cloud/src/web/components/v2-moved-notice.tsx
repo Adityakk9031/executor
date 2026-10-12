@@ -98,7 +98,9 @@ export function V2MovedNotice() {
         close(V2_MOVED_DISMISS_SNOOZE_MS);
       }}
     >
-      <DialogContent className="sm:max-w-[460px]">
+      {/* One shrinkable column: a grid item's default min-width is its content, which let a long
+          organization name push the pair and the buttons past the dialog's edge. */}
+      <DialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-[460px]">
         {step === "notice" ? (
           <>
             <DialogHeader className="gap-3">
@@ -150,7 +152,7 @@ export function V2MovedNotice() {
                     close(V2_MOVED_DISMISS_SNOOZE_MS);
                   }}
                 >
-                  <span className="max-w-[16rem] truncate">Open {organization.name} in v2</span>
+                  Open in v2
                   <ArrowIcon />
                 </a>
               </Button>
