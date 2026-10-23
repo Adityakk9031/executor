@@ -16,11 +16,12 @@
 //     `updated_at`, nothing else)
 // ---------------------------------------------------------------------------
 
+import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "@effect/vitest";
 import { eq } from "drizzle-orm";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import { HttpServerResponse } from "effect/unstable/http";
 
 import {
@@ -453,6 +454,90 @@ describe("moved dashboard location", () => {
       });
     await locate({ slug: moving.slug }, counting);
     expect(checked).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The session handoff the redirect carries when V2_SESSION_HANDOFF_SECRET is set.
+// ---------------------------------------------------------------------------
+
+const decodeClaims = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
+
+describe("moved dashboard session handoff", () => {
+  const v2Origin = new URL("https://app.example.test");
+  const secret = "synthetic-handoff-secret-0123456789abcdef";
+  const handoff = { secret, user: "user_synthetic_member" };
+  const member = () => Effect.succeed(true);
+  const stranger = () => Effect.succeed(false);
+  const locate = (
+    target: { readonly slug: string } | { readonly organizationId: string },
+    options: {
+      readonly isMember?: (organizationId: string) => Effect.Effect<boolean>;
+      readonly handoff?: typeof handoff;
+    } = { handoff },
+  ) =>
+    run(
+      movedDashboardLocation({
+        target,
+        v2Origin,
+        isMember: options.isMember ?? member,
+        handoff: options.handoff,
+      }),
+    );
+
+  /** The claims of a handoff URL's token, once its signature checks out with `secret`. */
+  const verifiedClaims = (location: string | null) => {
+    expect(location).not.toBeNull();
+    const url = new URL(location ?? "");
+    expect(`${url.origin}${url.pathname}`).toBe("https://app.example.test/api/v1-handoff");
+    expect([...url.searchParams.keys()]).toEqual(["token"]);
+    const [prefix, payload, signature, ...rest] = (url.searchParams.get("token") ?? "").split(".");
+    expect(prefix).toBe("v1hnd");
+    expect(rest).toEqual([]);
+    const expected = createHmac("sha256", secret).update(`v1hnd.${payload}`).digest("base64url");
+    expect(signature).toBe(expected);
+    return decodeClaims(Buffer.from(payload ?? "", "base64url").toString("utf8"));
+  };
+
+  it("sends a member of a moved organization to v2's handoff with a signed, minute-long token", async () => {
+    const moved = await seedOrg("moved", { id: "v2-org", slug: "acme-team" });
+    const before = Math.floor(Date.now() / 1000);
+    const bySlug = verifiedClaims(await locate({ slug: moved.slug }));
+    const bySession = verifiedClaims(await locate({ organizationId: moved.id }));
+    expect(bySlug).toMatchObject({
+      v: 1,
+      aud: "v2-session-handoff",
+      user: "user_synthetic_member",
+      organization: moved.id,
+      slug: "acme-team",
+    });
+    expect(Object.keys(bySlug).sort()).toEqual(
+      ["aud", "exp", "iat", "jti", "organization", "slug", "user", "v"].sort(),
+    );
+    expect(bySlug.iat).toBeGreaterThanOrEqual(before);
+    expect(bySlug.iat).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
+    expect(Number(bySlug.exp) - Number(bySlug.iat)).toBe(60);
+    expect(typeof bySlug.jti === "string" && bySlug.jti.length >= 16).toBe(true);
+    // Every redirect carries its own token.
+    expect(bySession).toMatchObject({ organization: moved.id, slug: "acme-team" });
+    expect(bySession.jti).not.toBe(bySlug.jti);
+  });
+
+  it("gives no token to anyone who is not a member, or for an organization that has not moved", async () => {
+    const moved = await seedOrg("moved", { id: "v2-org", slug: "acme-team" });
+    const moving = await seedOrg("moving");
+    expect(await locate({ slug: moved.slug }, { isMember: stranger, handoff })).toBeNull();
+    expect(await locate({ organizationId: moved.id }, { isMember: stranger, handoff })).toBeNull();
+    expect(await locate({ slug: moving.slug })).toBeNull();
+  });
+
+  it("keeps the plain redirect without the secret, or without a v2 slug to open", async () => {
+    const moved = await seedOrg("moved", { id: "v2-org", slug: "acme-team" });
+    const slugless = await seedOrg("moved", { id: "v2-org", slug: null });
+    expect(await locate({ slug: moved.slug }, {})).toBe("https://app.example.test/org/acme-team");
+    expect(await locate({ slug: slugless.slug })).toBe("https://app.example.test/");
   });
 });
 
