@@ -89,10 +89,20 @@ describe("forward token", () => {
 });
 
 describe("toolkit connection id", () => {
+  // `v1-` + the first 40 hex chars of SHA-256 over
+  // JSON.stringify([v2OrganizationId, toolkitRowId, accountId]).
   it("matches the wire-contract test vector", async () => {
-    expect(await toolkitConnectionId(V2_ORG, "tk_row_example")).toBe(
-      "v1-e81c8640683211fc13e4c20d5bbb35d9bbc22935",
+    expect(await toolkitConnectionId(V2_ORG, "tk_row_example", "user_EXAMPLE")).toBe(
+      "v1-59b67fa9ffe6d72010b3b9fa56f5bdb38199f2e1",
     );
+  });
+
+  it("names one connection per member of the toolkit", async () => {
+    const mine = await toolkitConnectionId(V2_ORG, "tk_row_example", "user_EXAMPLE");
+    const theirs = await toolkitConnectionId(V2_ORG, "tk_row_example", "user_OTHER");
+    expect(theirs).toBe("v1-7bb309a1759624b5a62f0d3a3601e3bbc48af0e9");
+    expect(theirs).not.toBe(mine);
+    expect(await toolkitConnectionId(V2_ORG, "tk_row_example", "user_EXAMPLE")).toBe(mine);
   });
 });
 
@@ -266,7 +276,8 @@ describe("forwardToV2", () => {
       env,
       makeDeps({ deploy: "tk_row_example" }),
     );
-    const connection = "v1-e81c8640683211fc13e4c20d5bbb35d9bbc22935";
+    // The caller's own connection to the toolkit: `principal.accountId` is user_EXAMPLE.
+    const connection = "v1-59b67fa9ffe6d72010b3b9fa56f5bdb38199f2e1";
     expect(seen[0]?.url).toBe(`${ORIGIN}/mcp?connection=${connection}`);
     const token = seen[0]?.headers.get("authorization")?.replace("Bearer ", "") ?? "";
     expect(decodePayload(token)).toMatchObject({ toolkit: "tk_row_example", connection });

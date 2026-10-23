@@ -21,6 +21,10 @@ export const V2_MOVED_AT_KEY = "executor_v2_moved_at";
 const V2_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const V2_SLUG_MAX_LENGTH = 45;
 
+/** Whether `slug` is a well-formed v2 organization slug. */
+export const isV2OrgSlug = (slug: unknown): slug is string =>
+  typeof slug === "string" && slug.length <= V2_SLUG_MAX_LENGTH && V2_SLUG.test(slug);
+
 /** An ISO 8601 date and time with an explicit offset, as `Date#toISOString`
  *  writes it. A bare date or a local time is ambiguous, so it is refused. */
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -41,9 +45,7 @@ export const parseV2Moved = (
 ): V2Moved | null => {
   const slug = metadata[V2_MOVED_SLUG_KEY];
   const movedAt = metadata[V2_MOVED_AT_KEY];
-  if (typeof slug !== "string" || slug.length > V2_SLUG_MAX_LENGTH || !V2_SLUG.test(slug)) {
-    return null;
-  }
+  if (!isV2OrgSlug(slug)) return null;
   if (typeof movedAt !== "string" || !ISO_TIMESTAMP.test(movedAt)) return null;
   const time = Date.parse(movedAt);
   if (!Number.isFinite(time)) return null;

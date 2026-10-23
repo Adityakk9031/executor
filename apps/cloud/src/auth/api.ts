@@ -184,6 +184,22 @@ export class OrganizationDeletionForbidden extends Schema.TaggedErrorClass<Organ
   { httpApiStatus: 403 },
 ) {}
 
+// The organization is moving to (or has moved to) Executor v2, so v1 refuses
+// to change it (see `../org/move-to-v2`). `message` is shown to the user.
+export class OrganizationFrozen extends Schema.TaggedErrorClass<OrganizationFrozen>()(
+  "OrganizationFrozen",
+  { code: Schema.String, message: Schema.String },
+  { httpApiStatus: 423 },
+) {}
+
+// Whether the organization is moving to v2 could not be read, so a change to
+// it is refused rather than risked. Retryable.
+export class OrganizationStateUnavailable extends Schema.TaggedErrorClass<OrganizationStateUnavailable>()(
+  "OrganizationStateUnavailable",
+  { code: Schema.String, message: Schema.String },
+  { httpApiStatus: 503 },
+) {}
+
 // An org deletion that started but did not finish: the org is marked deleted
 // (every session is refused) and a later step — `step` — failed before the
 // local purge ran. The admin's own membership row is still there, so the
@@ -271,6 +287,8 @@ export class CloudAuthApi extends HttpApiGroup.make("cloudAuth")
         NoOrganization,
         OrganizationDeletionForbidden,
         OrganizationDeletionIncomplete,
+        OrganizationFrozen,
+        OrganizationStateUnavailable,
       ],
     }),
   )

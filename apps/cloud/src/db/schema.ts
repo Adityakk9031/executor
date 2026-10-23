@@ -124,13 +124,20 @@ export const organizations = pgTable(
 );
 
 /**
- * Whether an organization's MCP traffic has moved to Executor v2. v2 writes
- * this table (a separate database role that may only INSERT/UPDATE it); v1
- * only reads it, on the MCP auth path.
+ * Where an organization stands in its move to Executor v2. v2 writes this
+ * table (the `v1_import_writer` role, which may only INSERT/UPDATE it and read
+ * the columns its upsert names); v1 only reads it.
  *
- * `moving` changes nothing for MCP requests. `moved` with a `v2_org_id` means
- * the organization's MCP URLs are forwarded to v2. No row means not moved.
- * `v2_org_id` stays null until the v2 organization exists.
+ *   moving       v2 is copying the organization. v1 freezes it: writes,
+ *                OAuth callbacks and OAuth refresh are refused; MCP reads and
+ *                tool calls that need neither keep working.
+ *   moved        the organization lives in v2. With a `v2_org_id`, its MCP
+ *                URLs are forwarded to v2; the dashboard redirects to
+ *                `/org/<v2_org_slug>` on v2; writes are refused.
+ *   rolled_back  v2 gave the organization back. v1 serves it as if there were
+ *                no row.
+ *
+ * `v2_org_id` and `v2_org_slug` stay null until the v2 organization exists.
  */
 export const orgMovedToV2 = pgTable(
   "org_moved_to_v2",
@@ -140,10 +147,14 @@ export const orgMovedToV2 = pgTable(
       .references(() => organizations.id, { onDelete: "cascade" }),
     state: text("state").notNull(),
     v2OrgId: text("v2_org_id"),
+    v2OrgSlug: text("v2_org_slug"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    stateCheck: check("org_moved_to_v2_state_check", sql`${t.state} in ('moving', 'moved')`),
+    stateCheck: check(
+      "org_moved_to_v2_state_check",
+      sql`${t.state} in ('moving', 'moved', 'rolled_back')`,
+    ),
   }),
 );
 

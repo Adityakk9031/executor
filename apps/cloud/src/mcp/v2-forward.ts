@@ -87,14 +87,20 @@ export const mintForwardToken = async (
   return `${TOKEN_PREFIX}.${payload}.${base64Url(new Uint8Array(signature))}`;
 };
 
-/** The v2 connection that stands for a v1 toolkit in a v2 organization. */
+/**
+ * The v2 connection that stands for a v1 toolkit, for one member, in a v2
+ * organization. v2 imports a toolkit as one scoped connection per member, so
+ * the id names the member too: `accountId` is the caller's WorkOS user id, the
+ * same value v1 stores as `subject` on that member's own rows.
+ */
 export const toolkitConnectionId = async (
   v2OrganizationId: string,
   toolkitRowId: string,
+  accountId: string,
 ): Promise<string> => {
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    encoder.encode(JSON.stringify([v2OrganizationId, toolkitRowId])),
+    encoder.encode(JSON.stringify([v2OrganizationId, toolkitRowId, accountId])),
   );
   return `v1-${hex(digest).slice(0, 40)}`;
 };
@@ -232,7 +238,10 @@ export const forwardToV2 = async (
         slug,
       );
       if (rowId === null) return jsonRpcErrorBody(404, -32001, TOOLKIT_NOT_FOUND_MESSAGE);
-      toolkit = { id: rowId, connection: await toolkitConnectionId(moved.v2OrganizationId, rowId) };
+      toolkit = {
+        id: rowId,
+        connection: await toolkitConnectionId(moved.v2OrganizationId, rowId, principal.accountId),
+      };
     }
 
     const nowSeconds = deps.nowSeconds?.() ?? Math.floor(Date.now() / 1000);

@@ -12,6 +12,8 @@ import {
   McpSessionForbiddenError,
   OrganizationDeletionForbidden,
   OrganizationDeletionIncomplete,
+  OrganizationFrozen,
+  OrganizationStateUnavailable,
 } from "./api";
 import { MemberDirectory, NoOrganization } from "@executor-js/api/server";
 // Pure constants/codec module (no React) — safe in the backend graph.
@@ -44,6 +46,7 @@ import {
 import { mcpSessionStub } from "@executor-js/cloudflare/mcp/session-stub";
 import { liveV2ImportSource, v2ImportAnswer } from "./v2-import";
 import { liveV2MovedSource } from "./v2-moved";
+import { assertOrgWritable, orgFreezeRefusal } from "../org/move-to-v2";
 
 const COOKIE_OPTIONS = {
   path: "/",
@@ -599,6 +602,28 @@ export const CloudSessionAuthHandlers = HttpApiBuilder.group(
           if (!org || payload.confirmName.trim() !== org.name.trim()) {
             return yield* new OrganizationDeletionForbidden();
           }
+
+          // An organization moving to v2 (or moved) is not deleted from
+          // under the move: v2 is copying it, or already serves it.
+          yield* assertOrgWritable(organizationId).pipe(
+            Effect.catchTags({
+              OrgFrozenError: (error) => {
+                const refusal = orgFreezeRefusal(error);
+                return Effect.fail(
+                  new OrganizationFrozen({ code: refusal.code, message: refusal.message }),
+                );
+              },
+              OrgMoveStateReadError: (error) => {
+                const refusal = orgFreezeRefusal(error);
+                return Effect.fail(
+                  new OrganizationStateUnavailable({
+                    code: refusal.code,
+                    message: refusal.message,
+                  }),
+                );
+              },
+            }),
+          );
 
           // Four steps, each idempotent, so a request that failed part-way
           // can be sent again and finish the job. The local purge is the LAST

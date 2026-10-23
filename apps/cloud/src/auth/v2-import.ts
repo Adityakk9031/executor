@@ -13,24 +13,13 @@
 
 import { Effect } from "effect";
 
-import { parseV2Edge, type V2EdgeEnv } from "../edge/marketing";
+import { v2AppOrigin, type V2EdgeEnv } from "../edge/marketing";
 import { AutumnService, type AutumnSubscription } from "../extensions/billing/service";
 import { v2Moved, type V2Moved, type V2MovedSource } from "./v2-moved";
 import { WorkOSClient } from "./workos";
 
 /** v2's import page, on v2's app host. */
 const V2_IMPORT_PATH = "/v1-import";
-
-/**
- * v2's app host, or `null` where v1 does not hand requests to v2 (local dev
- * without the v2 settings, test workers, or broken settings). It is the origin
- * of v2's sign-up page, the same host the edge sends v2 dashboard links to.
- */
-export const v2AppOrigin = (env: V2EdgeEnv): URL | null => {
-  const edge = parseV2Edge(env);
-  if (edge === null || typeof edge === "string") return null;
-  return new URL(edge.signUpUrl.origin);
-};
 
 /** The absolute URL of v2's import page, or `null` where v1 has no v2 host. */
 export const v2ImportUrl = (env: V2EdgeEnv): URL | null => {

@@ -4,7 +4,8 @@
 //
 // What this pins:
 //   - only a `moved` row that names its v2 organization forwards; no row,
-//     `moving`, or `moved` without a v2 organization all read as not moved
+//     `moving`, `rolled_back`, or `moved` without a v2 organization all read
+//     as not moved
 //   - the table rejects any other state
 //   - a toolkit slug resolves to the row the v1 session would pick: the
 //     org's toolkit wins over the caller's own, another user's personal
@@ -59,16 +60,19 @@ describe("moved-to-v2 flag", () => {
         const moving = yield* freshOrg();
         const movingNoOrg = yield* freshOrg();
         const movedNoOrg = yield* freshOrg();
+        const rolledBack = yield* freshOrg();
         const moved = yield* freshOrg();
         yield* setState(moving, "moving", "v2-org-moving");
         yield* setState(movingNoOrg, "moving", null);
         yield* setState(movedNoOrg, "moved", null);
+        yield* setState(rolledBack, "rolled_back", "v2-org-rolled-back");
         yield* setState(moved, "moved", "v2-org-moved");
         return {
           none: yield* movedToV2(none),
           moving: yield* movedToV2(moving),
           movingNoOrg: yield* movedToV2(movingNoOrg),
           movedNoOrg: yield* movedToV2(movedNoOrg),
+          rolledBack: yield* movedToV2(rolledBack),
           moved: yield* movedToV2(moved),
         };
       }),
@@ -78,11 +82,12 @@ describe("moved-to-v2 flag", () => {
       moving: null,
       movingNoOrg: null,
       movedNoOrg: null,
+      rolledBack: null,
       moved: { v2OrganizationId: "v2-org-moved" },
     });
   });
 
-  it("refuses a state other than moving or moved", async () => {
+  it("refuses a state other than moving, moved or rolled_back", async () => {
     await expect(
       run(
         Effect.gen(function* () {
