@@ -26,6 +26,7 @@ import { OrgWriteDeniedError } from "@executor-js/sdk";
 import { isV2OrgSlug } from "../auth/v2-moved";
 import { DbService, makeDbLayer } from "../db/db";
 import { organizations, orgMovedToV2 } from "../db/schema";
+import { mintSessionHandoffToken, sessionHandoffUrl } from "./v2-session-handoff";
 
 /** Shown wherever a write is refused while the organization is moving. */
 export const ORG_MOVING_MESSAGE =
@@ -160,14 +161,20 @@ export const movedDashboardUrl = (
  * has `moved`, and only for a member of it, so the redirect says nothing about
  * an organization the caller cannot open. The move row is read first: the
  * membership read only runs for a moved organization.
+ *
+ * With `handoff` (the signed-in WorkOS user and the shared secret), the member
+ * goes to v2's session handoff with a token vouching for that user, so v2 opens
+ * the organization without a second sign-in (`v2-session-handoff.ts`). Without
+ * it, or without a v2 slug to open, the redirect is the plain one.
  */
 export const movedDashboardLocation = <E, R>(input: {
   readonly target: { readonly slug: string } | { readonly organizationId: string };
   readonly v2Origin: URL;
   readonly isMember: (organizationId: string) => Effect.Effect<boolean, E, R>;
+  readonly handoff?: { readonly secret: string; readonly user: string } | undefined;
 }): Effect.Effect<string | null, OrgMoveStateReadError | E, DbService | R> =>
   Effect.gen(function* () {
-    const { target } = input;
+    const { target, handoff } = input;
     const found =
       "slug" in target
         ? yield* readOrgMoveStateBySlug(target.slug)
@@ -178,7 +185,17 @@ export const movedDashboardLocation = <E, R>(input: {
           );
     if (found === null || found.moveState.state !== "moved") return null;
     if (!(yield* input.isMember(found.organizationId))) return null;
-    return movedDashboardUrl(found.moveState, input.v2Origin);
+    const slug = found.moveState.v2OrganizationSlug;
+    if (handoff === undefined || !isV2OrgSlug(slug))
+      return movedDashboardUrl(found.moveState, input.v2Origin);
+    const token = yield* Effect.promise(() =>
+      mintSessionHandoffToken(handoff.secret, {
+        user: handoff.user,
+        organization: found.organizationId,
+        slug,
+      }),
+    );
+    return sessionHandoffUrl(input.v2Origin, token);
   });
 
 /** Succeeds only when the organization accepts writes in v1. */

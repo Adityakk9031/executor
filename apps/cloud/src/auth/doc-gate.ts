@@ -201,7 +201,9 @@ const authorizeLastOrgSlug = async (
  * Where to send this page load when the organization it opens has moved to
  * v2, or `null` to serve the v1 dashboard (see `movedDashboardLocation`). The
  * organization is the one the URL names (`/<slug>/…`), or for a bare path the
- * session's own, the one the client canonicalizes onto. A failed read serves
+ * session's own, the one the client canonicalizes onto. With
+ * `V2_SESSION_HANDOFF_SECRET` set, the location is v2's session handoff, which
+ * signs the member in to v2 as the user its import mapped. A failed read serves
  * the dashboard: this is navigation only, and every write the dashboard could
  * make is refused server-side while the organization is moving or moved.
  */
@@ -221,6 +223,10 @@ const movedToV2Location = async (
     movedDashboardLocation({
       target,
       v2Origin,
+      // Only once the session has verified: the token vouches for its user.
+      handoff: env.V2_SESSION_HANDOFF_SECRET
+        ? { secret: env.V2_SESSION_HANDOFF_SECRET, user: session.userId }
+        : undefined,
       isMember: (organizationId) =>
         authorizeOrganization(session.userId, organizationId).pipe(
           Effect.map((org) => org !== null),
