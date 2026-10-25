@@ -20,7 +20,7 @@
 // ---------------------------------------------------------------------------
 
 import { jsonRpcErrorBody, UNAVAILABLE_RETRY_AFTER_SECONDS } from "@executor-js/host-mcp";
-import { readElicitationMode, readToolMode } from "@executor-js/cloudflare/mcp/do-headers";
+import { readElicitationMode } from "@executor-js/cloudflare/mcp/do-headers";
 import { EXECUTOR_ORG_SELECTOR_HEADER } from "@executor-js/sdk/shared";
 
 import type { MovedToV2 } from "./moved-to-v2";
@@ -105,7 +105,11 @@ export const toolkitConnectionId = async (
   return `v1-${hex(digest).slice(0, 40)}`;
 };
 
-/** v2's MCP endpoint for a request: only the elicitation mode and toolkit connection carry over. */
+/**
+ * v2's MCP endpoint for a request: only the elicitation mode and toolkit
+ * connection carry over. v1's tool mode (`mode=passthrough`) does not: v2
+ * serves its own tools for every request.
+ */
 export const buildV2Url = (origin: string, request: Request, connection?: string): URL => {
   const url = new URL("/mcp", origin);
   const mode = readElicitationMode(request);
@@ -169,9 +173,6 @@ export const relayV2Response = (
   });
 };
 
-export const PASSTHROUGH_MOVED_MESSAGE =
-  "This workspace has moved to Executor v2, which has no passthrough mode. Remove mode=passthrough from the MCP URL.";
-
 export const TOOLKIT_NOT_FOUND_MESSAGE = "Toolkit not found";
 
 /** The bindings forwarding needs; absent in workers that do not forward. */
@@ -216,10 +217,6 @@ export const forwardToV2 = async (
   deps: V2ForwardDeps,
 ): Promise<Response> => {
   const log = deps.log ?? defaultLog;
-
-  if (readToolMode(request) === "passthrough") {
-    return jsonRpcErrorBody(400, -32600, PASSTHROUGH_MOVED_MESSAGE);
-  }
 
   const { V2_MCP: binding, V2_MCP_ORIGIN: origin, V2_MCP_FORWARD_SECRET: secret } = env;
   if (!binding || !origin || !secret) {
