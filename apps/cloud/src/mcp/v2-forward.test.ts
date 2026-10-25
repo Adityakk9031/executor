@@ -3,7 +3,6 @@ import { Data, Effect, Schema } from "effect";
 
 import {
   FORWARD_TOKEN_TTL_SECONDS,
-  PASSTHROUGH_MOVED_MESSAGE,
   TOOLKIT_NOT_FOUND_MESSAGE,
   buildV2Url,
   forwardHeaders,
@@ -123,6 +122,7 @@ describe("v2 URL", () => {
 
   it("drops every other v1 parameter", () => {
     expect(url("?search_tools=true&artifacts=false&mode=codemode&x=1")).toBe(`${ORIGIN}/mcp`);
+    expect(url("?mode=passthrough")).toBe(`${ORIGIN}/mcp`);
   });
 
   it("adds the connection for a toolkit URL", () => {
@@ -299,7 +299,7 @@ describe("forwardToV2", () => {
     expect(seen).toHaveLength(0);
   });
 
-  it("refuses passthrough mode without calling v2", async () => {
+  it("forwards a passthrough-mode request to v2 without the mode", async () => {
     const { env, seen } = makeEnv(() => new Response("ok"));
     const response = await forwardToV2(
       new Request("https://executor.sh/mcp?mode=passthrough", { method: "POST", body: "{}" }),
@@ -308,11 +308,27 @@ describe("forwardToV2", () => {
       env,
       makeDeps(),
     );
-    expect(response.status).toBe(400);
-    expect(((await response.json()) as { error: { message: string } }).error.message).toBe(
-      PASSTHROUGH_MOVED_MESSAGE,
+    expect(response.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe(`${ORIGIN}/mcp`);
+  });
+
+  it("forwards a passthrough-mode toolkit request to its connection", async () => {
+    const { env, seen } = makeEnv(() => new Response("ok"));
+    const response = await forwardToV2(
+      new Request("https://executor.sh/mcp/toolkits/deploy?mode=passthrough", {
+        method: "POST",
+        body: "{}",
+      }),
+      principal,
+      moved,
+      env,
+      makeDeps({ deploy: "tk_row_example" }),
     );
-    expect(seen).toHaveLength(0);
+    expect(response.status).toBe(200);
+    expect(seen[0]?.url).toBe(
+      `${ORIGIN}/mcp?connection=v1-59b67fa9ffe6d72010b3b9fa56f5bdb38199f2e1`,
+    );
   });
 
   it("answers a retryable 503 when v2 answers 401", async () => {
