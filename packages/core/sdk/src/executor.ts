@@ -147,6 +147,7 @@ import {
 } from "./oauth-service";
 import {
   isFirstPartyOAuthClientSlug,
+  parseStoredOAuthTokenParams,
   parseStoredTokenEndpointAuthMethod,
   type OAuthService,
   type TokenEndpointAuthMethod,
@@ -2264,6 +2265,10 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       readonly resource: string | null;
       readonly tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
       readonly tokenRequestFormat?: "form" | "json";
+      /** Sent verbatim on every token request this client drives (the
+       *  client-credentials re-mint included) — the one place a registered
+       *  app's provider-shaped parameters must not be dropped. */
+      readonly tokenParams?: Readonly<Record<string, string>>;
     }
 
     /** What drove a refresh: the pre-call expiry check (`proactive`), or an
@@ -2656,6 +2661,16 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
               cause: undefined,
             });
           }
+          // EXPLICIT — these parameters ride on every token request this client
+          // makes, so a corrupt stored value must surface loudly rather than
+          // silently change what the re-mint sends.
+          const tokenParams = parseStoredOAuthTokenParams(stored.token_params);
+          if (tokenParams === null) {
+            return yield* new StorageError({
+              message: `oauth_client ${clientSlug} has invalid stored token parameters`,
+              cause: undefined,
+            });
+          }
           return {
             clientId: String(stored.client_id),
             clientSecret: yield* Effect.gen(function* () {
@@ -2677,6 +2692,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             grant: String(stored.grant),
             resource: stored.resource ? String(stored.resource) : null,
             ...(tokenEndpointAuthMethod === undefined ? {} : { tokenEndpointAuthMethod }),
+            ...(tokenParams === undefined ? {} : { tokenParams }),
           } satisfies RefreshClient;
         });
         if (!clientRow) {
@@ -2740,6 +2756,9 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
                 scopes: grantedScopes,
                 clientAuth: clientRow.tokenEndpointAuthMethod,
                 resource: clientRow.resource ?? undefined,
+                // The registered app's provider-shaped parameters (Auth0's
+                // `audience`, for example) ride on this re-mint too.
+                extraTokenParams: clientRow.tokenParams,
                 endpointUrlPolicy: config.oauthEndpointUrlPolicy,
                 fetch: config.fetch,
               }).pipe(
@@ -2807,6 +2826,9 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
                   // RFC 8707: keep the re-minted token bound to the same resource
                   // (MCP servers require this on refresh).
                   resource: clientRow.resource ?? undefined,
+                  // The registered app's provider-shaped parameters (Auth0's
+                  // `audience`, for example) ride on the refresh request too.
+                  extraTokenParams: clientRow.tokenParams,
                   clientAuth: clientRow.tokenEndpointAuthMethod,
                   requestFormat: clientRow.tokenRequestFormat,
                   endpointUrlPolicy: config.oauthEndpointUrlPolicy,

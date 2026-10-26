@@ -52,7 +52,9 @@ import {
   firstPartyOAuthClientAllowsScopes,
   firstPartyOAuthClientSlug,
   isFirstPartyOAuthClientSlug,
+  parseStoredOAuthTokenParams,
   parseStoredTokenEndpointAuthMethod,
+  reservedOAuthTokenParamIn,
   type ConnectResult,
   type CreateOAuthClientInput,
   type EnterpriseManagedStartInput,
@@ -568,6 +570,9 @@ interface LoadedOAuthClient {
   readonly resource: string | null;
   readonly tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
   readonly tokenRequestFormat?: "form" | "json";
+  /** Sent verbatim on every token request this client drives. Omitted for
+   *  rows registered without one. */
+  readonly tokenParams?: Readonly<Record<string, string>>;
 }
 
 /** Provider lifecycle scopes that are required to keep an authorization-code
@@ -952,6 +957,13 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
           cause: undefined,
         });
       }
+      const reservedTokenParam = reservedOAuthTokenParamIn(input.tokenParams);
+      if (reservedTokenParam !== null) {
+        return yield* new StorageError({
+          message: `Token parameter "${reservedTokenParam}" is an OAuth protocol parameter, so a client cannot carry it.`,
+          cause: undefined,
+        });
+      }
       const keys = yield* Effect.try({
         try: () => deps.ownedKeys(input.owner),
         catch: (cause) =>
@@ -1027,6 +1039,7 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
               credential_write: credentialWrite,
               token_endpoint_auth_method: input.tokenEndpointAuthMethod ?? null,
               resource: input.resource ?? null,
+              token_params: input.tokenParams ?? null,
               origin_kind: input.origin?.kind ?? "manual",
               // Recorded intent, kept for BOTH origins: a manual app registered from
               // an integration's dialog stamps its integration so the picker can
@@ -1589,6 +1602,18 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
                   }),
                 );
               }
+              // EXPLICIT — this map is sent verbatim on every token request the
+              // client makes, so a corrupt value must surface loudly rather
+              // than silently alter what each exchange sends.
+              const tokenParams = parseStoredOAuthTokenParams(row.token_params);
+              if (tokenParams === null) {
+                return Effect.fail(
+                  new StorageError({
+                    message: `oauth_client ${String(row.slug)} has invalid stored token parameters`,
+                    cause: undefined,
+                  }),
+                );
+              }
               return Effect.succeed({
                 owner: String(row.owner) as Owner,
                 slug: OAuthClientSlug.make(String(row.slug)),
@@ -1598,6 +1623,7 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
                 resource: row.resource == null ? null : String(row.resource),
                 clientId: String(row.client_id),
                 ...(tokenEndpointAuthMethod === undefined ? {} : { tokenEndpointAuthMethod }),
+                ...(tokenParams === undefined ? {} : { tokenParams }),
                 origin: parseOAuthClientOrigin(row),
               } satisfies OAuthClientSummary);
             }),
@@ -1652,6 +1678,19 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
               }),
             );
           }
+          // EXPLICIT — these parameters are sent on every token request this
+          // client drives (the code exchange, the client-credentials mint, and
+          // refresh), so a corrupt stored value must surface loudly rather
+          // than silently change what the exchanges send.
+          const tokenParams = parseStoredOAuthTokenParams(row.token_params);
+          if (tokenParams === null) {
+            return Effect.fail(
+              new StorageError({
+                message: `oauth_client ${String(slug)} has invalid stored token parameters`,
+                cause: undefined,
+              }),
+            );
+          }
           // `client_secret_item_id` is null for DCR-minted / public PKCE clients;
           // the token exchange treats a missing secret as "public client, omit
           // client_secret" (see pickClientAuth). A confidential client persisted
@@ -1684,6 +1723,7 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
               clientSecret,
               resource: row.resource == null ? null : String(row.resource),
               ...(tokenEndpointAuthMethod === undefined ? {} : { tokenEndpointAuthMethod }),
+              ...(tokenParams === undefined ? {} : { tokenParams }),
             } satisfies LoadedOAuthClient;
           });
         }),
@@ -1838,6 +1878,9 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
           scopes: requestedScopes,
           clientAuth: client.tokenEndpointAuthMethod,
           resource: client.resource ?? undefined,
+          // The registered app's provider-shaped parameters (Auth0's
+          // `audience`, for example) travel on this mint, not just refresh.
+          extraTokenParams: client.tokenParams,
           endpointUrlPolicy: deps.endpointUrlPolicy,
           fetch,
         }).pipe(
@@ -2263,6 +2306,7 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
         clientAuth: client.tokenEndpointAuthMethod,
         requestFormat: client.tokenRequestFormat,
         resource: client.resource ?? undefined,
+        extraTokenParams: client.tokenParams,
         endpointUrlPolicy: deps.endpointUrlPolicy,
         fetch,
       }).pipe(
