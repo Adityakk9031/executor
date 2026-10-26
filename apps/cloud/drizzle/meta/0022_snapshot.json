@@ -1,6 +1,6 @@
 {
-  "id": "6a6d2364-3305-4e96-bca3-78f1da7693ff",
-  "prevId": "88f2845b-be28-4ad3-92b2-2cac819478e5",
+  "id": "9d3bc667-63af-4a1b-99d9-b490ffcd80ef",
+  "prevId": "6b0d43ca-a04b-4dc8-b637-982f7ebbc3b8",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -272,6 +272,65 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.org_moved_to_v2": {
+      "name": "org_moved_to_v2",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "v2_org_id": {
+          "name": "v2_org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "v2_org_slug": {
+          "name": "v2_org_slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "org_moved_to_v2_org_id_organizations_id_fk": {
+          "name": "org_moved_to_v2_org_id_organizations_id_fk",
+          "tableFrom": "org_moved_to_v2",
+          "tableTo": "organizations",
+          "columnsFrom": ["org_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "org_moved_to_v2_state_check": {
+          "name": "org_moved_to_v2_state_check",
+          "value": "\"org_moved_to_v2\".\"state\" in ('moving', 'moved', 'rolled_back')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.organizations": {
@@ -1054,12 +1113,6 @@
         "resource": {
           "name": "resource",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "token_params": {
-          "name": "token_params",
-          "type": "json",
           "primaryKey": false,
           "notNull": false
         },
